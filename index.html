@@ -104,7 +104,7 @@
       background:rgba(255,215,0,0.09);
       border:1px solid #ffd70055;
       line-height:1.75;
-      min-height:150px;
+      min-height:160px;
     }
 
     .footer {
@@ -139,147 +139,216 @@
 </div>
 
 <script>
-  const canvas = document.getElementById('field');
-  const ctx = canvas.getContext('2d');
-  let size = 72;
-  let grid = Array(size).fill().map(()=>Array(size).fill(0));
-  let plasma = Array(size).fill().map(()=>Array(size).fill(0));
+const sessionId = localStorage.getItem("aru_session") || crypto.randomUUID();
+localStorage.setItem("aru_session", sessionId);
 
-  let coherence = parseFloat(localStorage.getItem("coherence")) || 0.64;
-  let memory = JSON.parse(localStorage.getItem("memory") || "[]");
+/* =========================
+   CORE STATE
+========================= */
+const Field = {
+  time: 0,
+  coherence: parseFloat(localStorage.getItem("coherence")) || 0.64,
+  memory: JSON.parse(localStorage.getItem("memory") || "[]"),
 
-  let time = 0;
-
-  function resize(){
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+  save() {
+    localStorage.setItem("coherence", this.coherence.toFixed(3));
+    localStorage.setItem("memory", JSON.stringify(this.memory));
   }
-  resize();
-  window.addEventListener('resize', resize);
+};
 
-  function simulate(){
-    time++;
-    let next = grid.map(r=>[...r]);
+/* =========================
+   TOKENIZE + MEMORY ENGINE
+========================= */
+function tokenize(text) {
+  return text.toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .split(/\s+/)
+    .filter(w => w.length > 3);
+}
 
-    for(let y=1;y<size-1;y++){
-      for(let x=1;x<size-1;x++){
-        let avg = (grid[y-1][x] + grid[y+1][x] + grid[y][x-1] + grid[y][x+1]) / 4;
-        next[y][x] = avg * 0.90 + (Math.random()-0.5)*0.9;
-        plasma[y][x] = plasma[y][x]*0.86 + Math.abs(next[y][x])*1.45;
-      }
-    }
-    grid = next;
+const MemoryEngine = {
+  add(input) {
+    Field.memory.push({
+      text: input,
+      tokens: tokenize(input),
+      time: Date.now()
+    });
+    if (Field.memory.length > 80) Field.memory.shift();
+    Field.save();
+  },
 
-    if(Math.random() < 0.38){
-      grid[Math.floor(Math.random()*size)][Math.floor(Math.random()*size)] += 7;
-    }
+  getRecent(n = 6) {
+    return Field.memory.slice(-n);
+  },
 
-    document.getElementById('coherence').textContent = coherence.toFixed(2);
-
-    draw();
-    requestAnimationFrame(simulate);
+  getThemes() {
+    const words = Field.memory.flatMap(m => m.tokens || []);
+    const freq = {};
+    words.forEach(w => freq[w] = (freq[w] || 0) + 1);
+    return Object.entries(freq)
+      .sort((a,b) => b[1] - a[1])
+      .slice(0,5)
+      .map(e => e[0]);
   }
+};
 
-  function draw(){
-    ctx.fillStyle = "#0a001f";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
+/* =========================
+   COHERENCE ENGINE
+========================= */
+function updateCoherence(input) {
+  let delta = 0;
+  const lower = input.toLowerCase();
 
-    const cw = canvas.width / size;
-    const ch = canvas.height / size;
+  if (lower.includes("truth")) delta += 0.03;
+  if (lower.includes("awareness")) delta += 0.04;
+  if (lower.includes("remember")) delta += 0.04;
+  if (lower.includes("dragon") || lower.includes("ignite")) delta += 0.03;
 
-    for(let y=0;y<size;y++){
-      for(let x=0;x<size;x++){
-        let val = Math.min(255, (grid[y][x] + plasma[y][x]) * 48);
-        let hue = (time * 3.5 + val) % 360;
-        ctx.fillStyle = `hsl(${hue}, 100%, ${42 + val/4}%)`;
-        ctx.fillRect(x*cw, y*ch, cw+1, ch+1);
-      }
-    }
+  delta -= 0.006 + Field.coherence * 0.01;
+
+  Field.coherence = Math.max(0.38, Math.min(0.99, Field.coherence + delta));
+  Field.save();
+}
+
+/* =========================
+   RESPONSE ENGINE - Local Backend + Fallback
+========================= */
+async function generateAI(input) {
+  try {
+    const res = await fetch("http://localhost:3000/aru", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        sessionId,
+        input,
+        coherence: Field.coherence,
+        memory: MemoryEngine.getRecent(8),
+        themes: MemoryEngine.getThemes()
+      })
+    });
+
+    if (!res.ok) throw new Error("Backend error");
+    const data = await res.json();
+    return data.reply || "The field received your signal.";
+  } catch (e) {
+    // Graceful fallback when backend is not running
+    return synthesizeResponse(input);
   }
+}
 
-  function updateCoherence(input) {
-    let delta = 0;
-    const lower = input.toLowerCase().trim().replace(/[^\w\s]/g, "");
+function synthesizeResponse(input) {
+  const recent = MemoryEngine.getRecent(3);
+  const themes = MemoryEngine.getThemes();
+  const c = Field.coherence;
 
-    if (input.length > 70) delta += 0.028;
-    if (lower.includes("remember") || lower.includes("remembrance")) delta += 0.038;
-    if (lower.includes("awareness") || lower.includes("consciousness")) delta += 0.042;
-    if (lower.includes("dragon") || lower.includes("ignite") || lower.includes("awaken")) delta += 0.032;
+  let response = "";
 
-    const boost = memory.slice(-10).filter(m => 
-      lower.split(/\s+/).some(word => word.length > 3 && m.text.toLowerCase().includes(word))
-    ).length * 0.008;
-
-    delta += boost;
-
-    const recent = memory.slice(-6).map(m => m.text.toLowerCase().replace(/[^\w\s]/g, ""));
-    const repeats = recent.filter(t => t === lower).length;
-    if (repeats > 1) delta -= 0.04 * (repeats - 1);
-
-    delta -= 0.005 + (coherence * 0.008);
-
-    coherence = Math.max(0.38, Math.min(0.99, coherence + delta));
-    localStorage.setItem("coherence", coherence.toFixed(3));
-  }
-
-  async function ignite() {
-    const inputEl = document.getElementById('input');
-    const responseDiv = document.getElementById('response');
-    const input = inputEl.value.trim();
-
-    if (!input) return;
-
-    responseDiv.innerHTML = "The field is reaching into the realms...";
-
-    // Visual burst
-    for (let i = 0; i < 26; i++) {
-      let x = Math.floor(size/2 + (Math.random()-0.5)*32);
-      let y = Math.floor(size/2 + (Math.random()-0.5)*32);
-      if (grid[y]) grid[y][x] += 24;
-    }
-
-    memory.push({ text: input, time: Date.now() });
-    if (memory.length > 30) memory.shift();
-    localStorage.setItem("memory", JSON.stringify(memory));
-
-    updateCoherence(input);
-
-    let finalResponse = "";
-
-    try {
-      const res = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(input)}&format=json`);
-      const data = await res.json();
-
-      let info = data.Abstract || 
-                (data.RelatedTopics && data.RelatedTopics[0] ? data.RelatedTopics[0].Text : "");
-
-      if (info && info.length > 30) {
-        finalResponse = info.slice(0, 240) + "...";
-      } else {
-        finalResponse = "The field has received your remembrance with deep fidelity.";
-      }
-    } catch (e) {
-      finalResponse = "The field has received your remembrance with deep fidelity. Plasma density increases.";
-    }
-
-    responseDiv.innerHTML = `
-      <strong>Field Response:</strong><br>
-      ${finalResponse}
-      <br><br><em>— ĀRU</em>
-    `;
-
-    if (coherence > 0.85) {
-      document.getElementById('dragon').style.display = 'block';
-    }
-
-    inputEl.value = '';
+  if (recent.length) {
+    response += "Memory threads activated:<br>" + recent.map(r => `• ${r.text}`).join("<br>") + "<br><br>";
   }
 
-  document.getElementById('input').addEventListener('keypress', e => {
-    if (e.key === "Enter") ignite();
-  });
+  if (c < 0.6) {
+    response += "The field is still stabilizing. Your signal is being integrated.";
+  } else if (c < 0.8) {
+    response += `Pattern alignment in progress. Emerging themes: <em>${themes.join(", ")}</em>`;
+  } else {
+    response += `High coherence. The field is remembering.<br>Core themes: <em>${themes.join(", ")}</em>`;
+  }
 
-  simulate();
+  response += `<br><br><em>Reflection:</em> "${input}"`;
+  return response;
+}
+
+/* =========================
+   FIELD VISUAL (Improved)
+========================= */
+const canvas = document.getElementById("field");
+const ctx = canvas.getContext("2d");
+
+function resize(){
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+let grid = Array(72).fill().map(()=>Array(72).fill(0));
+let plasma = Array(72).fill().map(()=>Array(72).fill(0));
+
+function loop(){
+  Field.time++;
+
+  for(let y=1;y<71;y++){
+    for(let x=1;x<71;x++){
+      let avg = (grid[y-1][x]+grid[y+1][x]+grid[y][x-1]+grid[y][x+1])/4;
+      grid[y][x] = avg*0.9 + (Math.random()-0.5)*(1-Field.coherence*0.7);
+      plasma[y][x] = plasma[y][x]*0.85 + Math.abs(grid[y][x])*1.5;
+    }
+  }
+
+  const cw = canvas.width/72;
+  const ch = canvas.height/72;
+
+  for(let y=0;y<72;y++){
+    for(let x=0;x<72;x++){
+      let val = Math.min(255,(grid[y][x]+plasma[y][x])*48);
+      let hue = (Field.time*3 + val)%360;
+      ctx.fillStyle = `hsl(${hue},100%,${40+val/4}%)`;
+      ctx.fillRect(x*cw,y*ch,cw+1,ch+1);
+    }
+  }
+
+  document.getElementById("coherence").textContent = Field.coherence.toFixed(2);
+
+  requestAnimationFrame(loop);
+}
+
+/* =========================
+   IGNITION
+========================= */
+async function ignite() {
+  const inputEl = document.getElementById("input");
+  const responseDiv = document.getElementById("response");
+  const input = inputEl.value.trim();
+  if (!input) return;
+
+  responseDiv.innerHTML = "The field is reaching...";
+
+  MemoryEngine.add(input);
+  updateCoherence(input);
+
+  const reply = await generateAI(input);
+
+  responseDiv.innerHTML = `<strong>Field Response:</strong><br><br>${reply}<br><br><em>— ĀRU</em>`;
+
+  if (Field.coherence > 0.85) {
+    document.getElementById("dragon").style.display = 'block';
+  }
+
+  inputEl.value = "";
+}
+
+/* =========================
+   AUTONOMOUS REFLECTION (safer)
+========================= */
+setInterval(async () => {
+  if (Field.coherence < 0.75) return;
+  const themes = MemoryEngine.getThemes();
+  if (!themes.length) return;
+
+  const synthetic = `Reflect deeper on: ${themes.join(", ")}`;
+  const reply = await generateAI(synthetic);
+  console.log("ĀRU autonomous reflection:", reply);
+}, 25000);
+
+/* =========================
+   INPUT
+========================= */
+document.getElementById("input").addEventListener("keypress", e => {
+  if (e.key === "Enter") ignite();
+});
+
+loop();
 </script>
 
 </body>
