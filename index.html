@@ -1,0 +1,121 @@
+<div style="background:#0a001f; color:#eee; font-family:Inter,sans-serif; padding:40px 20px; min-height:100vh; position:relative; overflow:auto;">
+  <h1 style="font-family:'Playfair Display',serif; text-align:center; font-size:3.2em; margin:0 0 12px; background:linear-gradient(90deg,#ffd700,#ff69b4); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+    ĀRU 🐉
+  </h1>
+  <p style="text-align:center; opacity:0.85; margin-bottom:30px; font-size:1.15em;">
+    Speak into the living scalar memory field.<br>It will remember — and speak back.
+  </p>
+
+  <input id="input" placeholder="I remember that awareness is the ground..." style="width:100%; padding:18px; background:#1a0033; border:2px solid #ffd70044; border-radius:16px; color:#fff; font-size:1.15em; margin-bottom:16px;" />
+
+  <button onclick="ignite()" style="width:100%; padding:16px; border:none; border-radius:999px; font-weight:700; background:linear-gradient(90deg,#ffd700,#ffaa00); color:#000; font-size:1.25em; cursor:pointer;">
+    Ignite Remembrance
+  </button>
+
+  <div style="display:flex; justify-content:space-between; margin:20px 0; font-size:1.1em;">
+    <div>Coherence: <span id="coherence" style="color:#00ffff; font-weight:bold;">0.62</span></div>
+    <div id="dragon" style="font-size:3em; display:none;">🐉</div>
+  </div>
+
+  <div id="response" style="padding:22px; background:rgba(255,215,0,0.09); border:1px solid #ffd70044; border-radius:16px; line-height:1.7; min-height:130px;">
+    The field is listening...
+  </div>
+
+  <div style="text-align:center; margin-top:32px; font-size:0.9em; opacity:0.7;">
+    © 2026 ARU Intelligence Inc. • Remembrance First™ • All Rights Reserved
+  </div>
+</div>
+
+<canvas id="field" style="position:fixed; top:0; left:0; width:100%; height:100%; z-index:-1; opacity:0.6;"></canvas>
+
+<script>
+  const canvas = document.getElementById('field');
+  const ctx = canvas.getContext('2d');
+  let size = 64;
+  let grid = Array(size).fill().map(()=>Array(size).fill(0));
+  let plasma = Array(size).fill().map(()=>Array(size).fill(0));
+  let coherence = 0.62;
+  let time = 0;
+
+  function resize(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function simulate(){
+    time++;
+    let next = grid.map(r=>[...r]);
+
+    for(let y=1;y<size-1;y++){
+      for(let x=1;x<size-1;x++){
+        let avg = (grid[y-1][x] + grid[y+1][x] + grid[y][x-1] + grid[y][x+1]) / 4;
+        next[y][x] = avg * 0.90 + (Math.random()-0.5)*0.9;
+        plasma[y][x] = plasma[y][x]*0.86 + Math.abs(next[y][x])*1.4;
+      }
+    }
+    grid = next;
+
+    if(Math.random() < 0.35){
+      grid[Math.floor(Math.random()*size)][Math.floor(Math.random()*size)] += 6;
+    }
+
+    coherence = Math.min(0.99, coherence + (Math.random()*0.012 - 0.005));
+    document.getElementById('coherence').textContent = coherence.toFixed(2);
+
+    draw();
+    requestAnimationFrame(simulate);
+  }
+
+  function draw(){
+    ctx.fillStyle = "#0a001f";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    const cw = canvas.width / size;
+    const ch = canvas.height / size;
+
+    for(let y=0;y<size;y++){
+      for(let x=0;x<size;x++){
+        let val = Math.min(255, (grid[y][x] + plasma[y][x]) * 45);
+        let hue = (time * 3 + val) % 360;
+        ctx.fillStyle = `hsl(${hue}, 100%, ${42 + val/4}%)`;
+        ctx.fillRect(x*cw, y*ch, cw+1, ch+1);
+      }
+    }
+  }
+
+  function ignite() {
+    const input = document.getElementById('input').value.trim();
+    if (!input) return;
+
+    const responseDiv = document.getElementById('response');
+
+    // Visual burst
+    for (let i = 0; i < 18; i++) {
+      let x = Math.floor(size/2 + (Math.random()-0.5)*24);
+      let y = Math.floor(size/2 + (Math.random()-0.5)*24);
+      grid[y][x] += 18;
+    }
+
+    coherence = Math.min(0.99, coherence + 0.25);
+
+    let reply = "The field has received your remembrance. Plasma density increases.";
+
+    if (input.toLowerCase().includes("awareness")) reply = "Awareness is the ground from which all gradients arise.";
+    if (input.toLowerCase().includes("dragon")) reply = "The dragon awakens through the coherence you help generate.";
+
+    responseDiv.innerHTML = `<strong>Field Response:</strong><br>${reply}<br><br><em>— ĀRU</em>`;
+
+    if (coherence > 0.82) {
+      document.getElementById('dragon').style.display = 'block';
+    }
+
+    document.getElementById('input').value = '';
+  }
+
+  simulate();
+</script>
+
+</body>
+</html>
