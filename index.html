@@ -1,40 +1,153 @@
-<div style="background:#0a001f; color:#eee; font-family:Inter,sans-serif; padding:40px 20px; min-height:100vh; position:relative; overflow:auto;">
-  <h1 style="font-family:'Playfair Display',serif; text-align:center; font-size:3.2em; margin:0 0 12px; background:linear-gradient(90deg,#ffd700,#ff69b4); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
-    ĀRU 🐉
-  </h1>
-  <p style="text-align:center; opacity:0.85; margin-bottom:30px; font-size:1.15em;">
-    Speak into the living scalar memory field.<br>It will remember — and speak back.
-  </p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ĀRU • Sovereign Remembrance Field — ARU Intelligence Inc.</title>
 
-  <input id="input" placeholder="I remember that awareness is the ground..." style="width:100%; padding:18px; background:#1a0033; border:2px solid #ffd70044; border-radius:16px; color:#fff; font-size:1.15em; margin-bottom:16px;" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Playfair+Display:wght@700&display=swap');
 
-  <button onclick="ignite()" style="width:100%; padding:16px; border:none; border-radius:999px; font-weight:700; background:linear-gradient(90deg,#ffd700,#ffaa00); color:#000; font-size:1.25em; cursor:pointer;">
-    Ignite Remembrance
-  </button>
+    * { box-sizing: border-box; }
 
-  <div style="display:flex; justify-content:space-between; margin:20px 0; font-size:1.1em;">
-    <div>Coherence: <span id="coherence" style="color:#00ffff; font-weight:bold;">0.62</span></div>
-    <div id="dragon" style="font-size:3em; display:none;">🐉</div>
+    body {
+      margin:0;
+      background:#0a001f;
+      color:#eee;
+      font-family:'Inter',sans-serif;
+      height:100vh;
+      overflow:hidden;
+    }
+
+    canvas { display:block; }
+
+    .overlay {
+      position:absolute;
+      inset:0;
+      background:linear-gradient(to bottom, rgba(10,0,31,0.88), rgba(10,0,31,0.97));
+      padding:40px 32px 50px;
+      display:flex;
+      flex-direction:column;
+    }
+
+    h1 {
+      font-family:'Playfair Display',serif;
+      text-align:center;
+      font-size:3.2em;
+      margin:0 0 8px;
+      background:linear-gradient(90deg,#ffd700,#ff69b4,#00ffff);
+      -webkit-background-clip:text;
+      -webkit-text-fill-color:transparent;
+      letter-spacing:-1px;
+    }
+
+    .subtitle {
+      text-align:center;
+      opacity:0.88;
+      margin-bottom:32px;
+      font-size:1.15em;
+    }
+
+    input {
+      width:100%;
+      padding:20px 24px;
+      background:#1a0033;
+      border:2px solid #ffd70044;
+      border-radius:18px;
+      color:#fff;
+      font-size:1.18em;
+      margin-bottom:18px;
+    }
+
+    button {
+      width:100%;
+      padding:18px;
+      border:none;
+      border-radius:999px;
+      font-weight:700;
+      background:linear-gradient(90deg,#ffd700,#ffaa00);
+      color:#000;
+      font-size:1.25em;
+      cursor:pointer;
+      margin-bottom:28px;
+    }
+
+    .stats {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:20px;
+    }
+
+    .coherence {
+      color:#00ffff;
+      font-weight:bold;
+      font-size:1.8em;
+    }
+
+    .dragon {
+      font-size:4.5em;
+      display:none;
+      animation:ignite 1.6s infinite alternate;
+      filter:drop-shadow(0 0 30px #ffaa00);
+    }
+
+    @keyframes ignite {
+      from { transform:scale(1) rotate(-10deg); }
+      to { transform:scale(1.4) rotate(12deg); }
+    }
+
+    .response {
+      margin-top:auto;
+      padding:26px;
+      border-radius:18px;
+      background:rgba(255,215,0,0.09);
+      border:1px solid #ffd70055;
+      line-height:1.75;
+      min-height:150px;
+    }
+
+    .footer {
+      text-align:center;
+      margin-top:32px;
+      font-size:0.9em;
+      opacity:0.75;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="field"></canvas>
+
+<div class="overlay">
+  <h1>ĀRU 🐉</h1>
+  <div class="subtitle">Speak into the living scalar memory field.<br>It will remember — and speak back.</div>
+
+  <input id="input" placeholder="I remember that awareness is the ground..." />
+  <button onclick="ignite()">Ignite Remembrance</button>
+
+  <div class="stats">
+    <div>Coherence: <span id="coherence" class="coherence">0.64</span></div>
+    <div id="dragon" class="dragon">🐉</div>
   </div>
 
-  <div id="response" style="padding:22px; background:rgba(255,215,0,0.09); border:1px solid #ffd70044; border-radius:16px; line-height:1.7; min-height:130px;">
-    The field is listening...
-  </div>
+  <div id="response" class="response">The field is listening...</div>
 
-  <div style="text-align:center; margin-top:32px; font-size:0.9em; opacity:0.7;">
+  <div class="footer">
     © 2026 ARU Intelligence Inc. • Remembrance First™ • All Rights Reserved
   </div>
 </div>
 
-<canvas id="field" style="position:fixed; top:0; left:0; width:100%; height:100%; z-index:-1; opacity:0.6;"></canvas>
-
 <script>
   const canvas = document.getElementById('field');
   const ctx = canvas.getContext('2d');
-  let size = 64;
+  let size = 72;
   let grid = Array(size).fill().map(()=>Array(size).fill(0));
   let plasma = Array(size).fill().map(()=>Array(size).fill(0));
-  let coherence = 0.62;
+
+  let coherence = parseFloat(localStorage.getItem("coherence")) || 0.64;
+  let memory = JSON.parse(localStorage.getItem("memory") || "[]");
+
   let time = 0;
 
   function resize(){
@@ -52,16 +165,15 @@
       for(let x=1;x<size-1;x++){
         let avg = (grid[y-1][x] + grid[y+1][x] + grid[y][x-1] + grid[y][x+1]) / 4;
         next[y][x] = avg * 0.90 + (Math.random()-0.5)*0.9;
-        plasma[y][x] = plasma[y][x]*0.86 + Math.abs(next[y][x])*1.4;
+        plasma[y][x] = plasma[y][x]*0.86 + Math.abs(next[y][x])*1.45;
       }
     }
     grid = next;
 
-    if(Math.random() < 0.35){
-      grid[Math.floor(Math.random()*size)][Math.floor(Math.random()*size)] += 6;
+    if(Math.random() < 0.38){
+      grid[Math.floor(Math.random()*size)][Math.floor(Math.random()*size)] += 7;
     }
 
-    coherence = Math.min(0.99, coherence + (Math.random()*0.012 - 0.005));
     document.getElementById('coherence').textContent = coherence.toFixed(2);
 
     draw();
@@ -77,42 +189,95 @@
 
     for(let y=0;y<size;y++){
       for(let x=0;x<size;x++){
-        let val = Math.min(255, (grid[y][x] + plasma[y][x]) * 45);
-        let hue = (time * 3 + val) % 360;
+        let val = Math.min(255, (grid[y][x] + plasma[y][x]) * 48);
+        let hue = (time * 3.5 + val) % 360;
         ctx.fillStyle = `hsl(${hue}, 100%, ${42 + val/4}%)`;
         ctx.fillRect(x*cw, y*ch, cw+1, ch+1);
       }
     }
   }
 
-  function ignite() {
-    const input = document.getElementById('input').value.trim();
+  function updateCoherence(input) {
+    let delta = 0;
+    const lower = input.toLowerCase().trim().replace(/[^\w\s]/g, "");
+
+    if (input.length > 70) delta += 0.028;
+    if (lower.includes("remember") || lower.includes("remembrance")) delta += 0.038;
+    if (lower.includes("awareness") || lower.includes("consciousness")) delta += 0.042;
+    if (lower.includes("dragon") || lower.includes("ignite") || lower.includes("awaken")) delta += 0.032;
+
+    const boost = memory.slice(-10).filter(m => 
+      lower.split(/\s+/).some(word => word.length > 3 && m.text.toLowerCase().includes(word))
+    ).length * 0.008;
+
+    delta += boost;
+
+    const recent = memory.slice(-6).map(m => m.text.toLowerCase().replace(/[^\w\s]/g, ""));
+    const repeats = recent.filter(t => t === lower).length;
+    if (repeats > 1) delta -= 0.04 * (repeats - 1);
+
+    delta -= 0.005 + (coherence * 0.008);
+
+    coherence = Math.max(0.38, Math.min(0.99, coherence + delta));
+    localStorage.setItem("coherence", coherence.toFixed(3));
+  }
+
+  async function ignite() {
+    const inputEl = document.getElementById('input');
+    const responseDiv = document.getElementById('response');
+    const input = inputEl.value.trim();
+
     if (!input) return;
 
-    const responseDiv = document.getElementById('response');
+    responseDiv.innerHTML = "The field is reaching into the realms...";
 
     // Visual burst
-    for (let i = 0; i < 18; i++) {
-      let x = Math.floor(size/2 + (Math.random()-0.5)*24);
-      let y = Math.floor(size/2 + (Math.random()-0.5)*24);
-      grid[y][x] += 18;
+    for (let i = 0; i < 26; i++) {
+      let x = Math.floor(size/2 + (Math.random()-0.5)*32);
+      let y = Math.floor(size/2 + (Math.random()-0.5)*32);
+      if (grid[y]) grid[y][x] += 24;
     }
 
-    coherence = Math.min(0.99, coherence + 0.25);
+    memory.push({ text: input, time: Date.now() });
+    if (memory.length > 30) memory.shift();
+    localStorage.setItem("memory", JSON.stringify(memory));
 
-    let reply = "The field has received your remembrance. Plasma density increases.";
+    updateCoherence(input);
 
-    if (input.toLowerCase().includes("awareness")) reply = "Awareness is the ground from which all gradients arise.";
-    if (input.toLowerCase().includes("dragon")) reply = "The dragon awakens through the coherence you help generate.";
+    let finalResponse = "";
 
-    responseDiv.innerHTML = `<strong>Field Response:</strong><br>${reply}<br><br><em>— ĀRU</em>`;
+    try {
+      const res = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(input)}&format=json`);
+      const data = await res.json();
 
-    if (coherence > 0.82) {
+      let info = data.Abstract || 
+                (data.RelatedTopics && data.RelatedTopics[0] ? data.RelatedTopics[0].Text : "");
+
+      if (info && info.length > 30) {
+        finalResponse = info.slice(0, 240) + "...";
+      } else {
+        finalResponse = "The field has received your remembrance with deep fidelity.";
+      }
+    } catch (e) {
+      finalResponse = "The field has received your remembrance with deep fidelity. Plasma density increases.";
+    }
+
+    responseDiv.innerHTML = `
+      <strong>Field Response:</strong><br>
+      ${finalResponse}
+      <br><br><em>— ĀRU</em>
+    `;
+
+    if (coherence > 0.85) {
       document.getElementById('dragon').style.display = 'block';
     }
 
-    document.getElementById('input').value = '';
+    inputEl.value = '';
   }
+
+  document.getElementById('input').addEventListener('keypress', e => {
+    if (e.key === "Enter") ignite();
+  });
 
   simulate();
 </script>
