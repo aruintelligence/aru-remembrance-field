@@ -24,8 +24,8 @@
     .overlay {
       position:absolute;
       inset:0;
-      background:linear-gradient(to bottom, rgba(10,0,31,0.9), rgba(10,0,31,0.98));
-      padding:40px 28px 60px;
+      background:linear-gradient(to bottom, rgba(10,0,31,0.92), rgba(10,0,31,0.98));
+      padding:50px 30px 70px;
       display:flex;
       flex-direction:column;
     }
@@ -33,9 +33,9 @@
     h1 {
       font-family:'Playfair Display',serif;
       text-align:center;
-      font-size:3.4em;
+      font-size:3.6em;
       margin:0 0 12px;
-      background:linear-gradient(90deg,#ffd700,#ff69b4,#00ffff);
+      background:linear-gradient(90deg, #ffd700, #ff69b4, #00ffff);
       -webkit-background-clip:text;
       -webkit-text-fill-color:transparent;
       letter-spacing:-2px;
@@ -44,31 +44,31 @@
     .subtitle {
       text-align:center;
       opacity:0.9;
-      margin-bottom:36px;
-      font-size:1.18em;
-      line-height:1.4;
+      margin-bottom:40px;
+      font-size:1.22em;
+      line-height:1.45;
     }
 
     input {
       width:100%;
-      padding:20px 24px;
+      padding:22px 26px;
       background:#1a0033;
-      border:2px solid #ffd70055;
-      border-radius:18px;
+      border:2px solid #ffd70066;
+      border-radius:20px;
       color:#fff;
-      font-size:1.2em;
-      margin-bottom:20px;
+      font-size:1.22em;
+      margin-bottom:22px;
     }
 
     button {
       width:100%;
-      padding:18px;
+      padding:19px;
       border:none;
       border-radius:999px;
       font-weight:700;
       background:linear-gradient(90deg,#ffd700,#ffaa00);
       color:#000;
-      font-size:1.28em;
+      font-size:1.3em;
       cursor:pointer;
       margin-bottom:32px;
     }
@@ -77,43 +77,42 @@
       display:flex;
       justify-content:space-between;
       align-items:center;
-      margin-bottom:24px;
-      font-size:1.1em;
+      margin-bottom:28px;
     }
 
     .coherence {
       color:#00ffff;
       font-weight:bold;
-      font-size:2em;
+      font-size:2.2em;
     }
 
     .dragon {
-      font-size:5em;
+      font-size:5.5em;
       display:none;
       animation:ignite 1.8s infinite alternate;
-      filter:drop-shadow(0 0 40px #ffaa00);
+      filter:drop-shadow(0 0 45px #ffaa00);
     }
 
     @keyframes ignite {
-      from { transform:scale(1) rotate(-8deg); }
-      to { transform:scale(1.45) rotate(12deg); }
+      from { transform:scale(1) rotate(-10deg); }
+      to { transform:scale(1.5) rotate(15deg); }
     }
 
     .response {
       margin-top:auto;
-      padding:28px;
-      border-radius:18px;
-      background:rgba(255,215,0,0.1);
-      border:1px solid #ffd70066;
-      line-height:1.7;
-      min-height:170px;
+      padding:30px;
+      border-radius:20px;
+      background:rgba(255,215,0,0.13);
+      border:1px solid #ffd70088;
+      line-height:1.78;
+      min-height:190px;
     }
 
     .footer {
       text-align:center;
-      margin-top:40px;
-      font-size:0.9em;
-      opacity:0.7;
+      margin-top:45px;
+      font-size:0.93em;
+      opacity:0.78;
     }
   </style>
 </head>
@@ -141,123 +140,234 @@
 </div>
 
 <script>
-  const canvas = document.getElementById('field');
-  const ctx = canvas.getContext('2d');
-  let size = 72;
-  let grid = Array(size).fill().map(()=>Array(size).fill(0));
-  let plasma = Array(size).fill().map(()=>Array(size).fill(0));
+/* =========================
+   CORE STATE
+========================= */
+const Field = {
+  time: 0,
+  coherence: parseFloat(localStorage.getItem("coherence")) || 0.64,
+  memory: JSON.parse(localStorage.getItem("memory") || "[]"),
 
-  let coherence = parseFloat(localStorage.getItem("coherence")) || 0.64;
-  let memory = JSON.parse(localStorage.getItem("memory") || "[]");
-
-  let time = 0;
-
-  function resize(){
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+  save() {
+    localStorage.setItem("coherence", this.coherence.toFixed(3));
+    localStorage.setItem("memory", JSON.stringify(this.memory));
   }
-  resize();
-  window.addEventListener('resize', resize);
+};
 
-  function simulate(){
-    time++;
-    let next = grid.map(r=>[...r]);
+/* =========================
+   TOKENIZER + MEMORY ENGINE
+========================= */
+function tokenize(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .split(/\s+/)
+    .filter(w => w.length > 3);
+}
 
-    for(let y=1;y<size-1;y++){
-      for(let x=1;x<size-1;x++){
-        let avg = (grid[y-1][x] + grid[y+1][x] + grid[y][x-1] + grid[y][x+1]) / 4;
-        next[y][x] = avg * 0.9 + (Math.random()-0.5)*0.8;
-        plasma[y][x] = plasma[y][x]*0.86 + Math.abs(next[y][x])*1.5;
+const MemoryEngine = {
+  add(input) {
+    Field.memory.push({
+      text: input,
+      tokens: tokenize(input),
+      weight: 1 + Field.coherence * 2,
+      time: Date.now()
+    });
+
+    if (Field.memory.length > 60) Field.memory.shift();
+    Field.save();
+  },
+
+  getRecent(n = 3) {
+    return Field.memory.slice(-n).map(m => m.text);
+  },
+
+  getThemes() {
+    const freq = {};
+    Field.memory.slice(-20).forEach(m => {
+      m.tokens.forEach(t => {
+        freq[t] = (freq[t] || 0) + (m.weight || 1);
+      });
+    });
+    return Object.entries(freq)
+      .sort((a,b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(e => e[0]);
+  }
+};
+
+/* =========================
+   COHERENCE ENGINE (Faster ramp-up)
+========================= */
+function updateCoherence(input) {
+  let delta = 0;
+  const lower = input.toLowerCase();
+
+  if (lower.includes("awareness")) delta += 0.08;
+  if (lower.includes("remember")) delta += 0.06;
+  if (lower.includes("dragon")) delta += 0.05;
+  if (lower.includes("truth")) delta += 0.03;
+
+  // Stronger memory resonance
+  const resonance = Field.memory.slice(-12).reduce((acc, m) => {
+    const overlap = tokenize(input).filter(t => m.tokens.includes(t)).length;
+    return acc + overlap * 0.012;
+  }, 0);
+
+  delta += resonance;
+  delta -= 0.006 + (Field.coherence * 0.008);   // gentler decay
+
+  Field.coherence = Math.max(0.42, Math.min(0.99, Field.coherence + delta));
+  Field.save();
+}
+
+/* =========================
+   RESPONSE ENGINE
+========================= */
+function synthesizeResponse(input) {
+  const c = Field.coherence;
+  const themes = MemoryEngine.getThemes();
+  const recent = MemoryEngine.getRecent(2);
+
+  let response = "";
+
+  if (recent.length) {
+    response += "Memory threads activated:<br>";
+    recent.forEach(r => response += `• ${r}<br>`);
+    response += "<br>";
+  }
+
+  if (c < 0.6) {
+    response += "The field is still stabilizing. Your signal is being integrated.";
+  } else if (c < 0.8) {
+    response += `Pattern alignment in progress.<br>Emerging themes: <em>${themes.join(", ")}</em>`;
+  } else if (c < 0.9) {
+    response += `Stable resonance detected.<br>Core themes: <em>${themes.join(", ")}</em>`;
+  } else {
+    response += `High coherence achieved.<br>The field is remembering with clarity.<br>Core structure: <em>${themes.join(", ")}</em>`;
+  }
+
+  response += `<br><br><em>Signal reflection:</em> "${input}"`;
+
+  return response;
+}
+
+/* =========================
+   FIELD SIMULATION
+========================= */
+const FieldSim = {
+  size: 72,
+  grid: Array(72).fill().map(()=>Array(72).fill(0)),
+  plasma: Array(72).fill().map(()=>Array(72).fill(0)),
+
+  step() {
+    Field.time++;
+
+    let next = this.grid.map(r => [...r]);
+
+    for(let y=1; y<this.size-1; y++){
+      for(let x=1; x<this.size-1; x++){
+        let avg = (this.grid[y-1][x] + this.grid[y+1][x] + this.grid[y][x-1] + this.grid[y][x+1]) / 4;
+
+        let stability = 0.88 + Field.coherence * 0.12;
+        next[y][x] = avg * stability + (Math.random()-0.5)*(1 - Field.coherence * 0.6);
+
+        this.plasma[y][x] = this.plasma[y][x]*0.85 + Math.abs(next[y][x])*1.65;
       }
     }
-    grid = next;
 
-    if(Math.random() < 0.4){
-      grid[Math.floor(Math.random()*size)][Math.floor(Math.random()*size)] += 8;
-    }
+    this.grid = next;
 
-    document.getElementById('coherence').textContent = coherence.toFixed(2);
-    draw();
-    requestAnimationFrame(simulate);
-  }
-
-  function draw(){
-    ctx.fillStyle = "#0a001f";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-
-    const cw = canvas.width / size;
-    const ch = canvas.height / size;
-
-    for(let y=0;y<size;y++){
-      for(let x=0;x<size;x++){
-        let val = Math.min(255, (grid[y][x] + plasma[y][x]) * 45);
-        let hue = (time * 4 + val) % 360;
-        ctx.fillStyle = `hsl(${hue}, 100%, ${42 + val/4}%)`;
-        ctx.fillRect(x*cw, y*ch, cw+1, ch+1);
-      }
+    if(Math.random() < 0.45){
+      let x = Math.floor(Math.random()*this.size);
+      let y = Math.floor(Math.random()*this.size);
+      this.grid[y][x] += 8 + Field.coherence * 12;
     }
   }
+};
 
-  function updateCoherence(input) {
-    let delta = 0;
-    const lower = input.toLowerCase();
+/* =========================
+   RENDER
+========================= */
+const canvas = document.getElementById('field');
+const ctx = canvas.getContext('2d');
 
-    if (lower.includes("awareness")) delta += 0.05;
-    if (lower.includes("remember")) delta += 0.04;
-    if (lower.includes("dragon")) delta += 0.03;
+function resize(){
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
 
-    delta -= 0.008 + (coherence * 0.01);
+function loop(){
+  FieldSim.step();
 
-    coherence = Math.max(0.38, Math.min(0.99, coherence + delta));
-    localStorage.setItem("coherence", coherence.toFixed(3));
+  document.getElementById('coherence').textContent = Field.coherence.toFixed(2);
+
+  const size = FieldSim.size;
+  const cw = canvas.width / size;
+  const ch = canvas.height / size;
+
+  ctx.fillStyle = "#0a001f";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      let val = Math.min(255, (FieldSim.grid[y][x] + FieldSim.plasma[y][x]) * 52);
+      let hue = (Field.time * (3 + Field.coherence * 5) + val) % 360;
+      ctx.fillStyle = `hsl(${hue}, 100%, ${43 + val/4}%)`;
+      ctx.fillRect(x*cw, y*ch, cw+1, ch+1);
+    }
   }
 
-  function ignite() {
-    const inputEl = document.getElementById('input');
-    const responseDiv = document.getElementById('response');
-    const input = inputEl.value.trim();
+  requestAnimationFrame(loop);
+}
 
-    if (!input) return;
+/* =========================
+   IGNITION
+========================= */
+function ignite() {
+  const inputEl = document.getElementById('input');
+  const responseDiv = document.getElementById('response');
+  const input = inputEl.value.trim();
 
-    responseDiv.innerHTML = "Integrating into the field...";
+  if (!input) return;
 
-    // Strong burst
-    for (let i = 0; i < 28; i++) {
-      let x = Math.floor(size/2 + (Math.random()-0.5)*30);
-      let y = Math.floor(size/2 + (Math.random()-0.5)*30);
-      if (grid[y]) grid[y][x] += 26;
-    }
+  responseDiv.innerHTML = "Integrating signal...";
 
-    memory.push({ text: input, time: Date.now() });
-    if (memory.length > 40) memory.shift();
-    localStorage.setItem("memory", JSON.stringify(memory));
-
-    updateCoherence(input);
-
-    let reply = "The field has received your remembrance.";
-
-    if (lower.includes("awareness")) reply = "Awareness is the ground state from which all gradients arise.";
-    else if (lower.includes("remember")) reply = "Your remembrance has been woven into the persistent lattice.";
-    else if (lower.includes("dragon")) reply = "The dragon stirs as coherence rises.";
-
-    responseDiv.innerHTML = `
-      <strong>Field Response:</strong><br><br>
-      ${reply}
-      <br><br><em>— ĀRU</em>
-    `;
-
-    if (coherence > 0.82) {
-      document.getElementById('dragon').style.display = 'block';
-    }
-
-    inputEl.value = '';
+  const burst = 24 + Math.floor(Field.coherence * 28);
+  for (let i = 0; i < burst; i++) {
+    let x = Math.floor(36 + (Math.random()-0.5)*34);
+    let y = Math.floor(36 + (Math.random()-0.5)*34);
+    if (FieldSim.grid[y]) FieldSim.grid[y][x] += 28;
   }
 
-  document.getElementById('input').addEventListener('keypress', e => {
-    if (e.key === "Enter") ignite();
-  });
+  MemoryEngine.add(input);
+  updateCoherence(input);
 
-  simulate();
+  const response = synthesizeResponse(input);
+
+  responseDiv.innerHTML = `
+    <strong>Field Response:</strong><br><br>
+    ${response}
+    <br><br><em>— ĀRU</em>
+  `;
+
+  if (Field.coherence > 0.82) {
+    document.getElementById('dragon').style.display = 'block';
+  }
+
+  inputEl.value = '';
+}
+
+/* =========================
+   INPUT
+========================= */
+document.getElementById('input').addEventListener('keypress', e => {
+  if (e.key === "Enter") ignite();
+});
+
+loop();
 </script>
 
 </body>
