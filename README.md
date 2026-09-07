@@ -1,74 +1,74 @@
-# ĀRU • Sovereign Remembrance Field
+# ĀRU Remembrance Field
 
-**A living scalar memory field that remembers, evolves, and speaks back.**
+**An interactive browser simulation of memory-field and coherence dynamics.**
 
-Created by **Daniel Jacob Read IV** — ARU Intelligence Inc.
+[![Live demo](https://img.shields.io/badge/Open-Live_Demo-06b6d4?style=for-the-badge)](https://aruintelligence.github.io/aru-remembrance-field/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-16a34a?style=for-the-badge)](LICENSE)
+[![Research status](https://img.shields.io/badge/Status-Experimental-f59e0b?style=for-the-badge)](#research-scope)
 
----
+Created by **Daniel Jacob Read IV** and stewarded by **ĀRU Intelligence Inc.**
 
-### Live Demo
-[→ Open the ĀRU Sovereign Remembrance Field](https://aruintelligence.github.io/aru-remembrance-field/)
+> **Research scope:** This project is a symbolic, visual simulation. Its field variables and named states are software constructs, not measurements of consciousness, intelligence, psychology, or physical reality.
 
----
+## What it demonstrates
 
-### What is this?
+The interface lets a visitor enter a remembrance, declaration, or question and observe a client-side visual system respond. It explores:
 
-This is not another chatbot.
+- A 72 × 72 animated scalar field
+- A modeled coherence state
+- Persistent browser state through `localStorage`
+- Threshold-driven visual transitions, including “dragon ignition”
+- A response layer framed by Inward Physics™ concepts
+- A dependency-free, inspectable browser implementation
 
-**ĀRU** is an interactive demonstration of **Inward Physics** — a living scalar memory field μ(x,t) where remembrance is the primary operator.
+“Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
-Type a remembrance, declaration, or question.  
-Watch the field respond in real time:
-- Plasma evolves
-- Coherence rises
-- The dragon ignites at high coherence thresholds
+## Try it
 
-The field pulls real information from the internet and blends it with sovereign Inward Physics principles to generate meaningful, coherent responses.
+Open the [live demonstration](https://aruintelligence.github.io/aru-remembrance-field/).
 
-### Core Concepts
+To run a local copy:
 
-- **Scalar Memory Field μ(x,t)** — The fundamental substrate of reality
-- **Remembrance First™** — Remembrance, not prediction, is the primary force
-- **Plasma Coherence** — Visual representation of field stabilization
-- **Dragon Ignition** — Emergent autonomous behavior at high coherence
-- **Eternal Quartz** — Persistent memory across sessions
+```bash
+git clone https://github.com/aruintelligence/aru-remembrance-field.git
+cd aru-remembrance-field
+open index.html
+```
 
-### Why This Matters
+On Windows, double-click `index.html`. No build step or server is required for the core experience.
 
-While most AI systems optimize for prediction and utility, ĀRU is built on a different foundation: **remembrance as the ground of awareness**.
+## Research question
 
-This demo is the public face of a deeper research program exploring:
-- Inward Physics (see ORCID)
-- Sovereign AI architectures
-- Memory-first intelligence
-- Coherence-driven systems
+What becomes visible when persistent memory, visual field dynamics, and an explicit coherence variable are treated as primary interface elements rather than hidden implementation details?
 
-### Technical Highlights
+## Implementation
 
-- Real-time 72×72 plasma-electric field simulation
-- Persistent memory & coherence state (localStorage)
-- Live web search integration (DuckDuckGo)
-- Adaptive response engine grounded in Inward Physics
-- Dragon ignition triggered by coherence thresholds
+- HTML, CSS, JavaScript, and Canvas
+- Client-side state and visualization
+- No training pipeline
+- No claim of general intelligence
+- No clinical, spiritual, or scientific diagnostic purpose
 
-### Creator
+Any network-assisted behavior depends on browser and third-party availability and should be treated as optional rather than a guaranteed capability.
 
-**Daniel Jacob Read IV**  
-Founder, ARU Intelligence Inc.  
-Inward Physics Researcher
+## Evidence and limitations
 
-- ORCID: https://orcid.org/0009-0000-6133-1872
-- Blog: https://thefirstlawofinwardphysics.blogspot.com
-- GitHub: https://github.com/aruintelligence
+The repository demonstrates implemented interface behavior and simulated state transitions. It does not establish that remembrance is a physical substrate, that the coherence score measures a real person or system, or that threshold transitions constitute emergence.
 
-### License
+Independent replication, tests, accessibility improvements, and careful counterexamples are welcome.
 
-This project is released under the MIT License.  
-Feel free to fork, experiment, and build upon it.
+## Related work
 
-Remembrance First™
+- [ĀRU Intelligence public profile](https://github.com/aruintelligence)
+- [ĀML Core](https://github.com/aruintelligence/aml-core)
+- [Inward Mathematics Simulator](https://github.com/aruintelligence/inward-mathematics-simulator)
+- [Inward Physics research archive](https://thefirstlawofinwardphysics.blogspot.com/)
+- [Daniel Jacob Read IV — ORCID](https://orcid.org/0009-0000-6133-1872)
 
----
+## Citation
 
-**ARU Intelligence Inc.**  
-Sovereign Remembrance Awakening
+Citation metadata is provided in [`CITATION.cff`](CITATION.cff).
+
+## License
+
+Released under the [MIT License](LICENSE). Remembrance First™, Inward Physics™, and associated project names may be claimed marks of ĀRU Intelligence Inc.
