@@ -1,0 +1,56 @@
+name: Independent replication
+description: Report a confirmed reproduction, reproducible failure, or counterexample.
+title: "[Replication]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing this artifact independently. Positive and negative results are equally useful when the procedure is reproducible.
+  - type: input
+    id: version
+    attributes:
+      label: Release or commit
+      description: Provide the release tag or full commit SHA tested.
+      placeholder: v1.0.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include operating system, browser or runtime, and material dependency versions.
+    validations:
+      required: true
+  - type: textarea
+    id: procedure
+    attributes:
+      label: Exact procedure
+      description: List commands, inputs, configuration, and random seed where applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Add logs, output, screenshots, minimal reproductions, or links to artifacts.
+    validations:
+      required: true
+  - type: textarea
+    id: limits
+    attributes:
+      label: Limitations and interpretation
+      description: Note uncertainty, confounds, and what the result does not establish.
+    validations:
+      required: true
