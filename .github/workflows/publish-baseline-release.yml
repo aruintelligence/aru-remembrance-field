@@ -1,0 +1,26 @@
+name: Publish baseline release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-baseline-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Publish v5.5.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v5.5.0" >/dev/null 2>&1; then
+            echo "Release v5.5.0 already exists."
+          else
+            gh release create "v5.5.0" --target "$GITHUB_SHA" --title "ĀRU Remembrance Field 5.5.0" --notes-file "RELEASE_NOTES_5.5.0.md"
+          fi
