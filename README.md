@@ -10,6 +10,10 @@ Created by **Daniel Jacob Read IV** and stewarded by **ĀRU Intelligence Inc.**
 
 > **Research scope:** This project is a symbolic, visual simulation. Its field variables and named states are software constructs, not measurements of consciousness, intelligence, psychology, or physical reality.
 
+[![ĀRU Remembrance Field live simulation](assets/remembrance-field-preview.jpg)](https://aruintelligence.github.io/aru-remembrance-field/)
+
+*The live field visualization. Select the image to open the interactive simulation.*
+
 ## What it demonstrates
 
 The interface lets a visitor enter a remembrance, declaration, or question and observe a client-side visual system respond. It explores:
