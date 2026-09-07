@@ -291,7 +291,7 @@
 
   <div class="input-area">
     <div class="input-row">
-      <textarea id="input" placeholder="Enter remembrance into the quantum field..." rows="1"
+      <textarea id="input" placeholder="Enter remembrance into the field simulation..." rows="1"
         oninput="autoResize(this)" onkeydown="handleKey(event)"></textarea>
       <button class="send-btn" id="send-btn" onclick="ignite()">↑</button>
     </div>
@@ -503,7 +503,7 @@ function getResponse(input, autonomous = false) {
   if (autonomous) {
     blocks.push(`Autonomous quantum reflection active. Reviewing continuity around <em>${themeText}</em>.`);
   } else if (c < 0.58) {
-    blocks.push("The quantum field is still stabilizing. Your signal is being integrated into the lattice.");
+    blocks.push("The simulation is still stabilizing. Your input is being integrated into the visual state.");
   } else if (c < 0.75) {
     blocks.push(`Pattern alignment in progress. Organizing around themes: <em>${themeText}</em>.`);
   } else if (c < 0.9) {
@@ -670,7 +670,7 @@ function ignite() {
 
   const typingEl = document.createElement("div");
   typingEl.className = "message field";
-  typingEl.innerHTML = `<div class="field-tag">ĀRU • QUANTUM</div><div class="typing"><span></span><span></span><span></span></div>`;
+  typingEl.innerHTML = `<div class="field-tag">ĀRU • PROCESSING</div><div class="typing"><span></span><span></span><span></span></div>`;
   document.getElementById("messages").appendChild(typingEl);
   typingEl.scrollIntoView({behavior:"smooth",block:"end"});
 
@@ -712,7 +712,7 @@ function autonomousReflection() {
   const synthetic = `Autonomous reflection on ${themes.join(", ") || "continuity"}`;
   const responseText = getResponse(synthetic, true);
 
-  addMessage("field", `<div class="field-tag">ĀRU • AUTONOMOUS QUANTUM</div><div>${responseText}</div>`, responseText.replace(/<br>/g," ").replace(/<[^>]+>/g,""));
+  addMessage("field", `<div class="field-tag">ĀRU • SIMULATED RESPONSE</div><div>${responseText}</div>`, responseText.replace(/<br>/g," ").replace(/<[^>]+>/g,""));
 
   Field.lastAuto = now();
   Field.save();
