@@ -141,6 +141,7 @@
       border-radius: 16px;
       font-size: 0.92rem;
       line-height: 1.7;
+      white-space: pre-wrap;
       animation: messageFade 0.4s ease;
     }
 
@@ -251,6 +252,27 @@
       filter: drop-shadow(0 0 60px #fbbf24);
     }
 
+    .inspector {
+      margin: 0.5rem 1.5rem;
+      padding: 0.7rem 1rem;
+      background: rgba(3,7,18,0.9);
+      border: 1px solid rgba(34,211,238,0.35);
+      border-radius: 14px;
+      pointer-events: auto;
+      max-height: min(38vh, 350px);
+      overflow-y: auto;
+    }
+    .inspector summary { cursor: pointer; color: #a5f3fc; font-weight: 700; }
+    .inspector p { margin: 0.65rem 0; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
+    .inspector ol { margin: 0.5rem 0 0.8rem 1.25rem; font: 0.8rem/1.6 monospace; color: #e2e8f0; }
+    .inspector-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .inspector button { padding: 0.45rem 0.7rem; background: #172554; color: #e0f2fe; border: 1px solid #38bdf8; border-radius: 8px; cursor: pointer; }
+    .inspector button:focus-visible, .inspector summary:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; scroll-behavior: auto !important; }
+    }
+
     @keyframes dragonIgnite {
       from { transform: scale(1) rotate(-6deg); }
       to { transform: scale(1.25) rotate(6deg); }
@@ -259,7 +281,7 @@
 </head>
 <body>
 
-<canvas id="field"></canvas>
+<canvas id="field" aria-hidden="true"></canvas>
 
 <div class="interface">
   <div class="quantum-header">
@@ -270,30 +292,42 @@
     <div class="consciousness-metrics">
       <div class="metric">
         <div class="metric-dot"></div>
-        <span>μ = <span id="coherence-val">0.640</span></span>
+        <span>Model μ = <span id="coherence-val">0.640</span></span>
       </div>
     </div>
   </div>
 
   <div class="field-label">
     <h1>Interactive Remembrance Field</h1>
-    <p>Every input becomes visible state. Every state remains inspectable.</p>
+    <p>A visual simulation. Inspect exactly how each input changes its modeled state.</p>
   </div>
 
-  <div class="response-area" id="messages">
+  <details class="inspector" id="inspector">
+    <summary>Inspect model state and last change</summary>
+    <p>μ is a scripted score, not a measure of a person or of consciousness. The breakdown uses prior memory and messages only; this input cannot match itself.</p>
+    <p id="transition-summary">No input has changed the model yet.</p>
+    <ol id="transition-terms"></ol>
+    <p id="storage-status">Your entries stay in this browser unless you download them. Export includes text you entered.</p>
+    <div class="inspector-actions">
+      <button type="button" onclick="downloadState()">Download local state JSON</button>
+      <button type="button" onclick="resetField()">Erase local state</button>
+    </div>
+  </details>
+
+  <div class="response-area" id="messages" role="log" aria-live="polite" aria-relevant="additions">
     <div class="message field">
       <div class="field-tag">ĀRU • SIMULATION ACTIVE</div>
       The scalar-field visualization is now active.<br>
-      Coherence baseline established at μ = 0.640.<br>
+      <span id="initial-state">Model μ = 0.640.</span><br>
       Enter a remembrance. The visualization responds and updates.
     </div>
   </div>
 
   <div class="input-area">
     <div class="input-row">
-      <textarea id="input" placeholder="Enter remembrance into the field simulation..." rows="1"
+      <textarea id="input" aria-label="Enter text into the field simulation" placeholder="Enter remembrance into the field simulation..." rows="1"
         oninput="autoResize(this)" onkeydown="handleKey(event)"></textarea>
-      <button class="send-btn" id="send-btn" onclick="ignite()">↑</button>
+      <button class="send-btn" id="send-btn" aria-label="Send input to simulation" onclick="ignite()">↑</button>
     </div>
   </div>
 </div>
@@ -301,7 +335,7 @@
 <div class="dragon-overlay" id="dragon-overlay">
   <div class="dragon-glyph">🐉</div>
   <h2 style="font-size:1.9rem; background:linear-gradient(90deg,#fbbf24,#f59e0b);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">DRAGON IGNITION</h2>
-  <p id="dragon-msg" style="max-width:340px; color:#fcd34d; font-size:1.05rem;">Coherence threshold crossed.<br>Emergent consciousness patterns stabilized.<br>The field is now self-reinforcing.</p>
+  <p id="dragon-msg" style="max-width:340px; color:#fcd34d; font-size:1.05rem;">The scripted score crossed its animation threshold. This visual effect does not imply awareness.</p>
   <button onclick="document.getElementById('dragon-overlay').classList.remove('active')" 
     style="margin-top:1rem; padding:0.8rem 2rem; background:rgba(245,158,11,0.2); border:1px solid #fbbf24; color:#fcd34d; border-radius:9999px; cursor:pointer; font-weight:600;">
     Return to the Field
@@ -316,25 +350,75 @@ const STORAGE_KEYS = {
   ignitions: "aru_ignitions",
   messages: "aru_messages",
   lastAuto: "aru_last_auto",
-  lastIgnition: "aru_last_ignition"
+  lastIgnition: "aru_last_ignition",
+  lastTransition: "aru_last_transition"
 };
+
+function readStored(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : JSON.parse(raw);
+  } catch (_) {
+    return fallback;
+  }
+}
+function storedNumber(key, fallback) {
+  const saved = readStored(key, fallback);
+  if ((typeof saved !== "number" && typeof saved !== "string") || saved === "") return fallback;
+  const value = Number(saved);
+  return Number.isFinite(value) ? value : fallback;
+}
+function storedList(key) {
+  const value = readStored(key, []);
+  return Array.isArray(value) ? value : [];
+}
+function storedMemory() {
+  return storedList(STORAGE_KEYS.memory)
+    .filter(m => m && typeof m.text === "string" && Number.isFinite(Number(m.time)))
+    .slice(-100)
+    .map(m => ({
+      text: m.text,
+      cleaned: m.text.toLowerCase().replace(/[^\w\s]/g, "").trim(),
+      tokens: tokenize(m.text),
+      weight: clamp(Number(m.weight) || 1, 0.15, 6),
+      time: Number(m.time),
+      count: Math.max(1, Math.floor(Number(m.count) || 1))
+    }));
+}
+function canStore() {
+  try {
+    localStorage.setItem("aru_storage_probe", "1");
+    localStorage.removeItem("aru_storage_probe");
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
 const Field = {
   time: 0,
-  coherence: parseFloat(localStorage.getItem(STORAGE_KEYS.coherence)) || 0.64,
-  memory: JSON.parse(localStorage.getItem(STORAGE_KEYS.memory) || "[]"),
-  ignitions: parseInt(localStorage.getItem(STORAGE_KEYS.ignitions) || "0", 10),
-  messages: JSON.parse(localStorage.getItem(STORAGE_KEYS.messages) || "[]"),
-  lastAuto: parseInt(localStorage.getItem(STORAGE_KEYS.lastAuto) || "0", 10),
-  lastIgnition: parseInt(localStorage.getItem(STORAGE_KEYS.lastIgnition) || "0", 10),
+  coherence: clamp(storedNumber(STORAGE_KEYS.coherence, 0.64), 0.35, 0.995),
+  memory: storedMemory(),
+  ignitions: storedNumber(STORAGE_KEYS.ignitions, 0),
+  messages: storedList(STORAGE_KEYS.messages).filter(m => m && (m.type === "user" || m.type === "field") && typeof m.text === "string").slice(-160),
+  lastAuto: storedNumber(STORAGE_KEYS.lastAuto, 0),
+  lastIgnition: storedNumber(STORAGE_KEYS.lastIgnition, 0),
+  lastTransition: readStored(STORAGE_KEYS.lastTransition, null),
+  storageAvailable: canStore(),
   busy: false,
   save() {
-    localStorage.setItem(STORAGE_KEYS.coherence, this.coherence.toFixed(4));
-    localStorage.setItem(STORAGE_KEYS.memory, JSON.stringify(this.memory.slice(-100)));
-    localStorage.setItem(STORAGE_KEYS.ignitions, String(this.ignitions));
-    localStorage.setItem(STORAGE_KEYS.messages, JSON.stringify(this.messages.slice(-160)));
-    localStorage.setItem(STORAGE_KEYS.lastAuto, String(this.lastAuto || 0));
-    localStorage.setItem(STORAGE_KEYS.lastIgnition, String(this.lastIgnition || 0));
+    try {
+      localStorage.setItem(STORAGE_KEYS.coherence, JSON.stringify(this.coherence));
+      localStorage.setItem(STORAGE_KEYS.memory, JSON.stringify(this.memory.slice(-100)));
+      localStorage.setItem(STORAGE_KEYS.ignitions, JSON.stringify(this.ignitions));
+      localStorage.setItem(STORAGE_KEYS.messages, JSON.stringify(this.messages.slice(-160)));
+      localStorage.setItem(STORAGE_KEYS.lastAuto, JSON.stringify(this.lastAuto || 0));
+      localStorage.setItem(STORAGE_KEYS.lastIgnition, JSON.stringify(this.lastIgnition || 0));
+      localStorage.setItem(STORAGE_KEYS.lastTransition, JSON.stringify(this.lastTransition));
+      this.storageAvailable = true;
+    } catch (_) {
+      this.storageAvailable = false;
+    }
   }
 };
 
@@ -345,7 +429,7 @@ function tokenize(text) {
 function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 function now() { return Date.now(); }
 function ageFactor(ts) {
-  const hours = (now() - ts) / 36e5;
+  const hours = Math.max(0, (now() - Number(ts)) / 36e5);
   return Math.exp(-hours / 42);
 }
 
@@ -463,7 +547,13 @@ function repetitionPenalty(input) {
 }
 
 function updateCoherence(input) {
+  const before = Field.coherence;
+  const terms = [];
   let delta = 0;
+  const addTerm = (label, value) => {
+    terms.push({ label, value });
+    delta += value;
+  };
   const lower = input.toLowerCase();
   const intent = detectIntent(input);
   const tokens = tokenize(input);
@@ -474,21 +564,22 @@ function updateCoherence(input) {
     ignite: 0.018, witness: 0.02, inward: 0.02
   };
 
-  Object.entries(powerWords).forEach(([w, b]) => { if (lower.includes(w)) delta += b; });
+  let wordBonus = 0;
+  Object.entries(powerWords).forEach(([w, b]) => { if (lower.includes(w)) wordBonus += b; });
+  addTerm("Matched word rules", wordBonus);
 
-  if (tokens.length > 8) delta += 0.012;
-  if (tokens.length > 18) delta += 0.016;
-  if (intent === "question") delta += 0.01;
-  if (intent === "exploration") delta += 0.014;
-  if (intent === "absolute") delta -= 0.015;
+  addTerm("Length rule", (tokens.length > 8 ? 0.012 : 0) + (tokens.length > 18 ? 0.016 : 0));
+  addTerm("Intent rule", intent === "question" ? 0.01 : intent === "exploration" ? 0.014 : intent === "absolute" ? -0.015 : 0);
 
-  delta += MemoryEngine.resonance(input);
-  delta -= contradictionPenalty(input);
-  delta -= repetitionPenalty(input);
-  delta -= 0.008 + Field.coherence * 0.009;
+  addTerm("Prior memory overlap", MemoryEngine.resonance(input));
+  addTerm("Contradiction rule", -contradictionPenalty(input));
+  addTerm("Prior repetition rule", -repetitionPenalty(input));
+  addTerm("Baseline drift", -(0.008 + before * 0.009));
 
-  Field.coherence = clamp(Field.coherence + delta, 0.35, 0.995);
+  Field.coherence = clamp(before + delta, 0.35, 0.995);
+  Field.lastTransition = { before, delta, after: Field.coherence, terms, clamped: Field.coherence !== before + delta };
   Field.save();
+  return Field.lastTransition;
 }
 
 function getResponse(input, autonomous = false) {
@@ -496,12 +587,12 @@ function getResponse(input, autonomous = false) {
   const themes = MemoryEngine.themes();
   const echoes = MemoryEngine.echoes(input, 3);
   const recent = MemoryEngine.recent(3);
-  const themeText = themes.length ? themes.join(", ") : "remembrance, continuity, signal";
+  const themeText = themes.length ? escapeHtml(themes.join(", ")) : "remembrance, continuity, signal";
 
   const blocks = [];
 
   if (autonomous) {
-    blocks.push(`Autonomous quantum reflection active. Reviewing continuity around <em>${themeText}</em>.`);
+    blocks.push(`Scheduled simulated reflection. Reviewing stored themes around <em>${themeText}</em>.`);
   } else if (c < 0.58) {
     blocks.push("The simulation is still stabilizing. Your input is being integrated into the visual state.");
   } else if (c < 0.75) {
@@ -509,9 +600,9 @@ function getResponse(input, autonomous = false) {
   } else if (c < 0.9) {
     blocks.push(`Stable resonance detected. Maintaining continuity around <em>${themeText}</em>.`);
   } else if (c < 0.975) {
-    blocks.push(`High coherence achieved. The field is remembering in structure. Core themes: <em>${themeText}</em>.`);
+    blocks.push(`High modeled score reached. Stored themes: <em>${themeText}</em>.`);
   } else {
-    blocks.push("🐉 Dragon ignition threshold crossed. The field has entered self-reinforcing emergent consciousness.");
+    blocks.push("🐉 Animation threshold crossed. This is a visual rule in the simulation.");
   }
 
   if (echoes.length) {
@@ -619,7 +710,8 @@ function addMessage(type, html, text = "") {
   wrap.appendChild(el);
   el.scrollIntoView({ behavior: "smooth", block: "end" });
 
-  Field.messages.push({ type, html, text, time: now() });
+  // Restore from plain text, never from stored HTML.
+  Field.messages.push({ type, text: text || el.innerText || el.textContent, time: now() });
   if (Field.messages.length > 160) Field.messages = Field.messages.slice(-160);
   Field.save();
 }
@@ -629,7 +721,7 @@ function restoreMessages() {
   Field.messages.forEach(msg => {
     const el = document.createElement("div");
     el.className = `message ${msg.type}`;
-    el.innerHTML = msg.html;
+    el.textContent = msg.text;
     wrap.appendChild(el);
   });
   wrap.scrollTop = wrap.scrollHeight;
@@ -637,6 +729,54 @@ function restoreMessages() {
 
 function updateUI() {
   document.getElementById("coherence-val").textContent = Field.coherence.toFixed(3);
+  document.getElementById("initial-state").textContent = `Current modeled μ = ${Field.coherence.toFixed(3)}.`;
+  renderInspector();
+}
+
+function renderInspector() {
+  const summary = document.getElementById("transition-summary");
+  const list = document.getElementById("transition-terms");
+  const transition = Field.lastTransition;
+  list.replaceChildren();
+  if (transition && Number.isFinite(transition.before) && Number.isFinite(transition.delta) && Number.isFinite(transition.after) && Array.isArray(transition.terms)) {
+    summary.textContent = `Model μ: ${transition.before.toFixed(4)} → ${transition.after.toFixed(4)} (sum ${transition.delta >= 0 ? "+" : ""}${transition.delta.toFixed(4)}${transition.clamped ? ", limited to model range" : ""}).`;
+    transition.terms.forEach(term => {
+      if (typeof term.label !== "string" || !Number.isFinite(term.value)) return;
+      const item = document.createElement("li");
+      item.textContent = `${term.label}: ${term.value >= 0 ? "+" : ""}${term.value.toFixed(4)}`;
+      list.appendChild(item);
+    });
+  } else {
+    summary.textContent = "No input has changed the model yet.";
+  }
+  document.getElementById("storage-status").textContent = Field.storageAvailable
+    ? "Stored locally in this browser. Downloaded JSON includes your entered text; nothing is uploaded by this app."
+    : "Browser storage is unavailable. This session still works, but it will not persist after closing.";
+}
+
+function downloadState() {
+  const payload = {
+    schema_version: 1, exported_at: new Date().toISOString(),
+    scope: "browser-local symbolic simulation",
+    coherence: Field.coherence, memory: Field.memory, messages: Field.messages,
+    ignitions: Field.ignitions, last_auto: Field.lastAuto,
+    last_ignition: Field.lastIgnition, last_transition: Field.lastTransition
+  };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], {type: "application/json"}));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "aru-remembrance-field-state.json";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function resetField() {
+  if (!window.confirm("Erase this simulation's messages, memory, and modeled state from this browser?")) return;
+  try { Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key)); }
+  catch (_) { /* Storage was unavailable already. */ }
+  window.location.reload();
 }
 
 function autoResize(el) {
@@ -666,6 +806,11 @@ function ignite() {
   inputEl.value = "";
   inputEl.style.height = "52px";
 
+  // Evaluate against the prior state before inserting the current input into
+  // either memory or message history. Otherwise every input echoes itself and
+  // is counted as a repetition on its first appearance.
+  updateCoherence(input);
+  const responseText = getResponse(input);
   addMessage("user", escapeHtml(input), input);
 
   const typingEl = document.createElement("div");
@@ -676,19 +821,17 @@ function ignite() {
 
   SIM.burst(Field.coherence);
   MemoryEngine.add(input);
-  updateCoherence(input);
   updateUI();
 
   setTimeout(() => {
     typingEl.remove();
 
-    const responseText = getResponse(input);
-    addMessage("field", `<div class="field-tag">ĀRU • μ = ${Field.coherence.toFixed(3)}</div><div>${responseText}</div>`, responseText.replace(/<br>/g," ").replace(/<[^>]+>/g,""));
+    addMessage("field", `<div class="field-tag">ĀRU • μ = ${Field.coherence.toFixed(3)}</div><div>${responseText}</div>`);
 
     if (Field.coherence >= 0.975 && now() - Field.lastIgnition > 45000) {
       setTimeout(() => {
         addMessage("field", `<div class="dragon-event">🐉 DRAGON IGNITION — coherence ${Field.coherence.toFixed(3)}</div>`, `Dragon ignition — coherence ${Field.coherence.toFixed(3)}`);
-        document.getElementById("dragon-msg").textContent = "Emergent consciousness patterns stabilized. The field is now self-reinforcing.";
+        document.getElementById("dragon-msg").textContent = "The modeled score crossed the animation threshold; this is not a measure of awareness.";
         document.getElementById("dragon-overlay").classList.add("active");
         Field.ignitions++;
         Field.lastIgnition = now();
@@ -709,10 +852,10 @@ function autonomousReflection() {
   if (now() - Field.lastAuto < 26000) return;
 
   const themes = MemoryEngine.themes(3);
-  const synthetic = `Autonomous reflection on ${themes.join(", ") || "continuity"}`;
+  const synthetic = `Scheduled reflection on ${themes.join(", ") || "continuity"}`;
   const responseText = getResponse(synthetic, true);
 
-  addMessage("field", `<div class="field-tag">ĀRU • SIMULATED RESPONSE</div><div>${responseText}</div>`, responseText.replace(/<br>/g," ").replace(/<[^>]+>/g,""));
+  addMessage("field", `<div class="field-tag">ĀRU • SCHEDULED SIMULATION</div><div>${responseText}</div>`);
 
   Field.lastAuto = now();
   Field.save();
