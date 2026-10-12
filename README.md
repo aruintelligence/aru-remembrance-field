@@ -25,6 +25,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - Threshold-driven visual transitions, including “dragon ignition”
 - A response layer framed by Inward Physics™ concepts
 - A dependency-free, inspectable browser implementation
+- An in-app receipt for each modeled score change and a local JSON export
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -41,6 +42,22 @@ open index.html
 ```
 
 On Windows, double-click `index.html`. No build step or server is required for the core experience.
+
+## Inspect a transition
+
+Open **Inspect model state and last change** after submitting text. The panel shows the previous modeled μ, the summed change, the new value, and each term in the calculation. Each term is visible even when its contribution is zero. The score is limited to the range 0.35–0.995.
+
+The rules are fixed in `updateCoherence` in `index.html`: substring matches for a short list of words, token-count bonuses, an intent bonus or penalty, overlap with earlier memory, contradiction and repetition penalties against earlier entries, and baseline drift. They are hand-written heuristics, not learned weights or a validated measure. The submitted text is evaluated **before** it enters the message and memory history, so a first entry cannot match itself or count as its own repetition. For example, on a fresh browser state, submitting `What?` changes μ from 0.6400 to 0.6362: +0.0100 for a question and −0.0138 for baseline drift, with zero prior-memory and repetition terms.
+
+Entries and the score are saved in this browser's `localStorage`. The panel can download a JSON copy, including text you entered, or erase this app's local state. The app does not send entries to a server. Browser settings, extensions, or the device's other users may still affect local privacy, and clearing site data also removes the saved state. The export is a snapshot for inspection; importing it is not implemented.
+
+Run the small regression suite with Node.js:
+
+```bash
+node tests/field.test.cjs
+```
+
+It covers first and repeated input scoring, corrupted saved data, safe display of restored text, and local data controls.
 
 ## Research question
 
@@ -60,7 +77,7 @@ Any network-assisted behavior depends on browser and third-party availability an
 
 The repository demonstrates implemented interface behavior and simulated state transitions. It does not establish that remembrance is a physical substrate, that the coherence score measures a real person or system, or that threshold transitions constitute emergence.
 
-Independent replication, tests, accessibility improvements, and careful counterexamples are welcome.
+Independent replication, accessibility improvements, and careful counterexamples are welcome.
 
 ## Related work
 
