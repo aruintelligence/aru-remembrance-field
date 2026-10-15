@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { verifyProof } = require('../tools/verify-proof.cjs');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -153,6 +154,32 @@ test('draft comparison changes neither local state nor the draft and escapes pre
   assert.equal(app.field.coherence, 0.64);
   assert.equal(app.field.messages.length, 0);
   assert.equal(app.saved.has('aru_last_transition'), false);
+});
+
+test('portable proof replays the exact prior state and detects changed receipts or inputs', async () => {
+  const app = boot();
+  app.input('violet river');
+  app.input('violet river');
+  vm.runInContext('downloadProof()', app.context);
+  const proof = JSON.parse(await app.exports[0].text());
+  assert.equal(proof.model_revision, 'aru-field-heuristics-1');
+  assert.equal(proof.prior_memory.length, 1);
+  assert.equal(proof.prior_user_messages.length, 1);
+  assert.equal(proof.prior_user_messages[0].text, 'violet river');
+  assert.ok(verifyProof(proof).effect > 0);
+  assert.deepEqual(JSON.parse(app.saved.get('aru_last_proof')), proof);
+
+  const changedScore = structuredClone(proof);
+  changedScore.result.actual.after += 0.01;
+  assert.throws(() => verifyProof(changedScore), /actual\.after/);
+  const changedInput = structuredClone(proof);
+  changedInput.input = 'amber comet';
+  assert.throws(() => verifyProof(changedInput), /does not match/);
+
+  vm.runInContext('eraseProof()', app.context);
+  assert.equal(app.field.lastProof, null);
+  assert.equal(app.saved.has('aru_last_proof'), false);
+  assert.ok(app.field.lastTransition);
 });
 
 test('corrupt saved data falls back safely and saved messages restore as text', () => {

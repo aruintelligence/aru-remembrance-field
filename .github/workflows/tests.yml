@@ -13,3 +13,4 @@ jobs:
         with:
           node-version: '22'
       - run: node tests/field.test.cjs
+      - run: node tools/verify-proof.cjs research/example-proof.json
