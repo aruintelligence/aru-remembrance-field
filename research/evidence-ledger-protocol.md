@@ -17,6 +17,12 @@ Open **Evidence memory** in the [live demo](https://aruintelligence.github.io/ar
 
 The test suite runs these transitions in `tests/field.test.cjs`. It also checks that fact records survive a reload, do not change the freeform memory or score, render entered markup as text, reject malformed stored records, and refuse to evict a record silently at the 100-entry limit. Run `node tests/field.test.cjs` from the repository root.
 
+## Portable merge challenge
+
+In browser A, record `favorite color` = `amber` and download **evidence JSON**. In browser B, record `favorite color` = `teal` before choosing that file for import. The preview should show A's source #1 mapped to B's next free local number, both values, and one conflicting name. No record should change before selecting **Apply reviewed import**. After applying, recall must abstain and display both local source numbers. Reload B: the conflict and imported marker should remain. A local edit between preview and apply invalidates the preview. Importing a malformed file or a file that pushes B beyond 100 records rejects the whole import.
+
+This format carries only the ledger records, not conversation text or modeled μ. Its `format` is `aru-evidence-ledger`, `version` is `1`, and `records` is an array of at most 100 entries with local source ID, name, value, timestamp, and active/superseded status. Imports are limited to 256 KiB. Incoming IDs are reassigned; they do not authenticate who wrote the file. An exported full-state JSON is deliberately not accepted by this importer.
+
 ## Interpretation and limits
 
 The lookup is exact after Unicode NFKC normalization, lowercasing, and whitespace collapse on the name. It does not infer that `favourite colour`, `shirt color`, or a natural-language question refers to `favorite color`. Values are compared exactly after trimming, so a change in capitalization also creates a conflict. Values are user assertions, not verified claims about the world. Source numbers identify local entries and can be changed by someone with access to browser storage. This challenge demonstrates a deterministic abstention rule and explicit conflict resolution, not general language understanding, human benefit, or authenticated provenance.

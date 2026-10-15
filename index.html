@@ -282,6 +282,7 @@
     .ledger textarea { min-height: 65px; }
     .ledger-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.7rem 0; }
     .ledger button { padding: 0.45rem 0.7rem; color: #fef3c7; background: #3b2509; border: 1px solid #fbbf24; border-radius: 8px; cursor: pointer; }
+    .ledger button:disabled { opacity: 0.45; cursor: not-allowed; }
     .ledger button:focus-visible, .ledger summary:focus-visible, .ledger input:focus-visible, .ledger textarea:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
     .ledger-entry { padding: 0.65rem; margin-top: 0.5rem; border: 1px solid rgba(245,158,11,0.28); border-radius: 8px; overflow-wrap: anywhere; font-size: 0.82rem; }
     .ledger-entry strong, .ledger-entry small { display: block; }
@@ -354,6 +355,14 @@
       <button type="button" onclick="recallFact()">Recall by name</button>
     </div>
     <p id="ledger-result" role="status" aria-live="polite">No fact has been recalled yet.</p>
+    <div class="ledger-actions">
+      <button type="button" onclick="downloadFactLedger()">Download evidence JSON</button>
+    </div>
+    <label for="fact-import">Import evidence JSON from this device</label>
+    <input id="fact-import" type="file" accept=".json,application/json" onchange="previewFactImport()">
+    <p>Review every entry and its new local source number before applying. Incoming current claims can create conflicts; nothing is silently replaced.</p>
+    <div id="fact-import-preview" role="status" aria-live="polite"></div>
+    <button id="fact-import-apply" type="button" disabled onclick="applyFactImport()">Apply reviewed import</button>
     <div id="ledger-entries"></div>
   </details>
 
@@ -435,19 +444,23 @@ function storedMemory() {
 function normalizeFactKey(key) {
   return key.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
 }
+function validFactClaim(claim) {
+  return claim && !Array.isArray(claim) && Number.isSafeInteger(claim.id) && claim.id >= 1 && claim.id <= 1e9 &&
+    typeof claim.key === "string" && !!claim.key.trim() && claim.key.length <= 120 &&
+    typeof claim.value === "string" && !!claim.value.trim() && claim.value.length <= 500 &&
+    Number.isFinite(claim.time) && claim.time >= 0 && claim.time <= 8.64e15 &&
+    (claim.status === "active" || claim.status === "superseded");
+}
 function storedClaims() {
   const seen = new Set();
   return storedList(STORAGE_KEYS.claims).filter(claim => {
-    if (!claim || !Number.isSafeInteger(claim.id) || claim.id < 1 || claim.id > 1e9 || seen.has(claim.id) ||
-        typeof claim.key !== "string" || !claim.key.trim() || claim.key.length > 120 ||
-        typeof claim.value !== "string" || !claim.value.trim() || claim.value.length > 500 ||
-        !Number.isFinite(claim.time) || claim.time < 0 || claim.time > 8.64e15 ||
-        (claim.status !== "active" && claim.status !== "superseded")) return false;
+    if (!validFactClaim(claim) || seen.has(claim.id)) return false;
     seen.add(claim.id);
     return true;
   }).slice(0, 100).map(claim => ({
     id: claim.id, key: claim.key.trim().replace(/\s+/g, " "),
-    value: claim.value.trim(), time: claim.time, status: claim.status
+    value: claim.value.trim(), time: claim.time, status: claim.status,
+    imported: claim.imported === true
   }));
 }
 function canStore() {
@@ -878,6 +891,9 @@ function renderInspector() {
 }
 
 /* ==================== EXPLICIT EVIDENCE MEMORY ==================== */
+let pendingFactImport = null;
+let factImportRequest = 0;
+
 function lookupFact(key, claims = Field.claims) {
   const normalized = normalizeFactKey(key);
   if (!normalized) return { kind: "empty" };
@@ -911,7 +927,7 @@ function renderLedger() {
     const content = document.createElement("strong");
     content.textContent = `${claim.key}: ${claim.value}`;
     const meta = document.createElement("small");
-    meta.textContent = `Source #${claim.id} · ${claim.status === "active" ? "current candidate" : "superseded"} · ${new Date(claim.time).toISOString()}`;
+    meta.textContent = `Source #${claim.id} · ${claim.status === "active" ? "current candidate" : "superseded"} · ${claim.imported ? "imported assertion · " : ""}${new Date(claim.time).toISOString()}`;
     const actions = document.createElement("div");
     actions.className = "ledger-actions";
     const select = document.createElement("button");
@@ -935,6 +951,110 @@ function showFactResult(key, prefix = "") {
   document.getElementById("ledger-result").textContent = `${prefix}${describeFact(key)}${Field.storageAvailable ? "" : " Browser storage is unavailable; these records last only for this session."}`;
 }
 
+function invalidateFactImport() {
+  const input = document.getElementById("fact-import");
+  if (!pendingFactImport && !input.value) return;
+  ++factImportRequest;
+  pendingFactImport = null;
+  input.value = "";
+  document.getElementById("fact-import-apply").disabled = true;
+  document.getElementById("fact-import-preview").textContent = "Ledger changed. Choose the file again to review an updated import.";
+}
+
+function downloadFactLedger() {
+  downloadJSON({ format: "aru-evidence-ledger", version: 1,
+    records: Field.claims.map(({id, key, value, time, status, imported}) =>
+      ({id, key, value, time, status, imported: imported === true}))
+  }, "aru-evidence-ledger.json");
+}
+
+function planFactImport(text, existing = Field.claims, counter = Field.claimCounter) {
+  if (typeof text !== "string" || text.length > 262144) throw new Error("Evidence file exceeds the 256 KiB limit.");
+  let bundle;
+  try { bundle = JSON.parse(text); } catch (_) { throw new Error("Evidence file is not valid JSON."); }
+  if (!bundle || bundle.format !== "aru-evidence-ledger" || bundle.version !== 1 || !Array.isArray(bundle.records)) {
+    throw new Error("Choose an evidence ledger export (format aru-evidence-ledger, version 1). The full state export is not importable here.");
+  }
+  if (bundle.records.length > 100) throw new Error("Evidence file has more than 100 records.");
+  if (existing.length + bundle.records.length > 100) throw new Error("Import would exceed 100 records. Delete entries or use a smaller file; no records were changed.");
+  const seen = new Set();
+  for (const record of bundle.records) {
+    if (!validFactClaim(record) || seen.has(record.id)) throw new Error("Evidence file contains an invalid or duplicate record. Nothing was imported.");
+    seen.add(record.id);
+  }
+  const next = Number.isSafeInteger(counter) && counter > 0 && counter <= 1e9 ? counter : 1;
+  const firstId = Math.max(next, ...existing.map(claim => claim.id + 1));
+  if (bundle.records.length && firstId + bundle.records.length - 1 > 1e9) throw new Error("Local source numbers have reached their limit. Nothing was imported.");
+  const incoming = bundle.records.map((record, index) => ({
+    sourceId: record.id,
+    claim: { id: firstId + index, key: record.key.trim().replace(/\s+/g, " "),
+      value: record.value.trim(), time: record.time, status: record.status, imported: true }
+  }));
+  const merged = [...existing.map(claim => ({...claim})), ...incoming.map(entry => entry.claim)];
+  const affected = [...new Set(incoming.map(entry => normalizeFactKey(entry.claim.key)))];
+  const conflicts = affected.filter(key => lookupFact(key, merged).kind === "conflict");
+  return { baseline: JSON.stringify([existing, counter]), incoming, merged,
+    nextCounter: firstId + incoming.length, conflicts };
+}
+
+async function previewFactImport() {
+  const input = document.getElementById("fact-import");
+  const output = document.getElementById("fact-import-preview");
+  const apply = document.getElementById("fact-import-apply");
+  const request = ++factImportRequest;
+  pendingFactImport = null;
+  apply.disabled = true;
+  output.replaceChildren();
+  const file = input.files && input.files[0];
+  if (!file) { output.textContent = "Choose an evidence JSON file to preview."; return; }
+  if (file.size > 262144) { output.textContent = "Evidence file exceeds the 256 KiB limit."; return; }
+  try {
+    const text = await file.text();
+    if (request !== factImportRequest) return;
+    const plan = planFactImport(text);
+    if (!plan.incoming.length) { output.textContent = "This evidence file has no records to import."; return; }
+    pendingFactImport = plan;
+    const summary = document.createElement("p");
+    summary.textContent = `Review ${plan.incoming.length} incoming records. ${plan.conflicts.length} affected name${plan.conflicts.length === 1 ? "" : "s"} will have conflicting current values. Incoming source numbers are remapped to unused local numbers.`;
+    output.appendChild(summary);
+    for (const entry of plan.incoming) {
+      const row = document.createElement("div");
+      row.className = "ledger-entry";
+      row.textContent = `Incoming #${entry.sourceId} → local #${entry.claim.id} · ${entry.claim.status} · ${entry.claim.key}: ${entry.claim.value}`;
+      output.appendChild(row);
+    }
+    for (const key of plan.conflicts) {
+      const row = document.createElement("div");
+      row.className = "ledger-entry";
+      const current = plan.merged.filter(claim => normalizeFactKey(claim.key) === key && claim.status === "active");
+      row.textContent = `Conflict for “${key}” after import: ${current.map(claim => `local #${claim.id} = ${claim.value}`).join(" · ")}. Recall will withhold an answer.`;
+      output.appendChild(row);
+    }
+    apply.disabled = false;
+  } catch (error) {
+    if (request === factImportRequest) output.textContent = error.message || "Could not read the evidence file.";
+  }
+}
+
+function applyFactImport() {
+  const plan = pendingFactImport;
+  if (!plan) return;
+  if (plan.baseline !== JSON.stringify([Field.claims, Field.claimCounter])) {
+    invalidateFactImport();
+    return;
+  }
+  Field.claims = plan.merged;
+  Field.claimCounter = plan.nextCounter;
+  Field.save();
+  pendingFactImport = null;
+  ++factImportRequest;
+  document.getElementById("fact-import").value = "";
+  document.getElementById("fact-import-apply").disabled = true;
+  document.getElementById("fact-import-preview").textContent = `Imported ${plan.incoming.length} records. ${plan.conflicts.length} affected name${plan.conflicts.length === 1 ? "" : "s"} now have conflicting current values; use a source explicitly to resolve each conflict.`;
+  renderLedger();
+  document.getElementById("ledger-result").textContent = `Import complete. ${Field.storageAvailable ? "Saved in this browser." : "Browser storage is unavailable; these records last only for this session."}`;
+}
+
 function rememberFact() {
   const keyInput = document.getElementById("fact-key");
   const valueInput = document.getElementById("fact-value");
@@ -955,7 +1075,8 @@ function rememberFact() {
     document.getElementById("ledger-result").textContent = "The record counter has reached its limit. Export and erase local state to start a new ledger.";
     return;
   }
-  Field.claims.push({ id, key, value, time: now(), status: "active" });
+  invalidateFactImport();
+  Field.claims.push({ id, key, value, time: now(), status: "active", imported: false });
   Field.claimCounter = id + 1;
   Field.save();
   valueInput.value = "";
@@ -970,6 +1091,7 @@ function recallFact() {
 function selectFact(id) {
   const selected = Field.claims.find(claim => claim.id === id);
   if (!selected) return;
+  invalidateFactImport();
   const key = normalizeFactKey(selected.key);
   Field.claims.forEach(claim => {
     if (normalizeFactKey(claim.key) === key) claim.status = claim.id === id ? "active" : "superseded";
@@ -983,6 +1105,7 @@ function selectFact(id) {
 function deleteFact(id) {
   const claim = Field.claims.find(entry => entry.id === id);
   if (!claim || !window.confirm(`Delete local fact record #${id}?`)) return;
+  invalidateFactImport();
   Field.claims = Field.claims.filter(entry => entry.id !== id);
   Field.save();
   document.getElementById("fact-key").value = claim.key;
