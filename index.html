@@ -267,6 +267,7 @@
     .inspector ol { margin: 0.5rem 0 0.8rem 1.25rem; font: 0.8rem/1.6 monospace; color: #e2e8f0; }
     .inspector-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .inspector button { padding: 0.45rem 0.7rem; background: #172554; color: #e0f2fe; border: 1px solid #38bdf8; border-radius: 8px; cursor: pointer; }
+    .inspector button:disabled { opacity: 0.45; cursor: not-allowed; }
     .inspector button:focus-visible, .inspector summary:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
     .comparison { margin: 0.85rem 0; padding: 0.75rem; border: 1px solid rgba(34,211,238,0.3); border-radius: 10px; background: rgba(8,20,43,0.9); }
     .comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; margin-top: 0.65rem; }
@@ -317,6 +318,11 @@
     <p><strong>Memory ablation lab:</strong> compare a draft against the same model with earlier memory and messages withheld. Both start at the current μ. This isolates the next step only; it does not replay a history without memory.</p>
     <button type="button" onclick="compareDraft()">Compare draft without saving</button>
     <div id="draft-comparison" role="status" aria-live="polite"></div>
+    <p id="proof-status">Submit an input to create a portable proof of its score change.</p>
+    <div class="inspector-actions">
+      <button type="button" id="proof-download" onclick="downloadProof()">Download last proof JSON</button>
+      <button type="button" id="proof-erase" onclick="eraseProof()">Erase proof copy</button>
+    </div>
     <p id="storage-status">Your entries stay in this browser unless you download them. Export includes text you entered.</p>
     <div class="inspector-actions">
       <button type="button" onclick="downloadState()">Download local state JSON</button>
@@ -361,8 +367,10 @@ const STORAGE_KEYS = {
   messages: "aru_messages",
   lastAuto: "aru_last_auto",
   lastIgnition: "aru_last_ignition",
-  lastTransition: "aru_last_transition"
+  lastTransition: "aru_last_transition",
+  lastProof: "aru_last_proof"
 };
+const PROOF_MODEL_REVISION = "aru-field-heuristics-1";
 
 function readStored(key, fallback) {
   try {
@@ -414,6 +422,7 @@ const Field = {
   lastAuto: storedNumber(STORAGE_KEYS.lastAuto, 0),
   lastIgnition: storedNumber(STORAGE_KEYS.lastIgnition, 0),
   lastTransition: readStored(STORAGE_KEYS.lastTransition, null),
+  lastProof: readStored(STORAGE_KEYS.lastProof, null),
   storageAvailable: canStore(),
   busy: false,
   save() {
@@ -425,6 +434,7 @@ const Field = {
       localStorage.setItem(STORAGE_KEYS.lastAuto, JSON.stringify(this.lastAuto || 0));
       localStorage.setItem(STORAGE_KEYS.lastIgnition, JSON.stringify(this.lastIgnition || 0));
       localStorage.setItem(STORAGE_KEYS.lastTransition, JSON.stringify(this.lastTransition));
+      localStorage.setItem(STORAGE_KEYS.lastProof, JSON.stringify(this.lastProof));
       this.storageAvailable = true;
     } catch (_) {
       this.storageAvailable = false;
@@ -600,6 +610,13 @@ function compareInput(input, at = now()) {
 }
 
 function updateCoherence(input) {
+  // The score reads only the last 22 memories and last five user messages.
+  // Capture exactly those prior inputs before this submission changes history.
+  const priorMemory = Field.memory.slice(-22).map(m => ({
+    text: m.text, tokens: [...m.tokens], weight: m.weight, time: m.time
+  }));
+  const priorUserMessages = Field.messages.filter(m => m.type === "user").slice(-5)
+    .map(m => ({ type: "user", text: m.text }));
   const comparison = compareInput(input);
   Field.coherence = comparison.actual.after;
   Field.lastTransition = {
@@ -607,6 +624,21 @@ function updateCoherence(input) {
     evaluatedAt: comparison.at,
     control: { after: comparison.control.after, delta: comparison.control.delta },
     memoryEffect: comparison.effect
+  };
+  Field.lastProof = {
+    schema_version: 1,
+    model_revision: PROOF_MODEL_REVISION,
+    scope: "one-step symbolic score; not an authenticated record",
+    input,
+    evaluated_at: comparison.at,
+    start_mu: comparison.actual.before,
+    prior_memory: priorMemory,
+    prior_user_messages: priorUserMessages,
+    result: {
+      actual: comparison.actual,
+      control: comparison.control,
+      history_effect: comparison.effect
+    }
   };
   Field.save();
   return Field.lastTransition;
@@ -786,6 +818,12 @@ function renderInspector() {
   document.getElementById("storage-status").textContent = Field.storageAvailable
     ? "Stored locally in this browser. Downloaded JSON includes your entered text; nothing is uploaded by this app."
     : "Browser storage is unavailable. This session still works, but it will not persist after closing.";
+  const hasProof = Field.lastProof && Field.lastProof.schema_version === 1 && typeof Field.lastProof.input === "string";
+  document.getElementById("proof-download").disabled = !hasProof;
+  document.getElementById("proof-erase").disabled = !hasProof;
+  document.getElementById("proof-status").textContent = hasProof
+    ? "The last proof copies this input and up to 22 earlier memory texts and five user messages. It stays locally until replaced or erased. Download it only if you want to share those texts. It checks model consistency, not authenticity."
+    : "Submit an input to create a portable proof of its score change.";
 }
 
 function compareDraft() {
@@ -825,22 +863,37 @@ function compareDraft() {
   output.appendChild(panel);
 }
 
-function downloadState() {
-  const payload = {
-    schema_version: 1, exported_at: new Date().toISOString(),
-    scope: "browser-local symbolic simulation",
-    coherence: Field.coherence, memory: Field.memory, messages: Field.messages,
-    ignitions: Field.ignitions, last_auto: Field.lastAuto,
-    last_ignition: Field.lastIgnition, last_transition: Field.lastTransition
-  };
+function downloadJSON(payload, filename) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], {type: "application/json"}));
   const link = document.createElement("a");
   link.href = url;
-  link.download = "aru-remembrance-field-state.json";
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadProof() {
+  if (!Field.lastProof || Field.lastProof.schema_version !== 1 || typeof Field.lastProof.input !== "string") return;
+  downloadJSON(Field.lastProof, "aru-remembrance-transition-proof.json");
+}
+
+function eraseProof() {
+  Field.lastProof = null;
+  try { localStorage.removeItem(STORAGE_KEYS.lastProof); } catch (_) { /* Storage may be unavailable. */ }
+  renderInspector();
+}
+
+function downloadState() {
+  downloadJSON({
+    schema_version: 1, exported_at: new Date().toISOString(),
+    scope: "browser-local symbolic simulation",
+    coherence: Field.coherence, memory: Field.memory, messages: Field.messages,
+    ignitions: Field.ignitions, last_auto: Field.lastAuto,
+    last_ignition: Field.lastIgnition, last_transition: Field.lastTransition,
+    last_proof: Field.lastProof
+  }, "aru-remembrance-field-state.json");
 }
 
 function resetField() {

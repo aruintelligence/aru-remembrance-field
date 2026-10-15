@@ -27,6 +27,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A dependency-free, inspectable browser implementation
 - An in-app receipt for each modeled score change and a local JSON export
 - A memory ablation lab that previews the same draft with and without prior history
+- A portable one-step proof capsule that can be recomputed from a local checkout
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -60,13 +61,25 @@ After a normal submission, the last-change receipt also shows the matched contro
 
 The [ablation protocol](research/ablation-protocol.md) lists exact positive, negative, and contradiction probes, including expected numbers and limits on interpretation. These probes establish observable properties of the code, not a scientific validation of the project's broader theory.
 
+## Verify a submitted transition
+
+After submitting text, select **Download last proof JSON** in the inspector. The file captures the input, timestamp, starting score, the exact prior memories and user messages used by the scoring rule, and both score receipts. In a local checkout, run:
+
+```bash
+node tools/verify-proof.cjs /path/to/aru-remembrance-transition-proof.json
+```
+
+To try it without entering private text, run `node tools/verify-proof.cjs research/example-proof.json`. The synthetic example should report `0.72624` with history and `0.62624` without it.
+
+The verifier recalculates every score term against the repository's model source and exits with a failure if the recorded result disagrees. This checks **internal consistency**, not the authenticity of a downloaded file: someone who edits both its inputs and results can create a different consistent file. It is not a claim of scientific validation. Proof files contain your current input and up to 22 earlier memory texts and five prior user messages. They are saved locally, replaced by the next submission, and included in the full state export. Select **Erase proof copy** to remove that extra local copy without erasing the main memory; **Erase local state** removes everything. A 16 MiB limit protects the command-line verifier from oversized files.
+
 Run the small regression suite with Node.js:
 
 ```bash
 node tests/field.test.cjs
 ```
 
-It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, draft non-mutation, safe preview and restored text display, corrupted saved data, and local data controls.
+It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, draft non-mutation, proof replay and changed-file detection, safe preview and restored text display, corrupted saved data, and local data controls.
 
 ## Research question
 
