@@ -10,11 +10,19 @@ const { verifyEvidenceReceipt } = require('../tools/verify-evidence-receipt.cjs'
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
-function boot(values = {}) {
+function boot(values = {}, options = {}) {
   const saved = new Map(Object.entries(values));
   const elements = new Map();
   const exports = [];
-  const canvasContext = { setTransform() {}, fillRect() {}, fillStyle: '' };
+  const frames = new Map();
+  let nextFrame = 1;
+  let paintCalls = 0;
+  const documentEvents = new Map();
+  const motionPreference = {
+    matches: !!options.reducedMotion,
+    addEventListener(event, callback) { if (event === 'change') this.onchange = callback; }
+  };
+  const canvasContext = { setTransform() {}, fillRect() { paintCalls++; }, fillStyle: '' };
   class Element {
     constructor(tag = 'div') {
       this.tag = tag;
@@ -32,11 +40,15 @@ function boot(values = {}) {
     }
     scrollIntoView() {}
     focus() {}
+    setAttribute(name, value) { (this.attributes ||= {})[name] = value; }
+    getAttribute(name) { return this.attributes?.[name] ?? null; }
     getContext() { return canvasContext; }
     click() { this.clicked = true; }
   }
   const document = {
     body: new Element('body'),
+    hidden: !!options.hidden,
+    addEventListener(event, callback) { documentEvents.set(event, callback); },
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, new Element(id));
       return elements.get(id);
@@ -44,8 +56,9 @@ function boot(values = {}) {
     createElement(tag) { return new Element(tag); }
   };
   const window = {
-    innerWidth: 72, innerHeight: 72, devicePixelRatio: 1,
+    innerWidth: 72, innerHeight: 72, devicePixelRatio: options.dpr || 1,
     addEventListener() {}, confirm() { return true },
+    matchMedia() { return motionPreference; },
     location: { reload() { window.reloaded = true; } }
   };
   const localStorage = {
@@ -59,12 +72,26 @@ function boot(values = {}) {
       createObjectURL(blob) { exports.push(blob); return 'blob:test-export'; },
       revokeObjectURL() {}
     },
-    requestAnimationFrame() {}, setInterval() {},
+    requestAnimationFrame(callback) { const id = nextFrame++; frames.set(id, callback); return id; },
+    cancelAnimationFrame(id) { frames.delete(id); }, setInterval() {},
     setTimeout(callback) { callback(); }
   });
   vm.runInContext(source, context);
   return {
     context, saved, elements, exports, window,
+    get pendingFrames() { return frames.size; },
+    get paintCalls() { return paintCalls; },
+    setHidden(hidden) { document.hidden = hidden; documentEvents.get('visibilitychange')(); },
+    setReducedMotion(reduced) {
+      motionPreference.matches = reduced;
+      motionPreference.onchange?.();
+    },
+    flushFrame(timestamp) {
+      const first = frames.entries().next().value;
+      if (!first) return;
+      frames.delete(first[0]);
+      first[1](timestamp);
+    },
     field: vm.runInContext('Field', context),
     input(value) {
       document.getElementById('input').value = value;
@@ -95,6 +122,55 @@ test('first input is evaluated against prior state, with an exact receipt', () =
   const response = app.elements.get('messages').children.find(el => el.innerHTML.includes('Reflection:'));
   assert.ok(response);
   assert.ok(!response.innerHTML.includes('Resonant echoes:'));
+});
+
+test('reduced motion keeps a static field while scoring and the pause control resumes it', () => {
+  const app = boot({}, {reducedMotion: true, dpr: 4});
+  const button = app.elements.get('motion-toggle');
+  assert.equal(app.elements.get('field').width, 144, 'canvas DPR is capped at two');
+  assert.equal(app.pendingFrames, 0);
+  assert.ok(app.paintCalls > 0, 'a static field is visible');
+  assert.equal(button.getAttribute('aria-checked'), 'false');
+  assert.equal(app.elements.get('motion-state').textContent, 'off');
+  app.input('remember');
+  assert.ok(app.field.coherence > 0.64, 'the simulation still scores input');
+  assert.equal(app.field.time, 0, 'a paused visual does no simulation steps');
+  assert.equal(app.pendingFrames, 0);
+
+  vm.runInContext('toggleVisualMotion()', app.context);
+  assert.equal(button.getAttribute('aria-checked'), 'true');
+  assert.equal(app.pendingFrames, 1);
+  app.flushFrame(0);
+  assert.equal(app.field.time, 1);
+  app.flushFrame(16);
+  assert.equal(app.field.time, 1, 'the active renderer caps work at 30 frames per second');
+  app.flushFrame(34);
+  assert.equal(app.field.time, 2);
+  app.setHidden(true);
+  assert.equal(app.pendingFrames, 0);
+  app.flushFrame(70);
+  assert.equal(app.field.time, 2);
+  app.setHidden(false);
+  app.flushFrame(100);
+  assert.equal(app.field.time, 3);
+  vm.runInContext('toggleVisualMotion()', app.context);
+  assert.equal(app.pendingFrames, 0);
+  app.setReducedMotion(false);
+  assert.equal(app.pendingFrames, 0, 'manual choice persists through a preference change');
+});
+
+test('system motion changes pause and resume an untouched animation control', () => {
+  const app = boot();
+  assert.equal(app.pendingFrames, 1);
+  const before = app.paintCalls;
+  app.setReducedMotion(true);
+  assert.equal(app.pendingFrames, 0);
+  assert.ok(app.paintCalls > before);
+  assert.equal(app.elements.get('motion-toggle').getAttribute('aria-checked'), 'false');
+  app.setReducedMotion(false);
+  assert.equal(app.pendingFrames, 1);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.saved.size, 0);
 });
 
 test('second identical input sees prior overlap and prior repetition', () => {
