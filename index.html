@@ -284,17 +284,19 @@
     .trajectory-scroll td:nth-child(n+3) { white-space: nowrap; }
     .ledger { margin: 0 1.5rem 0.5rem; padding: 0.7rem 1rem; background: rgba(3,7,18,0.94); border: 1px solid rgba(245,158,11,0.5); border-radius: 14px; pointer-events: auto; max-height: min(44vh, 480px); overflow-y: auto; }
     .ledger summary { cursor: pointer; color: #fcd34d; font-weight: 700; }
-    .ledger p { margin: 0.6rem 0; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
+    .ledger p { margin: 0.6rem 0; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; overflow-wrap: anywhere; }
     .ledger label { display: block; margin: 0.7rem 0 0.35rem; font-size: 0.82rem; font-weight: 700; }
-    .ledger input, .ledger textarea { display: block; width: 100%; background: #0b1530; color: #f8fafc; border: 1px solid #a16207; border-radius: 9px; padding: 0.65rem; font: 0.9rem/1.4 'Inter', sans-serif; }
+    .ledger input, .ledger textarea { display: block; width: 100%; min-height: 44px; background: #0b1530; color: #f8fafc; border: 1px solid #a16207; border-radius: 9px; padding: 0.65rem; font: 0.9rem/1.4 'Inter', sans-serif; }
     .ledger textarea { min-height: 65px; }
     .ledger-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.7rem 0; }
-    .ledger button { padding: 0.45rem 0.7rem; color: #fef3c7; background: #3b2509; border: 1px solid #fbbf24; border-radius: 8px; cursor: pointer; }
+    .ledger button { min-height: 44px; padding: 0.45rem 0.7rem; color: #fef3c7; background: #3b2509; border: 1px solid #fbbf24; border-radius: 8px; cursor: pointer; }
     .ledger button:disabled { opacity: 0.45; cursor: not-allowed; }
     .ledger button:focus-visible, .ledger summary:focus-visible, .ledger input:focus-visible, .ledger textarea:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
     .ledger-entry { padding: 0.65rem; margin-top: 0.5rem; border: 1px solid rgba(245,158,11,0.28); border-radius: 8px; overflow-wrap: anywhere; font-size: 0.82rem; }
     .ledger-entry strong, .ledger-entry small { display: block; }
     .ledger-entry small { color: #cbd5e1; margin-top: 0.3rem; }
+    .evidence-question { margin: 0.75rem 0 1rem; padding: 0.8rem; border: 1px solid rgba(34,211,238,0.4); border-radius: 10px; background: rgba(8,20,43,0.8); }
+    .evidence-question h2 { font-size: 0.95rem; color: #a5f3fc; }
     @media (max-width: 580px) { .comparison-grid { grid-template-columns: 1fr; } }
 
     @media (prefers-reduced-motion: reduce) {
@@ -364,7 +366,14 @@
 
   <details class="ledger" id="ledger">
     <summary>Evidence memory · <span id="ledger-count">0 records</span></summary>
-    <p>Record a fact under a named key, then recall it by that key. This is a separate, local ledger. It does not interpret the freeform conversation or verify your assertion against the world.</p>
+    <p>Record a fact under a name, then recall it with a source. Questions use two narrow templates and exact stored names; this ledger does not interpret the freeform conversation or verify assertions against the world.</p>
+    <section class="evidence-question">
+      <h2>Ask what is recorded</h2>
+      <label for="fact-question">Question</label>
+      <input id="fact-question" maxlength="200" autocomplete="off" placeholder="What is my favorite color?">
+      <div class="ledger-actions"><button type="button" onclick="askEvidence()">Ask with sources</button></div>
+      <p id="fact-answer" role="status" aria-live="polite">Ask about a named fact, or record one below.</p>
+    </section>
     <label for="fact-key">Fact name</label>
     <input id="fact-key" maxlength="120" autocomplete="off" placeholder="favorite color">
     <label for="fact-value">What should be remembered?</label>
@@ -936,6 +945,41 @@ function lookupFact(key, claims = Field.claims) {
     sources: active.map(claim => claim.id) };
 }
 
+function resolveEvidenceQuestion(question, claims = Field.claims) {
+  if (typeof question !== "string" || !question.trim()) return {kind: "empty"};
+  if (question.length > 200) return {kind: "unsupported"};
+  const match = /^what(?:\s+is|['’]s)\s+(.+?)(?:\s*\?)?$/i.exec(question.normalize("NFKC").trim());
+  if (!match) return {kind: "unsupported"};
+  const name = match[1].trim();
+  const candidates = [name];
+  const possessive = /^my\s+(.+)$/i.exec(name);
+  if (possessive) candidates.push(possessive[1]);
+  const keys = [...new Set(candidates.map(normalizeFactKey))];
+  const present = keys.filter(key => claims.some(claim => normalizeFactKey(claim.key) === key));
+  if (present.length > 1) return {kind: "ambiguous", names: present.map(key =>
+    claims.find(claim => normalizeFactKey(claim.key) === key).key)};
+  if (!present.length) return {kind: "missing"};
+  const key = present[0];
+  const recordName = claims.find(claim => normalizeFactKey(claim.key) === key).key;
+  return {name: recordName, ...lookupFact(key, claims)};
+}
+
+function askEvidence() {
+  const result = resolveEvidenceQuestion(document.getElementById("fact-question").value);
+  const output = document.getElementById("fact-answer");
+  if (result.kind === "empty") output.textContent = "Enter a question first.";
+  else if (result.kind === "unsupported") output.textContent = "Use ‘What is [fact name]?’ or ‘What is my [fact name]?’ No answer given.";
+  else if (result.kind === "missing") output.textContent = "No exact recorded name matches this question. No answer given.";
+  else if (result.kind === "ambiguous") output.textContent = `This question matches multiple recorded names: ${result.names.map(name => `“${name}”`).join(", ")}. No answer given. Use Recall by name below for an exact choice.`;
+  else if (result.kind === "historical") output.textContent = `Only superseded records exist for “${result.name}”. No answer given. Select a source explicitly.`;
+  else if (result.kind === "conflict") output.textContent = `Conflicting current records for “${result.name}” (${result.records.map(claim => `#${claim.id}`).join(", ")}). No answer given. Select a source explicitly.`;
+  else output.textContent = `Recorded answer for “${result.name}”: ${result.value}. Source ${result.sources.map(id => `#${id}`).join(", ")}. This is a user assertion, not an independently verified fact.`;
+}
+
+function invalidateEvidenceAnswer() {
+  document.getElementById("fact-answer").textContent = "The ledger changed. Ask again for a current sourced answer.";
+}
+
 function describeFact(key) {
   const result = lookupFact(key);
   if (result.kind === "empty") return "Enter a fact name first.";
@@ -1074,6 +1118,7 @@ function applyFactImport() {
   Field.claims = plan.merged;
   Field.claimCounter = plan.nextCounter;
   Field.save();
+  invalidateEvidenceAnswer();
   pendingFactImport = null;
   ++factImportRequest;
   document.getElementById("fact-import").value = "";
@@ -1107,6 +1152,7 @@ function rememberFact() {
   Field.claims.push({ id, key, value, time: now(), status: "active", imported: false });
   Field.claimCounter = id + 1;
   Field.save();
+  invalidateEvidenceAnswer();
   valueInput.value = "";
   renderLedger();
   showFactResult(key, `Recorded source #${id}. `);
@@ -1125,6 +1171,7 @@ function selectFact(id) {
     if (normalizeFactKey(claim.key) === key) claim.status = claim.id === id ? "active" : "superseded";
   });
   Field.save();
+  invalidateEvidenceAnswer();
   document.getElementById("fact-key").value = selected.key;
   renderLedger();
   showFactResult(selected.key, `Selected source #${id}. `);
@@ -1136,6 +1183,7 @@ function deleteFact(id) {
   invalidateFactImport();
   Field.claims = Field.claims.filter(entry => entry.id !== id);
   Field.save();
+  invalidateEvidenceAnswer();
   document.getElementById("fact-key").value = claim.key;
   renderLedger();
   showFactResult(claim.key, `Deleted source #${id}. `);
