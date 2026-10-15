@@ -5,6 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { verifyProof, loadEvaluator } = require('../tools/verify-proof.cjs');
 const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
+const { verifyMemoryChallenge } = require('../tools/verify-memory-challenge.cjs');
 const { verifyEvidenceReceipt } = require('../tools/verify-evidence-receipt.cjs');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -387,6 +388,45 @@ test('trajectory limits invalid sequences and verifies the public synthetic fixt
   const result = verifyTrajectory(fixture);
   assert.equal(result.steps, 5);
   assert.ok(Math.abs(result.difference - 0.034986718779233206) < 1e-12);
+});
+
+test('three-control challenge shows positive, zero, and negative effects without changing saved state', async () => {
+  const app = boot();
+  app.input('My private local memory');
+  app.fact('private fact', 'private value');
+  const before = JSON.stringify([...app.saved]);
+  vm.runInContext('runMemoryChallenge()', app.context);
+  assert.match(app.elements.get('challenge-result').children[0].textContent, /3\/3 controls/);
+  assert.equal(app.elements.get('challenge-download').disabled, false);
+  const rows = app.elements.get('challenge-result').children[1].children[0].children[1].children;
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map(row => row.children[5].textContent), ['Expected', 'Expected', 'Expected']);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  vm.runInContext('downloadMemoryChallenge()', app.context);
+  const report = JSON.parse(await app.exports[0].text());
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-memory-challenge.json'), 'utf8'));
+  assert.deepEqual(report, fixture);
+  const results = verifyMemoryChallenge(report);
+  assert.deepEqual(results.map(row => row.direction), ['positive', 'zero', 'negative']);
+  assert.equal(JSON.stringify(report).includes('private value'), false);
+  assert.equal(JSON.stringify(report).includes('My private local memory'), false);
+});
+
+test('challenge verifier rejects altered outputs, missing controls, relabeling, and swapped inputs', () => {
+  const report = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-memory-challenge.json'), 'utf8'));
+  assert.equal(verifyMemoryChallenge(report).length, 3);
+  const altered = structuredClone(report);
+  altered.scenarios[0].trajectory.steps[1].actual.after += 0.01;
+  assert.throws(() => verifyMemoryChallenge(altered), /step 2 with history\.after/);
+  const missing = structuredClone(report);
+  missing.scenarios.pop();
+  assert.throws(() => verifyMemoryChallenge(missing), /exactly three/);
+  const relabeled = structuredClone(report);
+  relabeled.scenarios[2].expected_direction = 'positive';
+  assert.throws(() => verifyMemoryChallenge(relabeled), /fixed contradiction sequence/);
+  const changed = structuredClone(report);
+  changed.scenarios[1].trajectory.inputs = ['violet river', 'violet river'];
+  assert.throws(() => verifyMemoryChallenge(changed), /fixed unrelated sequence/);
 });
 
 test('exact-key evidence recall cites user sources and survives reload without changing freeform memory', () => {

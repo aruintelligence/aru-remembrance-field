@@ -1,0 +1,541 @@
+{
+  "format": "aru-memory-challenge",
+  "version": 1,
+  "model_revision": "aru-field-heuristics-2",
+  "scenarios": [
+    {
+      "id": "repeated",
+      "label": "Repeated phrase",
+      "expected_direction": "positive",
+      "trajectory": {
+        "schema_version": 1,
+        "model_revision": "aru-field-heuristics-2",
+        "scope": "synthetic full-sequence scripted score; not an authenticated record",
+        "start_mu": 0.64,
+        "start_at": 1700000000000,
+        "step_ms": 1000,
+        "inputs": [
+          "violet river",
+          "violet river"
+        ],
+        "steps": [
+          {
+            "input": "violet river",
+            "at": 1700000000000,
+            "actual": {
+              "before": 0.64,
+              "delta": -0.01376,
+              "after": 0.62624,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01376
+                }
+              ],
+              "clamped": false
+            },
+            "control": {
+              "before": 0.64,
+              "delta": -0.01376,
+              "after": 0.62624,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01376
+                }
+              ],
+              "clamped": false
+            },
+            "effect": 0
+          },
+          {
+            "input": "violet river",
+            "at": 1700000001000,
+            "actual": {
+              "before": 0.62624,
+              "delta": 0.05313726396201072,
+              "after": 0.6793772639620107,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0.09677342396201072
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": -0.03
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01363616
+                }
+              ],
+              "clamped": false
+            },
+            "control": {
+              "before": 0.62624,
+              "delta": -0.01363616,
+              "after": 0.61260384,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01363616
+                }
+              ],
+              "clamped": false
+            },
+            "effect": 0.06677342396201069
+          }
+        ],
+        "final": {
+          "with_history": 0.6793772639620107,
+          "without_history": 0.61260384,
+          "difference": 0.06677342396201069
+        }
+      }
+    },
+    {
+      "id": "unrelated",
+      "label": "Unrelated phrases",
+      "expected_direction": "zero",
+      "trajectory": {
+        "schema_version": 1,
+        "model_revision": "aru-field-heuristics-2",
+        "scope": "synthetic full-sequence scripted score; not an authenticated record",
+        "start_mu": 0.64,
+        "start_at": 1700000000000,
+        "step_ms": 1000,
+        "inputs": [
+          "amber comet",
+          "violet river"
+        ],
+        "steps": [
+          {
+            "input": "amber comet",
+            "at": 1700000000000,
+            "actual": {
+              "before": 0.64,
+              "delta": -0.01376,
+              "after": 0.62624,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01376
+                }
+              ],
+              "clamped": false
+            },
+            "control": {
+              "before": 0.64,
+              "delta": -0.01376,
+              "after": 0.62624,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01376
+                }
+              ],
+              "clamped": false
+            },
+            "effect": 0
+          },
+          {
+            "input": "violet river",
+            "at": 1700000001000,
+            "actual": {
+              "before": 0.62624,
+              "delta": -0.01363616,
+              "after": 0.61260384,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01363616
+                }
+              ],
+              "clamped": false
+            },
+            "control": {
+              "before": 0.62624,
+              "delta": -0.01363616,
+              "after": 0.61260384,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01363616
+                }
+              ],
+              "clamped": false
+            },
+            "effect": 0
+          }
+        ],
+        "final": {
+          "with_history": 0.61260384,
+          "without_history": 0.61260384,
+          "difference": 0
+        }
+      }
+    },
+    {
+      "id": "contradiction",
+      "label": "Contradictory words",
+      "expected_direction": "negative",
+      "trajectory": {
+        "schema_version": 1,
+        "model_revision": "aru-field-heuristics-2",
+        "scope": "synthetic full-sequence scripted score; not an authenticated record",
+        "start_mu": 0.64,
+        "start_at": 1700000000000,
+        "step_ms": 1000,
+        "inputs": [
+          "always",
+          "never"
+        ],
+        "steps": [
+          {
+            "input": "always",
+            "at": 1700000000000,
+            "actual": {
+              "before": 0.64,
+              "delta": -0.02876,
+              "after": 0.61124,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": -0.015
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01376
+                }
+              ],
+              "clamped": false
+            },
+            "control": {
+              "before": 0.64,
+              "delta": -0.02876,
+              "after": 0.61124,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": -0.015
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01376
+                }
+              ],
+              "clamped": false
+            },
+            "effect": 0
+          },
+          {
+            "input": "never",
+            "at": 1700000001000,
+            "actual": {
+              "before": 0.61124,
+              "delta": -0.058501159999999996,
+              "after": 0.55273884,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": -0.015
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": -0.03
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01350116
+                }
+              ],
+              "clamped": false
+            },
+            "control": {
+              "before": 0.61124,
+              "delta": -0.028501159999999998,
+              "after": 0.58273884,
+              "terms": [
+                {
+                  "label": "Matched word rules",
+                  "value": 0
+                },
+                {
+                  "label": "Length rule",
+                  "value": 0
+                },
+                {
+                  "label": "Intent rule",
+                  "value": -0.015
+                },
+                {
+                  "label": "Prior memory overlap",
+                  "value": 0
+                },
+                {
+                  "label": "Contradiction rule",
+                  "value": 0
+                },
+                {
+                  "label": "Prior repetition rule",
+                  "value": 0
+                },
+                {
+                  "label": "Baseline drift",
+                  "value": -0.01350116
+                }
+              ],
+              "clamped": false
+            },
+            "effect": -0.030000000000000027
+          }
+        ],
+        "final": {
+          "with_history": 0.55273884,
+          "without_history": 0.58273884,
+          "difference": -0.030000000000000027
+        }
+      }
+    }
+  ]
+}

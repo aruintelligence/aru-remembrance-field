@@ -30,6 +30,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - An in-app receipt for each modeled score change and a local JSON export
 - A memory ablation lab that previews the same draft with and without prior history
 - A full-sequence challenge that evolves separate with-history and no-history scores from a clean baseline
+- A one-click three-control challenge with positive, neutral, and negative memory effects and a verifiable report
 - A portable one-step proof capsule that can be recomputed from a local checkout
 - A separate evidence ledger for exact-name fact recall, source IDs, conflicts, explicit resolution, and shareable cited-answer excerpts
 
@@ -76,6 +77,14 @@ For an independent code-level check of the v2 score, run `python3 tools/differen
 Open **Full-sequence memory challenge** inside the inspector. Enter 2–24 lines, one input per line, and select **Run sequence**. Two independent scores start at μ = `0.6400`: one branch stores each earlier input as memory and a user message, while the control clears both histories at every step. The same fixed one-second clock and input order are used in both branches. The table shows both scores and their difference after each step. This is a fresh synthetic sequence, not a replay of your existing browser history, and it does not change the saved field, messages, or evidence ledger.
 
 For example, `violet river` on two lines ends at `0.67938` with history and `0.61260` without it. `amber comet` followed by `violet river` has zero difference; `always` followed by `never` has a `−0.03000` difference. These are deterministic results of the scripted rules. The [trajectory protocol](research/trajectory-protocol.md) gives the exact controls and limits.
+
+Select **Run three controls** in the same panel to run repeated, unrelated, and contradictory two-step sequences together. The table labels the observed result for each; the three cases should have positive, zero, and negative history effects respectively. It leaves your saved score, text, and ledger alone. **Download challenge report JSON** records all terms and outcomes. To replay its fixed inputs and verify each score from a local checkout:
+
+```bash
+node tools/verify-memory-challenge.cjs /path/to/aru-memory-challenge.json
+```
+
+Try the public [synthetic challenge report](research/example-memory-challenge.json) with that command. The verifier also rejects a missing or relabeled control, changed inputs, altered scores, or the wrong direction. These hand-picked controls demonstrate specific behaviors of the scripted rules. They do not measure real-world memory, consciousness, or usefulness.
 
 Select **Download trajectory proof JSON**, then check the receipt from a local checkout:
 
@@ -142,7 +151,7 @@ node tests/benchmark.test.cjs
 node tests/falsifier.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, full question receipts, privacy-scoped answer excerpts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
+These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls, the three-control challenge and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, full question receipts, privacy-scoped answer excerpts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
 
 ## Research question
 

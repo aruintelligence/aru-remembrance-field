@@ -366,6 +366,13 @@
         <button type="button" id="trajectory-download" onclick="downloadTrajectory()" disabled>Download trajectory proof JSON</button>
       </div>
       <div id="trajectory-result" role="status" aria-live="polite"></div>
+      <h3>Three-control memory challenge</h3>
+      <p>Run the same scripted model from a fresh start for repeated, unrelated, and contradictory phrases. These fixed controls probe positive, zero, and negative history effects. Your saved field stays untouched.</p>
+      <div class="inspector-actions">
+        <button type="button" onclick="runMemoryChallenge()">Run three controls</button>
+        <button type="button" id="challenge-download" onclick="downloadMemoryChallenge()" disabled>Download challenge report JSON</button>
+      </div>
+      <div id="challenge-result" role="status" aria-live="polite"></div>
     </section>
     <p id="proof-status">Submit an input to create a portable proof of its score change.</p>
     <div class="inspector-actions">
@@ -1426,6 +1433,73 @@ function runTrajectoryLab() {
 
 function downloadTrajectory() {
   if (lastTrajectory) downloadJSON(lastTrajectory, "aru-remembrance-trajectory-proof.json");
+}
+
+const MEMORY_CHALLENGE_CASES = [
+  {id: "repeated", label: "Repeated phrase", inputs: ["violet river", "violet river"], direction: "positive"},
+  {id: "unrelated", label: "Unrelated phrases", inputs: ["amber comet", "violet river"], direction: "zero"},
+  {id: "contradiction", label: "Contradictory words", inputs: ["always", "never"], direction: "negative"}
+];
+let lastMemoryChallenge = null;
+
+function challengeDirection(value) {
+  return Math.abs(value) < 1e-10 ? "zero" : value > 0 ? "positive" : "negative";
+}
+
+function runMemoryChallenge() {
+  const output = document.getElementById("challenge-result");
+  output.replaceChildren();
+  document.getElementById("challenge-download").disabled = true;
+  const scenarios = MEMORY_CHALLENGE_CASES.map(({id, label, inputs, direction}) => {
+    const result = runTrajectory(inputs, 0.64, 1700000000000, 1000);
+    return {id, label, expected_direction: direction, trajectory: {
+      schema_version: 1, model_revision: PROOF_MODEL_REVISION,
+      scope: "synthetic full-sequence scripted score; not an authenticated record",
+      start_mu: 0.64, start_at: 1700000000000, step_ms: 1000,
+      inputs: [...inputs], steps: result.steps, final: result.final
+    }};
+  });
+  lastMemoryChallenge = {format: "aru-memory-challenge", version: 1,
+    model_revision: PROOF_MODEL_REVISION, scenarios};
+  const passed = scenarios.filter(row => challengeDirection(row.trajectory.final.difference) === row.expected_direction).length;
+  const summary = document.createElement("p");
+  summary.textContent = `${passed}/3 controls show their expected direction under the current scripted rules. Each starts at μ = 0.6400 with a fixed one-second clock. This checks software behavior, not real-world memory or consciousness.`;
+  output.appendChild(summary);
+  const scroll = document.createElement("div");
+  scroll.className = "trajectory-scroll";
+  const table = document.createElement("table");
+  const header = document.createElement("tr");
+  for (const label of ["Control", "Inputs", "With history", "Without", "Difference", "Result"]) {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    header.appendChild(cell);
+  }
+  const head = document.createElement("thead");
+  head.appendChild(header);
+  table.appendChild(head);
+  const body = document.createElement("tbody");
+  for (const row of scenarios) {
+    const tr = document.createElement("tr");
+    const result = row.trajectory.final;
+    const observed = challengeDirection(result.difference);
+    for (const value of [row.label, row.trajectory.inputs.join(" → "),
+      result.with_history.toFixed(5), result.without_history.toFixed(5),
+      `${result.difference >= 0 ? "+" : ""}${result.difference.toFixed(5)}`,
+      observed === row.expected_direction ? "Expected" : `Unexpected: ${observed}`]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      tr.appendChild(cell);
+    }
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  scroll.appendChild(table);
+  output.appendChild(scroll);
+  document.getElementById("challenge-download").disabled = false;
+}
+
+function downloadMemoryChallenge() {
+  if (lastMemoryChallenge) downloadJSON(lastMemoryChallenge, "aru-memory-challenge.json");
 }
 
 function downloadJSON(payload, filename) {
