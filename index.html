@@ -377,6 +377,11 @@
       <button type="button" onclick="downloadState()">Download local state JSON</button>
       <button type="button" onclick="resetField()">Erase local state</button>
     </div>
+    <label for="state-import">Restore local state JSON from this device</label>
+    <input id="state-import" type="file" accept=".json,application/json" onchange="previewStateImport()">
+    <p>This replaces this browser's score, memory, messages, and evidence records after review. Download the current state first if you want to keep it. Prior proof and last-change displays are cleared on restore.</p>
+    <div id="state-import-preview" role="status" aria-live="polite"></div>
+    <button id="state-import-apply" type="button" disabled onclick="applyStateImport()">Replace with reviewed state</button>
   </details>
 
   <details class="ledger" id="ledger">
@@ -1445,8 +1450,8 @@ function eraseProof() {
   renderInspector();
 }
 
-function downloadState() {
-  downloadJSON({
+function stateSnapshot() {
+  return {
     schema_version: 1, exported_at: new Date().toISOString(),
     scope: "browser-local symbolic simulation",
     coherence: Field.coherence, memory: Field.memory, messages: Field.messages,
@@ -1454,7 +1459,147 @@ function downloadState() {
     last_ignition: Field.lastIgnition, last_transition: Field.lastTransition,
     last_proof: Field.lastProof,
     fact_claims: Field.claims, next_fact_id: Field.claimCounter
-  }, "aru-remembrance-field-state.json");
+  };
+}
+
+function downloadState() {
+  downloadJSON(stateSnapshot(), "aru-remembrance-field-state.json");
+}
+
+function stateBaseline() {
+  const {exported_at, ...state} = stateSnapshot();
+  return JSON.stringify(state);
+}
+
+let pendingStateImport = null;
+let stateImportRequest = 0;
+const STATE_IMPORT_LIMIT = 4 * 1024 * 1024;
+
+function validStateTime(value) {
+  return Number.isFinite(value) && value >= 0 && value <= 8.64e15;
+}
+
+function planStateImport(text) {
+  if (typeof text !== "string" || text.length > STATE_IMPORT_LIMIT) throw new Error("State file exceeds the 4 MiB limit.");
+  let bundle;
+  try { bundle = JSON.parse(text); } catch (_) { throw new Error("State file is not valid JSON."); }
+  if (!bundle || Array.isArray(bundle) || bundle.schema_version !== 1 ||
+      bundle.scope !== "browser-local symbolic simulation" ||
+      !Array.isArray(bundle.memory) || !Array.isArray(bundle.messages) ||
+      !Array.isArray(bundle.fact_claims)) {
+    throw new Error("Choose a version 1 full state export, not an evidence-only file.");
+  }
+  if (bundle.memory.length > 100 || bundle.messages.length > 160 || bundle.fact_claims.length > 100) {
+    throw new Error("State file exceeds the memory, message, or evidence record limit.");
+  }
+  if (!Number.isFinite(bundle.coherence) || bundle.coherence < 0.35 || bundle.coherence > 0.995 ||
+      !Number.isSafeInteger(bundle.ignitions) || bundle.ignitions < 0 ||
+      !validStateTime(bundle.last_auto) || !validStateTime(bundle.last_ignition) ||
+      !Number.isSafeInteger(bundle.next_fact_id) || bundle.next_fact_id < 1 || bundle.next_fact_id > 1e9 + 1) {
+    throw new Error("State file contains an invalid score, counter, or timestamp.");
+  }
+  const memory = bundle.memory.map(item => {
+    if (!item || typeof item.text !== "string" || item.text.length > 262144 ||
+        !Number.isFinite(item.weight) || item.weight < 0.15 || item.weight > 6 ||
+        !validStateTime(item.time) || !Number.isSafeInteger(item.count) || item.count < 1) {
+      throw new Error("State file contains an invalid memory entry.");
+    }
+    // Derived fields are rebuilt under the current word rules, never trusted from a file.
+    return {text: item.text, cleaned: cleanText(item.text), tokens: tokenize(item.text),
+      weight: item.weight, time: item.time, count: item.count};
+  });
+  const messages = bundle.messages.map(item => {
+    if (!item || (item.type !== "user" && item.type !== "field") ||
+        typeof item.text !== "string" || item.text.length > 262144 ||
+        (item.time !== undefined && !validStateTime(item.time))) {
+      throw new Error("State file contains an invalid message.");
+    }
+    return {type: item.type, text: item.text, time: item.time ?? 0};
+  });
+  const seen = new Set();
+  const claims = bundle.fact_claims.map(item => {
+    if (!validFactClaim(item) || seen.has(item.id)) {
+      throw new Error("State file contains an invalid or duplicate evidence record.");
+    }
+    seen.add(item.id);
+    return {id: item.id, key: item.key.trim().replace(/\s+/g, " "), value: item.value.trim(),
+      time: item.time, status: item.status, imported: item.imported === true};
+  });
+  if (claims.some(item => item.id >= bundle.next_fact_id)) {
+    throw new Error("State file's next source number must be greater than every existing source.");
+  }
+  return {
+    baseline: stateBaseline(),
+    state: {coherence: bundle.coherence, memory, messages, ignitions: bundle.ignitions,
+      lastAuto: bundle.last_auto, lastIgnition: bundle.last_ignition,
+      claims, claimCounter: bundle.next_fact_id}
+  };
+}
+
+async function previewStateImport() {
+  const input = document.getElementById("state-import");
+  const output = document.getElementById("state-import-preview");
+  const apply = document.getElementById("state-import-apply");
+  const request = ++stateImportRequest;
+  pendingStateImport = null;
+  apply.disabled = true;
+  const file = input.files && input.files[0];
+  if (!file) { output.textContent = "Choose a full state JSON file to preview."; return; }
+  if (file.size > STATE_IMPORT_LIMIT) { output.textContent = "State file exceeds the 4 MiB limit."; return; }
+  try {
+    const text = await file.text();
+    if (request !== stateImportRequest) return;
+    const plan = planStateImport(text);
+    pendingStateImport = plan;
+    const state = plan.state;
+    output.textContent = `Current: μ ${Field.coherence.toFixed(4)}, ${Field.memory.length} memories, ${Field.messages.length} messages, ${Field.claims.length} evidence records. Incoming: μ ${state.coherence.toFixed(4)}, ${state.memory.length} memories, ${state.messages.length} messages, ${state.claims.length} evidence records. Applying will replace all four and clear old last-change and proof copies.`;
+    apply.disabled = false;
+  } catch (error) {
+    if (request === stateImportRequest) output.textContent = error.message || "Could not read the state file.";
+  }
+}
+
+function applyStateImport() {
+  const plan = pendingStateImport;
+  if (!plan) return;
+  const output = document.getElementById("state-import-preview");
+  if (Field.busy || stateBaseline() !== plan.baseline) {
+    pendingStateImport = null;
+    document.getElementById("state-import-apply").disabled = true;
+    output.textContent = "Local state changed. Choose the file again to review a fresh preview.";
+    return;
+  }
+  if (!window.confirm("Replace this browser's score, memories, messages, and evidence records with the reviewed file? Download your current state first if you need it.")) return;
+  const state = plan.state;
+  const replacements = new Map([
+    [STORAGE_KEYS.coherence, state.coherence], [STORAGE_KEYS.memory, state.memory],
+    [STORAGE_KEYS.messages, state.messages], [STORAGE_KEYS.ignitions, state.ignitions],
+    [STORAGE_KEYS.lastAuto, state.lastAuto], [STORAGE_KEYS.lastIgnition, state.lastIgnition],
+    [STORAGE_KEYS.claims, state.claims], [STORAGE_KEYS.claimCounter, state.claimCounter]
+  ]);
+  const keys = Object.values(STORAGE_KEYS);
+  let previous;
+  try {
+    previous = new Map(keys.map(key => [key, localStorage.getItem(key)]));
+    for (const [key, value] of replacements) localStorage.setItem(key, JSON.stringify(value));
+    localStorage.removeItem(STORAGE_KEYS.lastTransition);
+    localStorage.removeItem(STORAGE_KEYS.lastProof);
+  } catch (_) {
+    if (previous) {
+      try {
+        keys.forEach(key => localStorage.removeItem(key));
+        for (const [key, value] of previous) if (value !== null) localStorage.setItem(key, value);
+      } catch (_) {
+        output.textContent = "Restore failed and browser storage could not be rolled back. Download the current state and inspect it before reloading.";
+        return;
+      }
+    }
+    output.textContent = "Restore failed; original local state was kept. Check available browser storage and try again.";
+    return;
+  }
+  pendingStateImport = null;
+  ++stateImportRequest;
+  window.location.reload();
 }
 
 function resetField() {
