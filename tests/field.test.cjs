@@ -68,7 +68,7 @@ function boot(values = {}, options = {}) {
     removeItem(key) { saved.delete(key); }
   };
   const context = vm.createContext({
-    document, window, localStorage, console, Blob,
+    document, window, localStorage, console, Blob, TextEncoder,
     URL: {
       createObjectURL(blob) { exports.push(blob); return 'blob:test-export'; },
       revokeObjectURL() {}
@@ -747,6 +747,101 @@ test('receipt verifier rejects duplicate records and altered source citations', 
   assert.equal(verifyEvidenceReceipt(excerpt).scope, 'cited-assertions-only');
   excerpt.scope = 'full-ledger';
   assert.throws(() => verifyEvidenceReceipt(excerpt), /unsupported excerpt scope/);
+});
+
+async function chooseReceiptFile(app, text, size = Buffer.byteLength(text)) {
+  const input = app.context.document.getElementById('receipt-file');
+  input.files = [{size, text: async () => text}];
+  await vm.runInContext('verifyEvidenceFile()', app.context);
+  return app.elements.get('receipt-verification').textContent;
+}
+
+test('browser checks shared full receipts and excerpts without importing or saving them', async () => {
+  const app = boot({unrelated_key: 'keep'});
+  app.fact('private local fact', 'do not overwrite');
+  const before = JSON.stringify([...app.saved]);
+  const local = JSON.stringify(app.field.claims);
+  for (const name of ['example-evidence-receipt.json', 'example-evidence-excerpt.json']) {
+    const raw = fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+    const result = await chooseReceiptFile(app, raw);
+    assert.match(result, /PASS: known; 1 supplied records; source IDs: #1/);
+    assert.match(result, /Question:.*Recorded answer:/);
+    assert.equal(verifyEvidenceReceipt(JSON.parse(raw)).kind, 'known');
+  }
+  const markup = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  markup.records[0].value = '<img src=x onerror=alert(1)>';
+  markup.answer.value = markup.records[0].value;
+  assert.match(await chooseReceiptFile(app, JSON.stringify(markup)), /Recorded answer: “<img src=x onerror=alert\(1\)>”/);
+  assert.equal(app.elements.get('receipt-verification').innerHTML, '');
+  assert.match(app.elements.get('receipt-verification').textContent, /scope: cited assertions only/);
+  assert.equal(JSON.stringify(app.field.claims), local);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.messages.length, 0);
+});
+
+test('browser verifies a conflict refusal from another ledger using the same result as the CLI', async () => {
+  const origin = boot();
+  origin.fact('favorite color', 'teal');
+  origin.fact('favorite color', 'amber');
+  origin.context.document.getElementById('fact-question').value = 'What is my favorite color?';
+  vm.runInContext('askEvidence()', origin.context);
+  vm.runInContext('downloadEvidenceReceipt()', origin.context);
+  const raw = await origin.exports[0].text();
+  const visitor = boot();
+  assert.equal(verifyEvidenceReceipt(JSON.parse(raw)).kind, 'conflict');
+  assert.match(await chooseReceiptFile(visitor, raw), /PASS: conflict; 2 supplied records; source IDs: #1, #2.*No answer \(conflict\)/);
+  assert.equal(visitor.field.claims.length, 0);
+  assert.equal(visitor.saved.size, 0);
+});
+
+test('browser and CLI verifiers agree across every labeled evidence challenge case', () => {
+  const challenge = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'evidence-challenge.json'), 'utf8'));
+  const app = boot();
+  const model = require('../tools/benchmark-evidence.cjs').loadModel();
+  for (const item of challenge.cases) {
+    const receipt = {format: 'aru-evidence-question-receipt', version: 1,
+      model_revision: 'aru-evidence-questions-1', question: item.question,
+      records: item.claims, answer: model.resolve(item.question, item.claims)};
+    assert.equal(receipt.answer.kind, item.expected.kind, item.id);
+    assert.equal(verifyEvidenceReceipt(receipt).kind, item.expected.kind, item.id);
+    app.context.receiptToCheck = receipt;
+    assert.equal(vm.runInContext('verifyEvidenceBundle(receiptToCheck).answer.kind', app.context), item.expected.kind, item.id);
+  }
+});
+
+test('browser verifier refuses altered citations, duplicate or extra excerpt sources, invalid JSON and oversized files', async () => {
+  const app = boot();
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  const altered = structuredClone(fixture);
+  altered.answer.sources = [999];
+  assert.match(await chooseReceiptFile(app, JSON.stringify(altered)), /FAIL:.*citations disagree/);
+  const wrongRevision = structuredClone(fixture);
+  wrongRevision.model_revision = 'future-model';
+  assert.match(await chooseReceiptFile(app, JSON.stringify(wrongRevision)), /FAIL: Unsupported format, model revision/);
+  const duplicate = structuredClone(fixture);
+  duplicate.records.push({...duplicate.records[0]});
+  assert.match(await chooseReceiptFile(app, JSON.stringify(duplicate)), /FAIL: Invalid or duplicate/);
+  const extra = structuredClone(fixture);
+  extra.records.push({...extra.records[0], id: 2, key: 'secret', value: 'unrelated'});
+  assert.match(await chooseReceiptFile(app, JSON.stringify(extra)), /FAIL: An excerpt/);
+  assert.match(await chooseReceiptFile(app, '{not json'), /FAIL: File is not valid JSON/);
+  assert.match(await chooseReceiptFile(app, '{}', 1024 * 1024 + 1), /FAIL: File exceeds the 1 MiB limit/);
+  assert.equal(app.elements.get('receipt-verification').innerHTML, '');
+  assert.equal(app.field.claims.length, 0);
+  assert.equal(app.saved.size, 0);
+});
+
+test('a slower receipt file cannot replace the result of a newer selection', async () => {
+  const app = boot();
+  const input = app.context.document.getElementById('receipt-file');
+  let finishFirst;
+  input.files = [{size: 2, text: () => new Promise(resolve => { finishFirst = resolve; })}];
+  const first = vm.runInContext('verifyEvidenceFile()', app.context);
+  assert.match(await chooseReceiptFile(app, '{}'), /FAIL: Unsupported format/);
+  finishFirst('{}');
+  await first;
+  assert.match(app.elements.get('receipt-verification').textContent, /FAIL: Unsupported format/);
 });
 
 test('question matching abstains on unsupported grammar and ambiguous stored names', () => {
