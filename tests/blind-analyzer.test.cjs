@@ -5,10 +5,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const {spawnSync} = require('node:child_process');
-const {analyzeTrialFiles, formatText} = require('../tools/analyze-blind-trials.cjs');
+const {analyzeTrialFiles, formatText, loadTrialPlan} = require('../tools/analyze-blind-trials.cjs');
+const {loadEvaluator} = require('../tools/verify-proof.cjs');
 
 const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial.json'), 'utf8'));
+const planFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8'));
 const cli = path.join(__dirname, '..', 'tools', 'analyze-blind-trials.cjs');
 
 function inTempDir(run) {
@@ -88,5 +91,111 @@ test('input limits reject empty batches, too many files, and oversized reports',
     const large = path.join(dir, 'large.json');
     fs.writeFileSync(large, Buffer.alloc(1024 * 1024 + 1, 32));
     assert.throws(() => analyzeTrialFiles([large]), /exceeds 1 MiB/);
+  });
+});
+
+test('a fixed plan checks every case count and preserves its exact-file fingerprint', () => {
+  inTempDir(({write}) => {
+    const planFile = write('plan.json', planFixture);
+    const rated = write('trial.json', fixture);
+    const result = analyzeTrialFiles([rated], {planFile});
+    assert.deepEqual(result.plan, {
+      sha256: loadTrialPlan(planFile).sha256, expected_trials: 1, cases: 1,
+      coverage: [{id: 'synthetic-example', expected: 1, received: 1,
+        history_wins: 0, control_wins: 0, ties: 1}]
+    });
+    assert.match(formatText(result), /Plan complete: 1\/1 rated slots across 1 case/);
+    assert.match(formatText(result), /synthetic-example: 1\/1; history 0, control 0, tie 1/);
+    const check = spawnSync(process.execPath, [cli, '--check-plan', planFile], {encoding: 'utf8'});
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, new RegExp(`Valid plan: 1 case, 1 expected rating\\. Plan SHA-256: ${result.plan.sha256}`));
+    const command = spawnSync(process.execPath, [cli, '--json', '--plan', planFile, rated], {encoding: 'utf8'});
+    assert.equal(command.status, 0, command.stderr);
+    assert.deepEqual(JSON.parse(command.stdout), result);
+    assert.doesNotMatch(command.stdout, /violet river/);
+
+    const reformatted = path.join(path.dirname(planFile), 'reformatted.json');
+    fs.writeFileSync(reformatted, JSON.stringify(planFixture, null, 2));
+    assert.notEqual(analyzeTrialFiles([rated], {planFile: reformatted}).plan.sha256, result.plan.sha256);
+  });
+});
+
+test('planned cases expose differing outcomes instead of hiding them in one aggregate', () => {
+  inTempDir(({write}) => {
+    const second = structuredClone(fixture);
+    second.context = ['always'];
+    second.prompt = 'never';
+    second.choice = 'B';
+    const model = loadEvaluator();
+    model.inputs = second.context;
+    model.finalPrompt = second.prompt;
+    second.conditions = JSON.parse(JSON.stringify(vm.runInContext(`(() => {
+      const startAt = 1700000000000;
+      let withMu = 0.64, withoutMu = 0.64, memory = [];
+      const messages = [];
+      inputs.forEach((input, index) => {
+        const at = startAt + index * 1000;
+        withMu = evaluateCoherence(input, {coherence: withMu, memory, messages}, at).after;
+        withoutMu = evaluateCoherence(input, {coherence: withoutMu, memory: [], messages: []}, at).after;
+        memory = advanceMemory(memory, input, withMu, at);
+        messages.push({type: 'user', text: input});
+      });
+      const at = startAt + inputs.length * 1000;
+      const withScore = evaluateCoherence(finalPrompt, {coherence: withMu, memory, messages}, at);
+      const withoutScore = evaluateCoherence(finalPrompt, {coherence: withoutMu, memory: [], messages: []}, at);
+      return {
+        with_history: {score: withScore, response_html: getResponse(finalPrompt, false, withScore.after, memory, at)},
+        without_history: {score: withoutScore, response_html: getResponse(finalPrompt, false, withoutScore.after, [], at)}
+      };
+    })()`, model, {timeout: 1000})));
+    const plan = structuredClone(planFixture);
+    plan.cases.push({id: 'contradiction', context: second.context, prompt: second.prompt, ratings: 1});
+    const result = analyzeTrialFiles([write('one.json', fixture), write('two.json', second)],
+      {planFile: write('plan.json', plan)});
+    assert.equal(result.summary.trials, 2);
+    assert.equal(result.summary.control_wins, 1);
+    assert.deepEqual(result.plan.coverage, [
+      {id: 'synthetic-example', expected: 1, received: 1, history_wins: 0, control_wins: 0, ties: 1},
+      {id: 'contradiction', expected: 1, received: 1, history_wins: 0, control_wins: 1, ties: 0}
+    ]);
+  });
+});
+
+test('a missing, extra, or unplanned report fails without a partial scorecard', () => {
+  inTempDir(({write}) => {
+    const rated = write('trial.json', fixture);
+    const extra = write('extra.json', fixture);
+    const twice = structuredClone(planFixture);
+    twice.cases[0].ratings = 2;
+    const twoFilePlan = write('two.json', twice);
+    assert.throws(() => analyzeTrialFiles([rated], {planFile: twoFilePlan}),
+      /Incomplete trial plan: synthetic-example 1\/2/);
+    assert.throws(() => analyzeTrialFiles([rated, extra], {planFile: write('one.json', planFixture)}),
+      /trial plan case synthetic-example exceeds 1 ratings/);
+
+    const different = structuredClone(planFixture);
+    different.cases[0].prompt = 'another prompt';
+    const differentPlan = write('different.json', different);
+    const cliResult = spawnSync(process.execPath, [cli, '--plan', differentPlan, rated], {encoding: 'utf8'});
+    assert.equal(cliResult.status, 2);
+    assert.equal(cliResult.stdout, '');
+    assert.match(cliResult.stderr, /context and prompt are not in the trial plan/);
+  });
+});
+
+test('a plan rejects duplicate cases, invalid outcomes, and excessive ratings', () => {
+  inTempDir(({write}) => {
+    const repeated = structuredClone(planFixture);
+    repeated.cases.push({...repeated.cases[0], id: 'second'});
+    assert.throws(() => loadTrialPlan(write('repeated.json', repeated)), /repeated context and prompt/);
+    const wrongOutcome = structuredClone(planFixture);
+    wrongOutcome.primary_outcome = 'non_ties_only';
+    assert.throws(() => loadTrialPlan(write('outcome.json', wrongOutcome)), /unsupported format, outcome/);
+    const excessive = structuredClone(planFixture);
+    excessive.cases[0].ratings = 101;
+    assert.throws(() => loadTrialPlan(write('too-many.json', excessive)), /invalid case/);
+    const missingArg = spawnSync(process.execPath, [cli, '--plan', '--json', 'trial.json'], {encoding: 'utf8'});
+    assert.equal(missingArg.status, 2);
+    assert.match(missingArg.stderr, /Use --plan once/);
   });
 });
