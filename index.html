@@ -274,6 +274,14 @@
     .comparison-card { padding: 0.65rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(3,7,18,0.9); min-width: 0; overflow-wrap: anywhere; }
     .comparison-card h3 { color: #a5f3fc; font-size: 0.83rem; margin-bottom: 0.45rem; }
     .comparison-card .preview { font-size: 0.78rem; line-height: 1.5; color: #e2e8f0; }
+    .trajectory-lab { margin: 0.9rem 0; padding: 0.8rem; border: 1px solid rgba(34,211,238,0.3); border-radius: 10px; }
+    .trajectory-lab h2 { color: #a5f3fc; font-size: 0.95rem; }
+    .trajectory-lab label { display: block; margin: 0.55rem 0 0.35rem; font-size: 0.82rem; }
+    .trajectory-lab textarea { display: block; width: 100%; min-height: 100px; }
+    .trajectory-scroll { overflow-x: auto; margin-top: 0.6rem; }
+    .trajectory-scroll table { width: 100%; border-collapse: collapse; font: 0.76rem/1.4 'JetBrains Mono', monospace; }
+    .trajectory-scroll th, .trajectory-scroll td { text-align: left; padding: 0.35rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+    .trajectory-scroll td:nth-child(n+3) { white-space: nowrap; }
     .ledger { margin: 0 1.5rem 0.5rem; padding: 0.7rem 1rem; background: rgba(3,7,18,0.94); border: 1px solid rgba(245,158,11,0.5); border-radius: 14px; pointer-events: auto; max-height: min(44vh, 480px); overflow-y: auto; }
     .ledger summary { cursor: pointer; color: #fcd34d; font-weight: 700; }
     .ledger p { margin: 0.6rem 0; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
@@ -331,6 +339,17 @@
     <p><strong>Memory ablation lab:</strong> compare a draft against the same model with earlier memory and messages withheld. Both start at the current μ. This isolates the next step only; it does not replay a history without memory.</p>
     <button type="button" onclick="compareDraft()">Compare draft without saving</button>
     <div id="draft-comparison" role="status" aria-live="polite"></div>
+    <section class="trajectory-lab">
+      <h2>Full-sequence memory challenge</h2>
+      <p>Enter one input per line. Both branches start at μ = 0.6400; the control discards prior memory and messages at every step. A fixed one-second clock makes the result reproducible. This experiment does not change saved state.</p>
+      <label for="trajectory-input">Sequence (2–24 inputs, up to 500 characters each)</label>
+      <textarea id="trajectory-input" rows="4" maxlength="13000" placeholder="violet river&#10;violet river" oninput="clearTrajectoryResult()"></textarea>
+      <div class="inspector-actions">
+        <button type="button" onclick="runTrajectoryLab()">Run sequence</button>
+        <button type="button" id="trajectory-download" onclick="downloadTrajectory()" disabled>Download trajectory proof JSON</button>
+      </div>
+      <div id="trajectory-result" role="status" aria-live="polite"></div>
+    </section>
     <p id="proof-status">Submit an input to create a portable proof of its score change.</p>
     <div class="inspector-actions">
       <button type="button" id="proof-download" onclick="downloadProof()">Download last proof JSON</button>
@@ -531,45 +550,8 @@ function similarity(a, b) {
 
 const MemoryEngine = {
   add(input) {
-    const tokens = tokenize(input);
-    const cleaned = input.toLowerCase().replace(/[^\w\s]/g, "").trim();
-
-    let best = null;
-    let bestScore = 0;
-
-    for (const m of Field.memory.slice(-24)) {
-      const score = similarity(tokens, m.tokens || []) + ((m.cleaned === cleaned) ? 0.6 : 0);
-      if (score > bestScore) { bestScore = score; best = m; }
-    }
-
-    if (best && bestScore >= 0.8) {
-      best.text = input;
-      best.tokens = tokens;
-      best.cleaned = cleaned;
-      best.time = now();
-      best.weight = clamp((best.weight || 1) + 0.22, 0.2, 6);
-      best.count = (best.count || 1) + 1;
-    } else {
-      Field.memory.push({
-        text: input,
-        cleaned,
-        tokens,
-        weight: 1 + Field.coherence * 1.5,
-        time: now(),
-        count: 1
-      });
-    }
-
-    this.decay();
-    if (Field.memory.length > 100) Field.memory = Field.memory.slice(-100);
+    Field.memory = advanceMemory(Field.memory, input, Field.coherence, now());
     Field.save();
-  },
-
-  decay() {
-    Field.memory.forEach(m => {
-      const freshness = ageFactor(m.time);
-      m.weight = clamp((m.weight || 1) * (0.992 + freshness * 0.006), 0.15, 6);
-    });
   },
 
   recent(n = 4, memory = Field.memory) { return memory.slice(-n); },
@@ -601,6 +583,32 @@ const MemoryEngine = {
       .slice(0, limit);
   }
 };
+
+function advanceMemory(memory, input, coherence, at) {
+  const next = memory.map(m => ({...m, tokens: [...(m.tokens || [])]}));
+  const tokens = tokenize(input);
+  const cleaned = input.toLowerCase().replace(/[^\w\s]/g, "").trim();
+  let best = null;
+  let bestScore = 0;
+  for (const m of next.slice(-24)) {
+    const score = similarity(tokens, m.tokens) + (m.cleaned === cleaned ? 0.6 : 0);
+    if (score > bestScore) { bestScore = score; best = m; }
+  }
+  if (best && bestScore >= 0.8) {
+    best.text = input;
+    best.tokens = tokens;
+    best.cleaned = cleaned;
+    best.time = at;
+    best.weight = clamp((best.weight || 1) + 0.22, 0.2, 6);
+    best.count = (best.count || 1) + 1;
+  } else {
+    next.push({text: input, cleaned, tokens, weight: 1 + coherence * 1.5, time: at, count: 1});
+  }
+  next.forEach(m => {
+    m.weight = clamp((m.weight || 1) * (0.992 + ageFactor(m.time, at) * 0.006), 0.15, 6);
+  });
+  return next.slice(-100);
+}
 
 function detectIntent(input) {
   const lower = input.toLowerCase().trim();
@@ -671,6 +679,26 @@ function compareInput(input, at = now()) {
   const actual = evaluateCoherence(input, state, at);
   const control = evaluateCoherence(input, { coherence: state.coherence, memory: [], messages: [] }, at);
   return { actual, control, effect: actual.after - control.after, at };
+}
+
+function runTrajectory(inputs, startMu = 0.64, startAt = 1700000000000, stepMs = 1000) {
+  let withHistory = startMu;
+  let withoutHistory = startMu;
+  let memory = [];
+  const messages = [];
+  const steps = [];
+  inputs.forEach((input, index) => {
+    const at = startAt + index * stepMs;
+    const actual = evaluateCoherence(input, {coherence: withHistory, memory, messages}, at);
+    const control = evaluateCoherence(input, {coherence: withoutHistory, memory: [], messages: []}, at);
+    withHistory = actual.after;
+    withoutHistory = control.after;
+    steps.push({input, at, actual, control, effect: withHistory - withoutHistory});
+    memory = advanceMemory(memory, input, withHistory, at);
+    messages.push({type: "user", text: input});
+  });
+  return {steps, final: {with_history: withHistory, without_history: withoutHistory,
+    difference: withHistory - withoutHistory}};
 }
 
 function updateCoherence(input) {
@@ -1148,6 +1176,74 @@ function compareDraft() {
   }
   panel.appendChild(grid);
   output.appendChild(panel);
+}
+
+let lastTrajectory = null;
+
+function clearTrajectoryResult() {
+  lastTrajectory = null;
+  document.getElementById("trajectory-download").disabled = true;
+  document.getElementById("trajectory-result").replaceChildren();
+}
+
+function parseTrajectoryInputs(text) {
+  if (text.length > 13000) throw new Error("Sequence is too long.");
+  const inputs = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (inputs.length < 2 || inputs.length > 24 || inputs.some(line => line.length > 500)) {
+    throw new Error("Enter 2–24 nonempty lines of up to 500 characters each.");
+  }
+  return inputs;
+}
+
+function runTrajectoryLab() {
+  clearTrajectoryResult();
+  const output = document.getElementById("trajectory-result");
+  let inputs;
+  try { inputs = parseTrajectoryInputs(document.getElementById("trajectory-input").value); }
+  catch (error) { output.textContent = error.message; return; }
+  const startMu = 0.64;
+  const startAt = 1700000000000;
+  const stepMs = 1000;
+  const result = runTrajectory(inputs, startMu, startAt, stepMs);
+  lastTrajectory = {schema_version: 1, model_revision: PROOF_MODEL_REVISION,
+    scope: "synthetic full-sequence scripted score; not an authenticated record",
+    start_mu: startMu, start_at: startAt, step_ms: stepMs, inputs,
+    steps: result.steps, final: result.final};
+  const summary = document.createElement("p");
+  summary.textContent = `After ${inputs.length} steps: with history ${result.final.with_history.toFixed(5)}, without history ${result.final.without_history.toFixed(5)}. Difference ${result.final.difference >= 0 ? "+" : ""}${result.final.difference.toFixed(5)}. The scores diverge from the same initial μ; your stored field was not changed.`;
+  output.appendChild(summary);
+  const scroll = document.createElement("div");
+  scroll.className = "trajectory-scroll";
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const header = document.createElement("tr");
+  for (const label of ["Step", "Input", "With history", "Without", "Difference"]) {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    header.appendChild(cell);
+  }
+  head.appendChild(header);
+  table.appendChild(head);
+  const body = document.createElement("tbody");
+  result.steps.forEach((step, index) => {
+    const row = document.createElement("tr");
+    for (const value of [index + 1, step.input.length > 80 ? `${step.input.slice(0, 80)}…` : step.input,
+      step.actual.after.toFixed(5), step.control.after.toFixed(5),
+      `${step.effect >= 0 ? "+" : ""}${step.effect.toFixed(5)}`]) {
+      const cell = document.createElement("td");
+      cell.textContent = String(value);
+      row.appendChild(cell);
+    }
+    body.appendChild(row);
+  });
+  table.appendChild(body);
+  scroll.appendChild(table);
+  output.appendChild(scroll);
+  document.getElementById("trajectory-download").disabled = false;
+}
+
+function downloadTrajectory() {
+  if (lastTrajectory) downloadJSON(lastTrajectory, "aru-remembrance-trajectory-proof.json");
 }
 
 function downloadJSON(payload, filename) {

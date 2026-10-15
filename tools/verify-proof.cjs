@@ -90,4 +90,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { verifyProof };
+module.exports = { verifyProof, loadEvaluator, matchReceipt, matchNumber, requireCondition };

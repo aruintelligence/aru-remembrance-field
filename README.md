@@ -27,6 +27,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A dependency-free, inspectable browser implementation
 - An in-app receipt for each modeled score change and a local JSON export
 - A memory ablation lab that previews the same draft with and without prior history
+- A full-sequence challenge that evolves separate with-history and no-history scores from a clean baseline
 - A portable one-step proof capsule that can be recomputed from a local checkout
 - A separate evidence ledger for exact-name fact recall, source IDs, conflicts, and explicit resolution
 
@@ -62,6 +63,20 @@ After a normal submission, the last-change receipt also shows the matched contro
 
 The [ablation protocol](research/ablation-protocol.md) lists exact positive, negative, and contradiction probes, including expected numbers and limits on interpretation. These probes establish observable properties of the code, not a scientific validation of the project's broader theory.
 
+## Challenge the full sequence
+
+Open **Full-sequence memory challenge** inside the inspector. Enter 2–24 lines, one input per line, and select **Run sequence**. Two independent scores start at μ = `0.6400`: one branch stores each earlier input as memory and a user message, while the control clears both histories at every step. The same fixed one-second clock and input order are used in both branches. The table shows both scores and their difference after each step. This is a fresh synthetic sequence, not a replay of your existing browser history, and it does not change the saved field, messages, or evidence ledger.
+
+For example, `violet river` on two lines ends at `0.67938` with history and `0.61260` without it. `amber comet` followed by `violet river` has zero difference; `always` followed by `never` has a `−0.03000` difference. These are deterministic results of the scripted rules. The [trajectory protocol](research/trajectory-protocol.md) gives the exact controls and limits.
+
+Select **Download trajectory proof JSON**, then check the receipt from a local checkout:
+
+```bash
+node tools/verify-trajectory.cjs /path/to/aru-remembrance-trajectory-proof.json
+```
+
+The repository includes a [synthetic example](research/example-trajectory.json) for a no-private-data check. The verifier recomputes every step and term against the local model source and rejects changed inputs or results. It checks internal consistency only: the file can be edited and recomputed by someone else. The sequence stays in the page until edited or closed; only an explicit download makes a proof file containing your lines.
+
 ## Verify a submitted transition
 
 After submitting text, select **Download last proof JSON** in the inspector. The file captures the input, timestamp, starting score, the exact prior memories and user messages used by the scoring rule, and both score receipts. In a local checkout, run:
@@ -90,7 +105,7 @@ Run the small regression suite with Node.js:
 node tests/field.test.cjs
 ```
 
-It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, draft non-mutation, proof replay and changed-file detection, exact-name recall, conflicts and resolution, portable ledger merging and rejection, safe text display, corrupted saved data, and local data controls.
+It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, conflicts and resolution, portable ledger merging and rejection, safe text display, corrupted saved data, and local data controls.
 
 ## Research question
 
