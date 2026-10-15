@@ -66,6 +66,8 @@ After a normal submission, the last-change receipt also shows the matched contro
 
 The [ablation protocol](research/ablation-protocol.md) lists exact positive, negative, and contradiction probes, including expected numbers and limits on interpretation. These probes establish observable properties of the code, not a scientific validation of the project's broader theory.
 
+For an independent code-level check of the v2 score, run `python3 tools/differential-field-v2.py --seed 20261015 --runs 2000`. A separately written Python implementation compares all seven score terms, delta, final μ, and clamp decision with the browser's JavaScript across 16 fixed and 2,000 generated cases. CI repeats this [differential challenge](research/score-differential-protocol.md). Agreement checks implementation consistency under these inputs; both implementations can still share a mistaken specification.
+
 ## Challenge the full sequence
 
 Open **Full-sequence memory challenge** inside the inspector. Enter 2–24 lines, one input per line, and select **Run sequence**. Two independent scores start at μ = `0.6400`: one branch stores each earlier input as memory and a user message, while the control clears both histories at every step. The same fixed one-second clock and input order are used in both branches. The table shows both scores and their difference after each step. This is a fresh synthetic sequence, not a replay of your existing browser history, and it does not change the saved field, messages, or evidence ledger.

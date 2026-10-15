@@ -1,0 +1,13 @@
+{
+  "format": "aru-score-differential-report",
+  "model_revision": "aru-field-heuristics-2",
+  "seed": 20261015,
+  "fixed_cases": 16,
+  "generated_cases": 2000,
+  "checked": 2016,
+  "mutation_probe": "detected",
+  "absolute_tolerance": 1e-10,
+  "result": "pass",
+  "javascript_source_sha256": "50964d7e295fbfb9437eca59fd96f71dc6a429b9bf052b897b8f8c4f0d5867cb",
+  "python_reference_sha256": "f39930446169320e6402a79f155d10a635c8705625e094a8425827634d8ec5db"
+}
