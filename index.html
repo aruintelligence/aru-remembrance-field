@@ -209,6 +209,12 @@
       align-items: flex-end;
     }
 
+    .composer-evidence-actions { display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap; margin-top: 0.6rem; }
+    .composer-evidence-actions button { min-height: 44px; padding: 0.5rem 0.75rem; border-radius: 10px; color: #fef3c7; background: #3b2509; border: 1px solid #fbbf24; font: 600 0.8rem 'Inter', sans-serif; cursor: pointer; }
+    .composer-evidence-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .composer-evidence-actions button:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+    #quick-evidence-result:not(:empty) { margin-top: 0.55rem; padding: 0.65rem; color: #fef3c7; background: rgba(59,37,9,0.7); border: 1px solid rgba(245,158,11,0.45); border-radius: 10px; font-size: 0.82rem; line-height: 1.5; overflow-wrap: anywhere; }
+
     textarea {
       flex: 1;
       background: rgba(139,92,246,0.08);
@@ -439,10 +445,15 @@
 
   <div class="input-area">
     <div class="input-row">
-      <textarea id="input" aria-label="Enter text into the field simulation" placeholder="Enter remembrance into the field simulation..." rows="1"
+      <textarea id="input" aria-label="Enter text for the simulation or a recorded-fact question" placeholder="Enter remembrance, or ask: What is my favorite color?" rows="1"
         oninput="autoResize(this)" onkeydown="handleKey(event)"></textarea>
       <button class="send-btn" id="send-btn" aria-label="Send input to simulation" onclick="ignite()">↑</button>
     </div>
+    <div class="composer-evidence-actions">
+      <button type="button" onclick="askComposerEvidence()">Ask recorded facts</button>
+      <button type="button" id="quick-evidence-review" onclick="reviewComposerEvidence()" disabled>Review sources &amp; receipt</button>
+    </div>
+    <div id="quick-evidence-result" role="status" aria-live="polite"></div>
   </div>
 </div>
 
@@ -1039,6 +1050,7 @@ function renderInspector() {
 let pendingFactImport = null;
 let factImportRequest = 0;
 let lastEvidenceAnswer = null;
+let composerEvidence = null;
 
 function lookupFact(key, claims = Field.claims) {
   const normalized = normalizeFactKey(key);
@@ -1086,19 +1098,57 @@ function askEvidence() {
   const question = document.getElementById("fact-question").value;
   const result = resolveEvidenceQuestion(question);
   const output = document.getElementById("fact-answer");
-  if (result.kind === "empty") output.textContent = "Enter a question first.";
-  else if (result.kind === "unsupported") output.textContent = "Use ‘What is [fact name]?’ or ‘What is my [fact name]?’ No answer given.";
-  else if (result.kind === "missing") output.textContent = "No exact recorded name matches this question. No answer given.";
-  else if (result.kind === "ambiguous") output.textContent = `This question matches multiple recorded names: ${result.names.map(name => `“${name}”`).join(", ")}. No answer given. Use Recall by name below for an exact choice.`;
-  else if (result.kind === "historical") output.textContent = `Only superseded records exist for “${result.name}”. No answer given. Select a source explicitly.`;
-  else if (result.kind === "conflict") output.textContent = `Conflicting current records for “${result.name}” (${result.records.map(claim => `#${claim.id}`).join(", ")}). No answer given. Select a source explicitly.`;
-  else output.textContent = `Recorded answer for “${result.name}”: ${result.value}. Source ${result.sources.map(id => `#${id}`).join(", ")}. This is a user assertion, not an independently verified fact.`;
+  output.textContent = describeEvidenceQuestion(result);
   lastEvidenceAnswer = {question, snapshot: JSON.stringify(Field.claims), answer: evidenceAnswerSummary(result)};
   document.getElementById("evidence-receipt-download").disabled = false;
   document.getElementById("evidence-excerpt-download").disabled = result.kind !== "known";
 }
 
+function describeEvidenceQuestion(result) {
+  if (result.kind === "empty") return "Enter a question first.";
+  if (result.kind === "unsupported") return "Use ‘What is [fact name]?’ or ‘What is my [fact name]?’ No answer given.";
+  if (result.kind === "missing") return "No exact recorded name matches this question. No answer given.";
+  if (result.kind === "ambiguous") return `This question matches multiple recorded names: ${result.names.map(name => `“${name}”`).join(", ")}. No answer given. Use Recall by name below for an exact choice.`;
+  if (result.kind === "historical") return `Only superseded records exist for “${result.name}”. No answer given. Select a source explicitly.`;
+  if (result.kind === "conflict") return `Conflicting current records for “${result.name}” (${result.records.map(claim => `#${claim.id}`).join(", ")}). No answer given. Select a source explicitly.`;
+  return `Recorded answer for “${result.name}”: ${result.value}. Source ${result.sources.map(id => `#${id}`).join(", ")}. This is a user assertion, not an independently verified fact.`;
+}
+
+function clearComposerEvidence() {
+  composerEvidence = null;
+  document.getElementById("quick-evidence-review").disabled = true;
+  document.getElementById("quick-evidence-result").textContent = "";
+}
+
+function askComposerEvidence() {
+  clearComposerEvidence();
+  const question = document.getElementById("input").value.trim();
+  const result = resolveEvidenceQuestion(question);
+  document.getElementById("quick-evidence-result").textContent = describeEvidenceQuestion(result);
+  if (result.kind !== "empty") {
+    composerEvidence = {question, snapshot: JSON.stringify(Field.claims)};
+    document.getElementById("quick-evidence-review").disabled = false;
+  }
+}
+
+function reviewComposerEvidence() {
+  const current = composerEvidence;
+  if (!current) return;
+  if (current.question !== document.getElementById("input").value.trim() ||
+      current.snapshot !== JSON.stringify(Field.claims)) {
+    clearComposerEvidence();
+    document.getElementById("quick-evidence-result").textContent = "Question or ledger changed. Ask again for a current answer.";
+    return;
+  }
+  document.getElementById("fact-question").value = current.question;
+  askEvidence();
+  const ledger = document.getElementById("ledger");
+  ledger.open = true;
+  ledger.scrollIntoView({behavior: "smooth", block: "start"});
+}
+
 function invalidateEvidenceAnswer() {
+  clearComposerEvidence();
   lastEvidenceAnswer = null;
   document.getElementById("evidence-receipt-download").disabled = true;
   document.getElementById("evidence-excerpt-download").disabled = true;
@@ -1716,6 +1766,7 @@ function resetField() {
 
 function autoResize(el) {
   document.getElementById("draft-comparison").replaceChildren();
+  clearComposerEvidence();
   el.style.height = "52px";
   el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
 }
@@ -1736,6 +1787,7 @@ function ignite() {
 
   if (!input) return;
 
+  clearComposerEvidence();
   document.getElementById("draft-comparison").replaceChildren();
   Field.busy = true;
   btn.disabled = true;

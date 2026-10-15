@@ -464,6 +464,80 @@ test('constrained questions return recorded values with sources without scoring 
   assert.match(app.elements.get('fact-answer').textContent, /No exact recorded name.*No answer given/);
 });
 
+test('main composer asks a recorded fact with a source and opens a verifiable receipt without scoring', async () => {
+  const app = boot();
+  app.fact('favorite color', 'teal');
+  app.fact('unrelated private assertion', 'hidden');
+  const before = JSON.stringify([...app.saved]);
+  const input = app.context.document.getElementById('input');
+  input.value = 'What is my favorite color?';
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /teal.*Source #1.*user assertion/);
+  assert.equal(app.elements.get('quick-evidence-review').disabled, false);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.memory.length, 0);
+  assert.equal(app.field.messages.length, 0);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  vm.runInContext('reviewComposerEvidence()', app.context);
+  assert.equal(app.elements.get('ledger').open, true);
+  assert.equal(app.elements.get('fact-question').value, input.value);
+  assert.equal(app.elements.get('fact-answer').textContent, app.elements.get('quick-evidence-result').textContent);
+  assert.equal(app.elements.get('evidence-excerpt-download').disabled, false);
+  vm.runInContext('downloadEvidenceExcerpt()', app.context);
+  const receipt = JSON.parse(await app.exports[0].text());
+  assert.equal(verifyEvidenceReceipt(receipt).scope, 'cited-assertions-only');
+  assert.equal(JSON.stringify(receipt).includes('hidden'), false);
+  assert.equal(JSON.stringify([...app.saved]), before);
+});
+
+test('composer refuses unsupported, missing, conflicting, and ambiguous questions as text', () => {
+  const app = boot();
+  app.fact('favorite color', '<img src=x onerror=alert(1)>');
+  const input = app.context.document.getElementById('input');
+  input.value = 'Who knows my favorite color?';
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /No answer given/);
+  input.value = 'What is my missing fact?';
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /No exact recorded name/);
+  input.value = 'What is my favorite color?';
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /<img src=x onerror=alert\(1\)>/);
+  assert.equal(app.elements.get('quick-evidence-result').innerHTML, '');
+  app.fact('favorite color', 'amber');
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /Conflicting current records.*No answer given/);
+  app.fact('my favorite color', 'green');
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /multiple recorded names.*No answer given/);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.memory.length, 0);
+  assert.equal(app.field.messages.length, 0);
+});
+
+test('composer answer invalidates on question and ledger changes, and sending uses simulation only', () => {
+  const app = boot();
+  app.fact('favorite color', 'teal');
+  const input = app.context.document.getElementById('input');
+  input.value = 'What is my favorite color?';
+  vm.runInContext('askComposerEvidence()', app.context);
+  input.value = 'What is my other fact?';
+  vm.runInContext('reviewComposerEvidence()', app.context);
+  assert.equal(app.elements.get('quick-evidence-review').disabled, true);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /Question or ledger changed/);
+  input.value = 'What is my favorite color?';
+  vm.runInContext('askComposerEvidence()', app.context);
+  app.fact('favorite color', 'amber');
+  assert.equal(app.elements.get('quick-evidence-review').disabled, true);
+  assert.equal(app.elements.get('quick-evidence-result').textContent, '');
+  vm.runInContext('askComposerEvidence()', app.context);
+  app.input('What is my favorite color?');
+  assert.equal(app.elements.get('quick-evidence-result').textContent, '');
+  assert.equal(app.elements.get('quick-evidence-review').disabled, true);
+  assert.equal(app.field.messages[0].type, 'user');
+  assert.notEqual(app.field.coherence, 0.64);
+});
+
 test('a question receipt replays a sourced answer using the full ledger without saving another copy', async () => {
   const app = boot();
   app.fact('favorite color', 'teal');
