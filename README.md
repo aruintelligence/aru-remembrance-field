@@ -30,6 +30,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A dependency-free, inspectable browser implementation
 - An in-app receipt for each modeled score change and a local JSON export
 - A memory ablation lab that previews the same draft with and without prior history
+- A local blind A/B trial that asks a reader to rate two randomized response positions before revealing which used memory
 - A full-sequence challenge that evolves separate with-history and no-history scores from a clean baseline
 - A one-click three-control challenge with positive, neutral, and negative memory effects and a verifiable report
 - A portable one-step proof capsule that can be recomputed from a local checkout
@@ -75,6 +76,12 @@ Open **Inspect model state and last change**, write a draft in the input area, a
 After a normal submission, the last-change receipt also shows the matched control score and the immediate history effect (`with history − without history`). At the floor or ceiling, clamping can hide a difference between the underlying terms. This is a **one-step software ablation**: because both branches start from the already accumulated μ, it does not estimate a whole alternate lifetime of the field. The JSON export includes that control receipt.
 
 The [ablation protocol](research/ablation-protocol.md) lists exact positive, negative, and contradiction probes, including expected numbers and limits on interpretation. These probes establish observable properties of the code, not a scientific validation of the project's broader theory.
+
+### Ask a reader whether memory helps
+
+Open **Blind response trial** in the inspector. Enter one to eight earlier context lines and a final prompt. Two independent model branches start at μ = 0.6400 and receive the same context in order; the control discards earlier memory and messages at each step. The app presents the two resulting scripted responses in randomized A/B positions with score and branch labels hidden. A reader chooses A, B, or tie before the condition labels and scores appear. Nothing is saved to browser storage. **Download rated trial JSON** is the only way to keep the context, prompt, response text, assignment, and choice.
+
+The exported trial can be replayed from a checkout with `node tools/verify-blind-trial.cjs /path/to/aru-blind-response-trial.json`. The [synthetic example report](research/example-blind-trial.json) can be checked with `node tools/verify-blind-trial.cjs research/example-blind-trial.json`. The verifier checks recorded scores and response text against the model. It cannot establish that a person rated the pair, that the random assignment was followed, or that the file was not later edited. The [blind trial protocol](research/blind-response-trial-protocol.md) describes a preregistered, independently rated pilot and how to report ties and unfavorable outcomes. No human benefit has been measured by the included software tests.
 
 For an independent code-level check of the v2 score, run `python3 tools/differential-field-v2.py --seed 20261015 --runs 2000`. A separately written Python implementation compares all seven score terms, delta, final μ, and clamp decision with the browser's JavaScript across 16 fixed and 2,000 generated cases. CI repeats this [differential challenge](research/score-differential-protocol.md). Agreement checks implementation consistency under these inputs; both implementations can still share a mistaken specification.
 
@@ -163,7 +170,7 @@ node tests/benchmark.test.cjs
 node tests/falsifier.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls, the three-control challenge and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and composer abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, session-only non-persistence and restore blocking, full question receipts, privacy-scoped answer excerpts and browser verification, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
+These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls, the three-control challenge and proof replay, blinded response assignment and rated report replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and composer abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, session-only non-persistence and restore blocking, full question receipts, privacy-scoped answer excerpts and browser verification, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
 
 ## Research question
 

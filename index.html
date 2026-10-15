@@ -285,7 +285,7 @@
     .inspector p { margin: 0.65rem 0; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
     .inspector ol { margin: 0.5rem 0 0.8rem 1.25rem; font: 0.8rem/1.6 monospace; color: #e2e8f0; }
     .inspector-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-    .inspector button { padding: 0.45rem 0.7rem; background: #172554; color: #e0f2fe; border: 1px solid #38bdf8; border-radius: 8px; cursor: pointer; }
+    .inspector button { min-height: 44px; padding: 0.45rem 0.7rem; background: #172554; color: #e0f2fe; border: 1px solid #38bdf8; border-radius: 8px; cursor: pointer; }
     .inspector button:disabled { opacity: 0.45; cursor: not-allowed; }
     .inspector button:focus-visible, .inspector summary:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
     .comparison { margin: 0.85rem 0; padding: 0.75rem; border: 1px solid rgba(34,211,238,0.3); border-radius: 10px; background: rgba(8,20,43,0.9); }
@@ -364,6 +364,24 @@
     <p><strong>Memory ablation lab:</strong> compare a draft against the same model with earlier memory and messages withheld. Both start at the current μ. This isolates the next step only; it does not replay a history without memory.</p>
     <button type="button" onclick="compareDraft()">Compare draft without saving</button>
     <div id="draft-comparison" role="status" aria-live="polite"></div>
+    <section class="trajectory-lab">
+      <h2>Blind response trial</h2>
+      <p>Test whether the scripted response with prior history is more useful to a reader. Enter 1–8 context lines and a final prompt. The two responses appear as A and B in random order without labels or scores until a choice is made. For a stronger test, ask someone who did not write the context to rate them.</p>
+      <label for="blind-context">Earlier context (one line per entry)</label>
+      <textarea id="blind-context" rows="3" maxlength="4100" placeholder="violet river" oninput="clearBlindTrial()"></textarea>
+      <label for="blind-prompt">Final prompt to compare</label>
+      <textarea id="blind-prompt" rows="2" maxlength="500" placeholder="What do you remember about the river?" oninput="clearBlindTrial()"></textarea>
+      <div class="inspector-actions"><button type="button" onclick="runBlindTrial()">Show A and B without labels</button></div>
+      <div id="blind-result" role="status" aria-live="polite"></div>
+      <div id="blind-vote" class="inspector-actions" hidden>
+        <button type="button" onclick="rateBlindTrial('A')">A is more useful</button>
+        <button type="button" onclick="rateBlindTrial('B')">B is more useful</button>
+        <button type="button" onclick="rateBlindTrial('tie')">Tie / neither</button>
+      </div>
+      <p id="blind-reveal" role="status" aria-live="polite"></p>
+      <div class="inspector-actions"><button type="button" id="blind-download" onclick="downloadBlindTrial()" disabled>Download rated trial JSON</button></div>
+      <p>No text or rating is saved unless you download the report. A single subjective choice is not evidence of a general benefit; downloaded reports include your context and prompt.</p>
+    </section>
     <section class="trajectory-lab">
       <h2>Full-sequence memory challenge</h2>
       <p>Enter one input per line. Both branches start at μ = 0.6400; the control discards prior memory and messages at every step. A fixed one-second clock makes the result reproducible. This experiment does not change saved state.</p>
@@ -1646,6 +1664,91 @@ function compareDraft() {
   }
   panel.appendChild(grid);
   output.appendChild(panel);
+}
+
+let lastBlindTrial = null;
+
+function clearBlindTrial() {
+  lastBlindTrial = null;
+  document.getElementById("blind-result").replaceChildren();
+  document.getElementById("blind-vote").hidden = true;
+  document.getElementById("blind-reveal").textContent = "";
+  document.getElementById("blind-download").disabled = true;
+}
+
+function computeBlindConditions(context, prompt) {
+  const startAt = 1700000000000;
+  let withMu = 0.64;
+  let withoutMu = 0.64;
+  let memory = [];
+  const messages = [];
+  context.forEach((input, index) => {
+    const at = startAt + index * 1000;
+    withMu = evaluateCoherence(input, {coherence: withMu, memory, messages}, at).after;
+    withoutMu = evaluateCoherence(input, {coherence: withoutMu, memory: [], messages: []}, at).after;
+    memory = advanceMemory(memory, input, withMu, at);
+    messages.push({type: "user", text: input});
+  });
+  const at = startAt + context.length * 1000;
+  const withScore = evaluateCoherence(prompt, {coherence: withMu, memory, messages}, at);
+  const withoutScore = evaluateCoherence(prompt, {coherence: withoutMu, memory: [], messages: []}, at);
+  return {
+    with_history: {score: withScore, response_html: getResponse(prompt, false, withScore.after, memory, at)},
+    without_history: {score: withoutScore, response_html: getResponse(prompt, false, withoutScore.after, [], at)}
+  };
+}
+
+function runBlindTrial() {
+  clearBlindTrial();
+  const output = document.getElementById("blind-result");
+  const raw = document.getElementById("blind-context").value;
+  const context = raw.split(/\r\n?|\n/).map(line => line.trim()).filter(Boolean);
+  const prompt = document.getElementById("blind-prompt").value.trim();
+  if (raw.length > 4100 || context.length < 1 || context.length > 8 ||
+      context.some(line => line.length > 500) || !prompt || prompt.length > 500) {
+    output.textContent = "Enter 1–8 context lines and a final prompt, each up to 500 characters.";
+    return;
+  }
+  const conditions = computeBlindConditions(context, prompt);
+  const assignment = Math.random() < 0.5
+    ? {A: "with_history", B: "without_history"}
+    : {A: "without_history", B: "with_history"};
+  lastBlindTrial = {format: "aru-blind-response-trial", version: 1,
+    model_revision: PROOF_MODEL_REVISION, context, prompt, assignment, conditions, choice: null};
+  const grid = document.createElement("div");
+  grid.className = "comparison-grid";
+  for (const side of ["A", "B"]) {
+    const card = document.createElement("section");
+    card.className = "comparison-card";
+    const heading = document.createElement("h3");
+    heading.textContent = `Response ${side}`;
+    const response = document.createElement("div");
+    response.className = "preview";
+    response.innerHTML = conditions[assignment[side]].response_html;
+    card.appendChild(heading);
+    card.appendChild(response);
+    grid.appendChild(card);
+  }
+  output.appendChild(grid);
+  document.getElementById("blind-vote").hidden = false;
+}
+
+function rateBlindTrial(choice) {
+  if (!lastBlindTrial || lastBlindTrial.choice !== null || !["A", "B", "tie"].includes(choice)) return;
+  lastBlindTrial.choice = choice;
+  document.getElementById("blind-vote").hidden = true;
+  const {assignment, conditions} = lastBlindTrial;
+  const preferred = choice === "tie" ? "Tie / neither" :
+    `${choice} (${assignment[choice] === "with_history" ? "with prior history" : "without prior history"})`;
+  document.getElementById("blind-reveal").textContent =
+    `You chose ${preferred}. A used ${assignment.A === "with_history" ? "prior history" : "no prior history"}; B used ${assignment.B === "with_history" ? "prior history" : "no prior history"}. Model μ: ${conditions.with_history.score.after.toFixed(5)} with history, ${conditions.without_history.score.after.toFixed(5)} without. This is one subjective rating, not a measured population effect.`;
+  document.getElementById("blind-download").disabled = false;
+}
+
+function downloadBlindTrial() {
+  if (lastBlindTrial && lastBlindTrial.choice !== null) {
+    downloadJSON(lastBlindTrial, "aru-blind-response-trial.json");
+  }
 }
 
 let lastTrajectory = null;
