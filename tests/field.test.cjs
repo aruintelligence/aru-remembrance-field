@@ -46,6 +46,8 @@ function boot(values = {}, options = {}) {
     getAttribute(name) { return this.attributes?.[name] ?? null; }
     getContext() { return canvasContext; }
     click() { this.clicked = true; }
+    showModal() { this.open = true; }
+    close() { this.open = false; }
   }
   const document = {
     body: new Element('body'),
@@ -401,14 +403,19 @@ test('blind A/B trial hides labels until rating, then exports a replayable local
   assert.ok(report);
   assert.equal(report.choice, null);
   assert.equal(new Set(Object.values(report.assignment)).size, 2);
-  assert.equal(app.elements.get('blind-vote').hidden, false);
+  assert.equal(app.elements.get('blind-reader-dialog').open, true);
+  assert.equal(app.elements.get('blind-vote').hidden, true);
   assert.equal(app.elements.get('blind-download').disabled, true);
   assert.equal(app.elements.get('blind-reveal').textContent, '');
   assert.equal(app.elements.get('blind-result').children[0].children.length, 2);
+  assert.equal(app.elements.get('blind-reader-result').children[0].children.length, 2);
+  assert.equal(app.elements.get('blind-reader-context').textContent, 'violet river');
+  assert.equal(app.elements.get('blind-reader-prompt').textContent, 'violet river');
   assert.ok(report.conditions.with_history.score.after > report.conditions.without_history.score.after);
   const chosen = report.assignment.A === 'with_history' ? 'A' : 'B';
   vm.runInContext(`rateBlindTrial('${chosen}')`, app.context);
   assert.equal(report.choice, chosen);
+  assert.equal(app.elements.get('blind-reader-dialog').open, false);
   assert.match(app.elements.get('blind-reveal').textContent, /with prior history.*one subjective rating/);
   assert.equal(app.elements.get('blind-vote').hidden, true);
   assert.equal(app.elements.get('blind-download').disabled, false);
@@ -420,6 +427,46 @@ test('blind A/B trial hides labels until rating, then exports a replayable local
   assert.equal(JSON.stringify([...app.saved]), before);
   assert.equal(app.field.coherence, 0.64);
   assert.equal(app.field.messages.length, 0);
+});
+
+test('closing reader view does not rate, reopening preserves assignment, and editing clears it', () => {
+  const app = boot();
+  app.context.document.getElementById('blind-context').value = 'context <script>private</script>';
+  app.context.document.getElementById('blind-prompt').value = 'What was in the context?';
+  vm.runInContext('runBlindTrial()', app.context);
+  const trial = vm.runInContext('lastBlindTrial', app.context);
+  const dialog = app.elements.get('blind-reader-dialog');
+  assert.equal(dialog.open, true);
+  assert.equal(app.elements.get('blind-reader-context').textContent, 'context <script>private</script>');
+  assert.equal(app.elements.get('blind-reader-context').innerHTML, '');
+  vm.runInContext('closeBlindReader(); blindReaderClosed()', app.context);
+  assert.equal(dialog.open, false);
+  assert.equal(trial.choice, null);
+  assert.equal(app.elements.get('blind-download').disabled, true);
+  assert.match(app.elements.get('blind-reveal').textContent, /closed without a rating/);
+  vm.runInContext('openBlindReader()', app.context);
+  assert.equal(dialog.open, true);
+  assert.equal(vm.runInContext('lastBlindTrial', app.context), trial);
+  app.elements.get('blind-prompt').value = 'changed';
+  vm.runInContext('clearBlindTrial()', app.context);
+  assert.equal(dialog.open, false);
+  assert.equal(vm.runInContext('lastBlindTrial', app.context), null);
+  assert.equal(app.elements.get('blind-reader-result').children.length, 0);
+  assert.equal(app.elements.get('blind-open-reader').hidden, true);
+  assert.equal(app.saved.size, 0);
+});
+
+test('older browsers can still rate in the inspector when a modal dialog is unavailable', () => {
+  const app = boot();
+  app.context.document.getElementById('blind-reader-dialog').showModal = undefined;
+  app.context.document.getElementById('blind-context').value = 'violet river';
+  app.context.document.getElementById('blind-prompt').value = 'violet river';
+  vm.runInContext('runBlindTrial()', app.context);
+  assert.equal(app.elements.get('blind-vote').hidden, false);
+  assert.equal(app.elements.get('blind-open-reader').hidden, true);
+  vm.runInContext('rateBlindTrial("tie")', app.context);
+  assert.equal(vm.runInContext('lastBlindTrial.choice', app.context), 'tie');
+  assert.equal(app.elements.get('blind-vote').hidden, true);
 });
 
 test('a local fixed plan fills a blind case and an edited input cannot masquerade as it', async () => {

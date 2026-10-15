@@ -286,6 +286,7 @@
     .inspector ol { margin: 0.5rem 0 0.8rem 1.25rem; font: 0.8rem/1.6 monospace; color: #e2e8f0; }
     .inspector-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .inspector button { min-height: 44px; padding: 0.45rem 0.7rem; background: #172554; color: #e0f2fe; border: 1px solid #38bdf8; border-radius: 8px; cursor: pointer; }
+    [hidden] { display: none !important; }
     .inspector button:disabled { opacity: 0.45; cursor: not-allowed; }
     .inspector button:focus-visible, .inspector summary:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
     .comparison { margin: 0.85rem 0; padding: 0.75rem; border: 1px solid rgba(34,211,238,0.3); border-radius: 10px; background: rgba(8,20,43,0.9); }
@@ -299,6 +300,17 @@
     .trajectory-lab textarea { display: block; width: 100%; min-height: 100px; }
     .trajectory-lab input[type="file"], .trajectory-lab select { display: block; width: 100%; min-height: 44px; padding: 0.5rem; background: #0b1530; color: #e0f2fe; border: 1px solid #38bdf8; border-radius: 8px; }
     .trajectory-lab input[type="file"]:focus-visible, .trajectory-lab select:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
+    .blind-reader-dialog { width: min(92vw, 960px); max-height: 90vh; overflow-y: auto; padding: clamp(1rem, 3vw, 2rem); pointer-events: auto; color: #e2e8f0; background: #071427; border: 2px solid #38bdf8; border-radius: 16px; box-shadow: 0 24px 80px rgba(0,0,0,0.7); }
+    .blind-reader-dialog:not([open]) { display: none; }
+    .blind-reader-dialog::backdrop { background: rgba(2,6,23,0.92); }
+    .blind-reader-dialog h2 { color: #a5f3fc; font-size: clamp(1.2rem, 3vw, 1.7rem); }
+    .blind-reader-dialog h3 { color: #a5f3fc; font-size: 0.9rem; margin-top: 1rem; }
+    .blind-reader-dialog p { line-height: 1.5; }
+    .blind-reader-dialog .blind-reader-text { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0.75rem; background: #0b1530; border: 1px solid rgba(56,189,248,0.45); border-radius: 8px; }
+    .blind-reader-dialog button { min-height: 44px; padding: 0.55rem 0.8rem; color: #e0f2fe; background: #172554; border: 1px solid #38bdf8; border-radius: 8px; cursor: pointer; }
+    .blind-reader-dialog button:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
+    .blind-reader-dialog .reader-close { float: right; }
+    .blind-reader-dialog .reader-choices { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1.2rem; }
     .trajectory-scroll { overflow-x: auto; margin-top: 0.6rem; }
     .trajectory-scroll table { width: 100%; border-collapse: collapse; font: 0.76rem/1.4 'JetBrains Mono', monospace; }
     .trajectory-scroll th, .trajectory-scroll td { text-align: left; padding: 0.35rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
@@ -368,7 +380,7 @@
     <div id="draft-comparison" role="status" aria-live="polite"></div>
     <section class="trajectory-lab">
       <h2>Blind response trial</h2>
-      <p>Test whether the scripted response with prior history is more useful to a reader. Enter 1–8 context lines and a final prompt. The two responses appear as A and B in random order without labels or scores until a choice is made. For a stronger test, ask someone who did not write the context to rate them.</p>
+      <p>Test whether the scripted response with prior history is more useful to a reader. Enter 1–8 context lines and a final prompt. A dedicated reader view presents A and B in random order without branch labels or scores until a choice is made. For a stronger test, ask someone who did not write the context to rate them.</p>
       <label for="blind-plan-file">Optional fixed trial plan JSON</label>
       <input type="file" id="blind-plan-file" accept="application/json,.json" onchange="loadBlindTrialPlan()">
       <label for="blind-plan-case">Planned case</label>
@@ -379,7 +391,7 @@
       <textarea id="blind-context" rows="3" maxlength="4100" placeholder="violet river" oninput="clearBlindTrial()"></textarea>
       <label for="blind-prompt">Final prompt to compare</label>
       <textarea id="blind-prompt" rows="2" maxlength="500" placeholder="What do you remember about the river?" oninput="clearBlindTrial()"></textarea>
-      <div class="inspector-actions"><button type="button" onclick="runBlindTrial()">Show A and B without labels</button></div>
+      <div class="inspector-actions"><button type="button" onclick="runBlindTrial()">Begin reader rating</button><button type="button" id="blind-open-reader" onclick="openBlindReader()" hidden>Reopen reader view</button></div>
       <div id="blind-result" role="status" aria-live="polite"></div>
       <div id="blind-vote" class="inspector-actions" hidden>
         <button type="button" onclick="rateBlindTrial('A')">A is more useful</button>
@@ -424,6 +436,22 @@
     <div id="state-import-preview" role="status" aria-live="polite"></div>
     <button id="state-import-apply" type="button" disabled onclick="applyStateImport()">Replace with reviewed state</button>
   </details>
+
+  <dialog id="blind-reader-dialog" class="blind-reader-dialog" aria-labelledby="blind-reader-title" onclose="blindReaderClosed()">
+    <button type="button" class="reader-close" onclick="closeBlindReader()">Close without rating</button>
+    <h2 id="blind-reader-title" tabindex="-1">Choose the more useful response</h2>
+    <p>Read the context and final prompt, then compare A and B. Branch labels and modeled scores appear only after your choice. You can choose tie / neither.</p>
+    <h3>Earlier context</h3>
+    <p id="blind-reader-context" class="blind-reader-text"></p>
+    <h3>Final prompt</h3>
+    <p id="blind-reader-prompt" class="blind-reader-text"></p>
+    <div id="blind-reader-result"></div>
+    <div class="reader-choices" role="group" aria-label="Which response is more useful?">
+      <button type="button" onclick="rateBlindTrial('A')">A is more useful</button>
+      <button type="button" onclick="rateBlindTrial('B')">B is more useful</button>
+      <button type="button" onclick="rateBlindTrial('tie')">Tie / neither</button>
+    </div>
+  </dialog>
 
   <details class="ledger" id="score-proof-verifier">
     <summary>Verify a shared score proof</summary>
@@ -1790,6 +1818,12 @@ function clearBlindTrialPlan() {
 
 function clearBlindTrial() {
   lastBlindTrial = null;
+  const dialog = document.getElementById("blind-reader-dialog");
+  if (dialog.open) dialog.close();
+  document.getElementById("blind-reader-result").replaceChildren();
+  document.getElementById("blind-reader-context").textContent = "";
+  document.getElementById("blind-reader-prompt").textContent = "";
+  document.getElementById("blind-open-reader").hidden = true;
   document.getElementById("blind-result").replaceChildren();
   document.getElementById("blind-vote").hidden = true;
   document.getElementById("blind-reveal").textContent = "";
@@ -1801,6 +1835,45 @@ function clearBlindTrial() {
     document.getElementById("blind-plan-status").textContent =
       "Inputs changed. Choose the planned case again for an exact match, or clear the plan for a custom trial.";
   }
+}
+
+function openBlindReader() {
+  if (!lastBlindTrial || lastBlindTrial.choice !== null) return false;
+  const dialog = document.getElementById("blind-reader-dialog");
+  if (typeof dialog.showModal !== "function") return false;
+  if (!dialog.open) dialog.showModal();
+  document.getElementById("blind-reader-title").focus();
+  return true;
+}
+
+function closeBlindReader() {
+  const dialog = document.getElementById("blind-reader-dialog");
+  if (dialog.open) dialog.close();
+}
+
+function blindReaderClosed() {
+  if (!document.getElementById("blind-reader-dialog").open && lastBlindTrial && lastBlindTrial.choice === null) {
+    document.getElementById("blind-reveal").textContent =
+      "Reader view closed without a rating. Reopen the same A/B pair to continue.";
+  }
+}
+
+function blindResponseGrid(conditions, assignment) {
+  const grid = document.createElement("div");
+  grid.className = "comparison-grid";
+  for (const side of ["A", "B"]) {
+    const card = document.createElement("section");
+    card.className = "comparison-card";
+    const heading = document.createElement("h3");
+    heading.textContent = `Response ${side}`;
+    const response = document.createElement("div");
+    response.className = "preview";
+    response.innerHTML = conditions[assignment[side]].response_html;
+    card.appendChild(heading);
+    card.appendChild(response);
+    grid.appendChild(card);
+  }
+  return grid;
 }
 
 function computeBlindConditions(context, prompt) {
@@ -1846,28 +1919,21 @@ function runBlindTrial() {
     : {A: "without_history", B: "with_history"};
   lastBlindTrial = {format: "aru-blind-response-trial", version: 1,
     model_revision: PROOF_MODEL_REVISION, context, prompt, assignment, conditions, choice: null};
-  const grid = document.createElement("div");
-  grid.className = "comparison-grid";
-  for (const side of ["A", "B"]) {
-    const card = document.createElement("section");
-    card.className = "comparison-card";
-    const heading = document.createElement("h3");
-    heading.textContent = `Response ${side}`;
-    const response = document.createElement("div");
-    response.className = "preview";
-    response.innerHTML = conditions[assignment[side]].response_html;
-    card.appendChild(heading);
-    card.appendChild(response);
-    grid.appendChild(card);
-  }
-  output.appendChild(grid);
-  document.getElementById("blind-vote").hidden = false;
+  output.appendChild(blindResponseGrid(conditions, assignment));
+  document.getElementById("blind-reader-context").textContent = context.join("\n");
+  document.getElementById("blind-reader-prompt").textContent = prompt;
+  document.getElementById("blind-reader-result").appendChild(blindResponseGrid(conditions, assignment));
+  const modal = openBlindReader();
+  document.getElementById("blind-vote").hidden = modal;
+  document.getElementById("blind-open-reader").hidden = !modal;
 }
 
 function rateBlindTrial(choice) {
   if (!lastBlindTrial || lastBlindTrial.choice !== null || !["A", "B", "tie"].includes(choice)) return;
   lastBlindTrial.choice = choice;
+  closeBlindReader();
   document.getElementById("blind-vote").hidden = true;
+  document.getElementById("blind-open-reader").hidden = true;
   const {assignment, conditions} = lastBlindTrial;
   const preferred = choice === "tie" ? "Tie / neither" :
     `${choice} (${assignment[choice] === "with_history" ? "with prior history" : "without prior history"})`;
