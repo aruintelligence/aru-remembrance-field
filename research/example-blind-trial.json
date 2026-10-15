@@ -1,0 +1,94 @@
+{
+  "format": "aru-blind-response-trial",
+  "version": 1,
+  "model_revision": "aru-field-heuristics-2",
+  "context": [
+    "violet river"
+  ],
+  "prompt": "violet river",
+  "assignment": {
+    "A": "with_history",
+    "B": "without_history"
+  },
+  "conditions": {
+    "with_history": {
+      "score": {
+        "before": 0.62624,
+        "delta": 0.05313726396201072,
+        "after": 0.6793772639620107,
+        "terms": [
+          {
+            "label": "Matched word rules",
+            "value": 0
+          },
+          {
+            "label": "Length rule",
+            "value": 0
+          },
+          {
+            "label": "Intent rule",
+            "value": 0
+          },
+          {
+            "label": "Prior memory overlap",
+            "value": 0.09677342396201072
+          },
+          {
+            "label": "Contradiction rule",
+            "value": 0
+          },
+          {
+            "label": "Prior repetition rule",
+            "value": -0.03
+          },
+          {
+            "label": "Baseline drift",
+            "value": -0.01363616
+          }
+        ],
+        "clamped": false
+      },
+      "response_html": "Pattern alignment in progress. Organizing around themes: <em>violet, river</em>.<br><br>Resonant echoes:<br>• violet river<br><br><em>Reflection:</em> “violet river”<br><br><strong>Next:</strong> Deepen one active thread with precision."
+    },
+    "without_history": {
+      "score": {
+        "before": 0.62624,
+        "delta": -0.01363616,
+        "after": 0.61260384,
+        "terms": [
+          {
+            "label": "Matched word rules",
+            "value": 0
+          },
+          {
+            "label": "Length rule",
+            "value": 0
+          },
+          {
+            "label": "Intent rule",
+            "value": 0
+          },
+          {
+            "label": "Prior memory overlap",
+            "value": 0
+          },
+          {
+            "label": "Contradiction rule",
+            "value": 0
+          },
+          {
+            "label": "Prior repetition rule",
+            "value": 0
+          },
+          {
+            "label": "Baseline drift",
+            "value": -0.01363616
+          }
+        ],
+        "clamped": false
+      },
+      "response_html": "Pattern alignment in progress. Organizing around themes: <em>remembrance, continuity, signal</em>.<br><br><em>Reflection:</em> “violet river”<br><br><strong>Next:</strong> Deepen one active thread with precision."
+    }
+  },
+  "choice": "tie"
+}

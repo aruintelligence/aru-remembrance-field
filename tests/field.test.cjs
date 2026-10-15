@@ -7,6 +7,7 @@ const { verifyProof, loadEvaluator } = require('../tools/verify-proof.cjs');
 const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
 const { verifyMemoryChallenge } = require('../tools/verify-memory-challenge.cjs');
 const { verifyEvidenceReceipt } = require('../tools/verify-evidence-receipt.cjs');
+const { verifyBlindTrial } = require('../tools/verify-blind-trial.cjs');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -387,6 +388,87 @@ test('v1 and v2 archived score receipts and trajectories verify under their own 
   const wrongRevision = read('example-proof-v2.json');
   wrongRevision.model_revision = 'aru-field-heuristics-1';
   assert.throws(() => verifyProof(wrongRevision), /does not match the model/);
+});
+
+test('blind A/B trial hides labels until rating, then exports a replayable local report', async () => {
+  const app = boot({unrelated_key: 'keep'});
+  app.fact('private', 'saved');
+  const before = JSON.stringify([...app.saved]);
+  app.context.document.getElementById('blind-context').value = 'violet river';
+  app.context.document.getElementById('blind-prompt').value = 'violet river';
+  vm.runInContext('runBlindTrial()', app.context);
+  const report = vm.runInContext('lastBlindTrial', app.context);
+  assert.ok(report);
+  assert.equal(report.choice, null);
+  assert.equal(new Set(Object.values(report.assignment)).size, 2);
+  assert.equal(app.elements.get('blind-vote').hidden, false);
+  assert.equal(app.elements.get('blind-download').disabled, true);
+  assert.equal(app.elements.get('blind-reveal').textContent, '');
+  assert.equal(app.elements.get('blind-result').children[0].children.length, 2);
+  assert.ok(report.conditions.with_history.score.after > report.conditions.without_history.score.after);
+  const chosen = report.assignment.A === 'with_history' ? 'A' : 'B';
+  vm.runInContext(`rateBlindTrial('${chosen}')`, app.context);
+  assert.equal(report.choice, chosen);
+  assert.match(app.elements.get('blind-reveal').textContent, /with prior history.*one subjective rating/);
+  assert.equal(app.elements.get('blind-vote').hidden, true);
+  assert.equal(app.elements.get('blind-download').disabled, false);
+  vm.runInContext('rateBlindTrial("tie")', app.context);
+  assert.equal(report.choice, chosen, 'rating is locked after reveal');
+  vm.runInContext('downloadBlindTrial()', app.context);
+  const exported = JSON.parse(await app.exports[0].text());
+  assert.equal(verifyBlindTrial(exported).preferred, 'with_history');
+  assert.equal(JSON.stringify([...app.saved]), before);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.messages.length, 0);
+});
+
+test('blind trial invalidates an edited question, rejects invalid input, and escapes shared text', () => {
+  const app = boot();
+  const context = app.context.document.getElementById('blind-context');
+  const prompt = app.context.document.getElementById('blind-prompt');
+  context.value = 'violet river';
+  vm.runInContext('runBlindTrial()', app.context);
+  assert.match(app.elements.get('blind-result').textContent, /Enter 1–8 context lines/);
+  prompt.value = '<img src=x onerror=alert(1)> violet river';
+  vm.runInContext('runBlindTrial()', app.context);
+  const cards = app.elements.get('blind-result').children[0].children;
+  assert.match(cards[0].children[1].innerHTML, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(cards[0].children[1].innerHTML, /<img/);
+  prompt.value = 'changed prompt';
+  vm.runInContext('clearBlindTrial()', app.context);
+  assert.equal(vm.runInContext('lastBlindTrial', app.context), null);
+  assert.equal(app.elements.get('blind-vote').hidden, true);
+  assert.equal(app.elements.get('blind-result').children.length, 0);
+  vm.runInContext('downloadBlindTrial()', app.context);
+  assert.equal(app.exports.length, 0);
+  assert.equal(app.saved.size, 0);
+});
+
+test('blind trial verifier detects altered outputs and context while exposing its rating limit', async () => {
+  const example = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial.json'), 'utf8'));
+  assert.equal(verifyBlindTrial(example).preferred, 'tie', 'the public fixture is synthetic, not a claimed human win');
+  const app = boot();
+  app.context.document.getElementById('blind-context').value = 'always';
+  app.context.document.getElementById('blind-prompt').value = 'never';
+  vm.runInContext('runBlindTrial()', app.context);
+  vm.runInContext('rateBlindTrial("tie")', app.context);
+  vm.runInContext('downloadBlindTrial()', app.context);
+  const report = JSON.parse(await app.exports[0].text());
+  const result = verifyBlindTrial(report);
+  assert.equal(result.preferred, 'tie');
+  assert.ok(result.withHistory < result.withoutHistory);
+  const score = structuredClone(report);
+  score.conditions.with_history.score.after += 0.01;
+  assert.throws(() => verifyBlindTrial(score), /after does not match/);
+  const response = structuredClone(report);
+  response.conditions.without_history.response_html += '<p>invented</p>';
+  assert.throws(() => verifyBlindTrial(response), /response does not match/);
+  const input = structuredClone(report);
+  input.context[0] = 'something else';
+  assert.throws(() => verifyBlindTrial(input), /does not match/);
+  const unrated = structuredClone(report);
+  unrated.choice = null;
+  assert.throws(() => verifyBlindTrial(unrated), /invalid assignment or choice/);
 });
 
 test('full-sequence lab has positive, zero, and negative controls from a fresh initial score', () => {
