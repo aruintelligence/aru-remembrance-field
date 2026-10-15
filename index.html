@@ -374,8 +374,11 @@
       <input id="fact-question" maxlength="200" autocomplete="off" placeholder="What is my favorite color?" oninput="invalidateEvidenceQuestion()">
       <div class="ledger-actions"><button type="button" onclick="askEvidence()">Ask with sources</button></div>
       <p id="fact-answer" role="status" aria-live="polite">Ask about a named fact, or record one below.</p>
-      <p>The question receipt contains a copy of your entire evidence ledger, including unrelated facts. Download it only if you want to inspect or share those assertions.</p>
-      <button type="button" id="evidence-receipt-download" onclick="downloadEvidenceReceipt()" disabled>Download question receipt JSON</button>
+      <p>For a sourced answer, download an excerpt containing only its cited assertions. It cannot show whether other ledger entries were left out. The full question receipt also supports refusals, but includes your entire ledger and may expose unrelated facts.</p>
+      <div class="ledger-actions">
+        <button type="button" id="evidence-excerpt-download" onclick="downloadEvidenceExcerpt()" disabled>Download cited answer excerpt JSON</button>
+        <button type="button" id="evidence-receipt-download" onclick="downloadEvidenceReceipt()" disabled>Download full question receipt JSON</button>
+      </div>
     </section>
     <label for="fact-key">Fact name</label>
     <input id="fact-key" maxlength="120" autocomplete="off" placeholder="favorite color">
@@ -994,34 +997,56 @@ function askEvidence() {
   else output.textContent = `Recorded answer for “${result.name}”: ${result.value}. Source ${result.sources.map(id => `#${id}`).join(", ")}. This is a user assertion, not an independently verified fact.`;
   lastEvidenceAnswer = {question, snapshot: JSON.stringify(Field.claims), answer: evidenceAnswerSummary(result)};
   document.getElementById("evidence-receipt-download").disabled = false;
+  document.getElementById("evidence-excerpt-download").disabled = result.kind !== "known";
 }
 
 function invalidateEvidenceAnswer() {
   lastEvidenceAnswer = null;
   document.getElementById("evidence-receipt-download").disabled = true;
+  document.getElementById("evidence-excerpt-download").disabled = true;
   document.getElementById("fact-answer").textContent = "The ledger changed. Ask again for a current sourced answer.";
 }
 
 function invalidateEvidenceQuestion() {
   lastEvidenceAnswer = null;
   document.getElementById("evidence-receipt-download").disabled = true;
+  document.getElementById("evidence-excerpt-download").disabled = true;
   document.getElementById("fact-answer").textContent = "Question changed. Ask again for a current sourced answer.";
 }
 
-function downloadEvidenceReceipt() {
-  if (!lastEvidenceAnswer) return;
+function currentEvidenceAnswer() {
+  if (!lastEvidenceAnswer) return null;
   if (lastEvidenceAnswer.question !== document.getElementById("fact-question").value) {
     invalidateEvidenceQuestion();
-    return;
+    return null;
   }
   if (lastEvidenceAnswer.snapshot !== JSON.stringify(Field.claims)) {
     invalidateEvidenceAnswer();
-    return;
+    return null;
   }
+  return lastEvidenceAnswer;
+}
+
+function downloadEvidenceExcerpt() {
+  const current = currentEvidenceAnswer();
+  if (!current || current.answer.kind !== "known") return;
+  const cited = new Set(current.answer.sources);
+  const records = JSON.parse(current.snapshot).filter(record => cited.has(record.id));
+  if (records.length !== cited.size) return;
+  downloadJSON({
+    format: "aru-evidence-answer-excerpt", version: 1,
+    model_revision: "aru-evidence-questions-1", scope: "cited-assertions-only",
+    question: current.question, records, answer: current.answer
+  }, "aru-evidence-answer-excerpt.json");
+}
+
+function downloadEvidenceReceipt() {
+  const current = currentEvidenceAnswer();
+  if (!current) return;
   downloadJSON({
     format: "aru-evidence-question-receipt", version: 1,
-    model_revision: "aru-evidence-questions-1", question: lastEvidenceAnswer.question,
-    records: JSON.parse(lastEvidenceAnswer.snapshot), answer: lastEvidenceAnswer.answer
+    model_revision: "aru-evidence-questions-1", question: current.question,
+    records: JSON.parse(current.snapshot), answer: current.answer
   }, "aru-evidence-question-receipt.json");
 }
 

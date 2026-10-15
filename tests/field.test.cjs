@@ -377,6 +377,54 @@ test('a question receipt replays a sourced answer using the full ledger without 
   assert.equal(app.elements.get('evidence-receipt-download').disabled, true);
 });
 
+test('answer excerpt includes every cited assertion and excludes unrelated private facts', async () => {
+  const app = boot();
+  app.fact('favorite color', 'teal');
+  app.fact('FAVORITE COLOR', 'teal');
+  app.fact('unrelated private assertion', 'hidden secret');
+  const before = JSON.stringify([...app.saved]);
+  const question = app.context.document.getElementById('fact-question');
+  question.value = 'What is my favorite color?';
+  vm.runInContext('askEvidence()', app.context);
+  assert.equal(app.elements.get('evidence-excerpt-download').disabled, false);
+  vm.runInContext('downloadEvidenceExcerpt()', app.context);
+  const excerptText = await app.exports[0].text();
+  const excerpt = JSON.parse(excerptText);
+  assert.equal(excerpt.format, 'aru-evidence-answer-excerpt');
+  assert.equal(excerpt.scope, 'cited-assertions-only');
+  assert.deepEqual(excerpt.records.map(record => record.id), [1, 2]);
+  assert.deepEqual(excerpt.answer.sources, [1, 2]);
+  assert.doesNotMatch(excerptText, /hidden secret|unrelated private assertion/);
+  assert.equal(verifyEvidenceReceipt(excerpt).scope, 'cited-assertions-only');
+  assert.equal(JSON.stringify([...app.saved]), before);
+
+  const omittedSource = structuredClone(excerpt);
+  omittedSource.records.pop();
+  assert.throws(() => verifyEvidenceReceipt(omittedSource), /recorded answer does not match/);
+  const unrelatedRecord = structuredClone(excerpt);
+  unrelatedRecord.records.push({id: 3, key: 'private', value: 'hidden', time: Date.now(), status: 'active'});
+  assert.throws(() => verifyEvidenceReceipt(unrelatedRecord), /exactly its cited active assertions/);
+  const supersededRecord = structuredClone(excerpt);
+  supersededRecord.records.push({...supersededRecord.records[0], id: 4, status: 'superseded'});
+  assert.throws(() => verifyEvidenceReceipt(supersededRecord), /exactly its cited active assertions/);
+
+  vm.runInContext('downloadEvidenceReceipt()', app.context);
+  const full = JSON.parse(await app.exports[1].text());
+  assert.equal(full.records.length, 3);
+  assert.equal(verifyEvidenceReceipt(full).scope, 'full-supplied-snapshot');
+  const withheldConflict = structuredClone(full);
+  withheldConflict.records.push({id: 4, key: 'favorite color', value: 'amber',
+    time: Date.now(), status: 'active'});
+  assert.equal(verifyEvidenceReceipt(excerpt).kind, 'known',
+    'a valid excerpt cannot establish that no conflicting assertion was omitted');
+  const model = require('../tools/benchmark-evidence.cjs').loadModel();
+  assert.equal(model.resolve(question.value, withheldConflict.records).kind, 'conflict');
+  question.value = 'What is another fact?';
+  vm.runInContext('downloadEvidenceExcerpt()', app.context);
+  assert.equal(app.exports.length, 2);
+  assert.equal(app.elements.get('evidence-excerpt-download').disabled, true);
+});
+
 test('ledger edits invalidate receipts; conflict receipts replay abstention', async () => {
   const app = boot();
   const question = app.context.document.getElementById('fact-question');
@@ -385,9 +433,11 @@ test('ledger edits invalidate receipts; conflict receipts replay abstention', as
   vm.runInContext('askEvidence()', app.context);
   app.fact('favorite color', 'amber');
   assert.equal(app.elements.get('evidence-receipt-download').disabled, true);
+  assert.equal(app.elements.get('evidence-excerpt-download').disabled, true);
   vm.runInContext('downloadEvidenceReceipt()', app.context);
   assert.equal(app.exports.length, 0);
   vm.runInContext('askEvidence()', app.context);
+  assert.equal(app.elements.get('evidence-excerpt-download').disabled, true, 'a refusal has no cited-answer excerpt');
   vm.runInContext('downloadEvidenceReceipt()', app.context);
   const receipt = JSON.parse(await app.exports[0].text());
   assert.deepEqual(receipt.answer, {kind: 'conflict', sources: [1, 2]});
@@ -407,6 +457,10 @@ test('receipt verifier rejects duplicate records and altered source citations', 
   const duplicate = structuredClone(fixture);
   duplicate.records.push({...duplicate.records[0]});
   assert.throws(() => verifyEvidenceReceipt(duplicate), /invalid or duplicate record/);
+  const excerpt = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  assert.equal(verifyEvidenceReceipt(excerpt).scope, 'cited-assertions-only');
+  excerpt.scope = 'full-ledger';
+  assert.throws(() => verifyEvidenceReceipt(excerpt), /unsupported excerpt scope/);
 });
 
 test('question matching abstains on unsupported grammar and ambiguous stored names', () => {

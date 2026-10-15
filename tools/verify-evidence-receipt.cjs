@@ -15,13 +15,17 @@ function requireValid(condition, message) {
 
 function verifyEvidenceReceipt(receipt, model = loadModel()) {
   requireValid(receipt && typeof receipt === "object" && !Array.isArray(receipt), "object expected");
-  const keys = ["format", "version", "model_revision", "question", "records", "answer"];
+  const excerpt = receipt.format === "aru-evidence-answer-excerpt";
+  const keys = ["format", "version", "model_revision", "question", "records", "answer",
+    ...(excerpt ? ["scope"] : [])];
   requireValid(keys.every(key => Object.hasOwn(receipt, key)) &&
     Object.keys(receipt).every(key => keys.includes(key)), "unexpected or missing receipt field");
-  requireValid(receipt.format === "aru-evidence-question-receipt" && receipt.version === 1 &&
+  requireValid((receipt.format === "aru-evidence-question-receipt" || excerpt) && receipt.version === 1 &&
     receipt.model_revision === MODEL_REVISION, "unsupported format or model revision");
+  if (excerpt) requireValid(receipt.scope === "cited-assertions-only", "unsupported excerpt scope");
   requireValid(typeof receipt.question === "string" && receipt.question.length <= 500, "invalid question");
-  requireValid(Array.isArray(receipt.records) && receipt.records.length <= 100, "at most 100 records allowed");
+  requireValid(Array.isArray(receipt.records) && receipt.records.length <= 100 &&
+    (!excerpt || receipt.records.length > 0), "invalid record count");
   const ids = new Set();
   for (const record of receipt.records) {
     requireValid(model.validClaim(record) && Object.keys(record).every(key => CLAIM_FIELDS.has(key)) &&
@@ -31,8 +35,16 @@ function verifyEvidenceReceipt(receipt, model = loadModel()) {
   }
   const computed = model.resolve(receipt.question, receipt.records);
   try { assert.deepStrictEqual(receipt.answer, computed); }
-  catch (_) { requireValid(false, "recorded answer does not match the local model and ledger snapshot"); }
-  return { kind: computed.kind, sources: computed.sources || [], records: ids.size, model_sha256: model.hash };
+  catch (_) { requireValid(false, "recorded answer does not match the local model and supplied records"); }
+  if (excerpt) {
+    requireValid(computed.kind === "known", "excerpt requires a sourced answer");
+    requireValid(receipt.records.every(record => record.status === "active") &&
+      receipt.records.length === computed.sources.length &&
+      receipt.records.every(record => computed.sources.includes(record.id)),
+    "excerpt must contain exactly its cited active assertions");
+  }
+  return { kind: computed.kind, sources: computed.sources || [], records: ids.size,
+    scope: excerpt ? "cited-assertions-only" : "full-supplied-snapshot", model_sha256: model.hash };
 }
 
 function readLimited(file) {
@@ -58,9 +70,9 @@ if (require.main === module) {
     try { receipt = JSON.parse(readLimited(process.argv[2])); }
     catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid receipt: file is not valid JSON"); throw error; }
     const result = verifyEvidenceReceipt(receipt);
-    console.log(`PASS: ${result.kind}; ${result.records} ledger records; ${result.sources.length} cited sources`);
+    console.log(`PASS: ${result.kind}; ${result.records} supplied records; ${result.sources.length} cited sources; scope ${result.scope}`);
     console.log(`Local model SHA-256: ${result.model_sha256}`);
-    console.log("This checks the answer against the supplied snapshot, not its completeness, origin, or factual truth.");
+    console.log("This checks the answer against supplied records, not omitted ledger entries, origin, or factual truth.");
   } catch (error) {
     console.error(`FAIL: ${error.message}`);
     process.exitCode = 1;
