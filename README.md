@@ -26,6 +26,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A response layer framed by Inward Physics™ concepts
 - A dependency-free, inspectable browser implementation
 - An in-app receipt for each modeled score change and a local JSON export
+- A memory ablation lab that previews the same draft with and without prior history
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -51,13 +52,21 @@ The rules are fixed in `updateCoherence` in `index.html`: substring matches for 
 
 Entries and the score are saved in this browser's `localStorage`. The panel can download a JSON copy, including text you entered, or erase this app's local state. The app does not send entries to a server. Browser settings, extensions, or the device's other users may still affect local privacy, and clearing site data also removes the saved state. The export is a snapshot for inspection; importing it is not implemented.
 
+## Test the memory claim
+
+Open **Inspect model state and last change**, write a draft in the input area, and select **Compare draft without saving**. The panel calculates the next score and response twice, starting from the same current μ and timestamp. The control withholds earlier stored memory and user messages. It does not erase, submit, or change your draft. The two response previews use the same template and differ only through the score and memory-dependent themes and echoes. Editing the draft clears an older comparison.
+
+After a normal submission, the last-change receipt also shows the matched control score and the immediate history effect (`with history − without history`). At the floor or ceiling, clamping can hide a difference between the underlying terms. This is a **one-step software ablation**: because both branches start from the already accumulated μ, it does not estimate a whole alternate lifetime of the field. The JSON export includes that control receipt.
+
+The [ablation protocol](research/ablation-protocol.md) lists exact positive, negative, and contradiction probes, including expected numbers and limits on interpretation. These probes establish observable properties of the code, not a scientific validation of the project's broader theory.
+
 Run the small regression suite with Node.js:
 
 ```bash
 node tests/field.test.cjs
 ```
 
-It covers first and repeated input scoring, corrupted saved data, safe display of restored text, and local data controls.
+It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, draft non-mutation, safe preview and restored text display, corrupted saved data, and local data controls.
 
 ## Research question
 

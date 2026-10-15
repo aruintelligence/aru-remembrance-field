@@ -259,7 +259,7 @@
       border: 1px solid rgba(34,211,238,0.35);
       border-radius: 14px;
       pointer-events: auto;
-      max-height: min(38vh, 350px);
+      max-height: min(52vh, 540px);
       overflow-y: auto;
     }
     .inspector summary { cursor: pointer; color: #a5f3fc; font-weight: 700; }
@@ -268,6 +268,12 @@
     .inspector-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .inspector button { padding: 0.45rem 0.7rem; background: #172554; color: #e0f2fe; border: 1px solid #38bdf8; border-radius: 8px; cursor: pointer; }
     .inspector button:focus-visible, .inspector summary:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
+    .comparison { margin: 0.85rem 0; padding: 0.75rem; border: 1px solid rgba(34,211,238,0.3); border-radius: 10px; background: rgba(8,20,43,0.9); }
+    .comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; margin-top: 0.65rem; }
+    .comparison-card { padding: 0.65rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(3,7,18,0.9); min-width: 0; overflow-wrap: anywhere; }
+    .comparison-card h3 { color: #a5f3fc; font-size: 0.83rem; margin-bottom: 0.45rem; }
+    .comparison-card .preview { font-size: 0.78rem; line-height: 1.5; color: #e2e8f0; }
+    @media (max-width: 580px) { .comparison-grid { grid-template-columns: 1fr; } }
 
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; scroll-behavior: auto !important; }
@@ -307,6 +313,10 @@
     <p>μ is a scripted score, not a measure of a person or of consciousness. The breakdown uses prior memory and messages only; this input cannot match itself.</p>
     <p id="transition-summary">No input has changed the model yet.</p>
     <ol id="transition-terms"></ol>
+    <p id="transition-comparison"></p>
+    <p><strong>Memory ablation lab:</strong> compare a draft against the same model with earlier memory and messages withheld. Both start at the current μ. This isolates the next step only; it does not replay a history without memory.</p>
+    <button type="button" onclick="compareDraft()">Compare draft without saving</button>
+    <div id="draft-comparison" role="status" aria-live="polite"></div>
     <p id="storage-status">Your entries stay in this browser unless you download them. Export includes text you entered.</p>
     <div class="inspector-actions">
       <button type="button" onclick="downloadState()">Download local state JSON</button>
@@ -428,8 +438,8 @@ function tokenize(text) {
 
 function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 function now() { return Date.now(); }
-function ageFactor(ts) {
-  const hours = Math.max(0, (now() - Number(ts)) / 36e5);
+function ageFactor(ts, at = now()) {
+  const hours = Math.max(0, (at - Number(ts)) / 36e5);
   return Math.exp(-hours / 42);
 }
 
@@ -488,30 +498,30 @@ const MemoryEngine = {
     });
   },
 
-  recent(n = 4) { return Field.memory.slice(-n); },
+  recent(n = 4, memory = Field.memory) { return memory.slice(-n); },
 
-  themes(limit = 5) {
+  themes(limit = 5, memory = Field.memory, at = now()) {
     const freq = {};
     const stop = new Set(["that","with","this","from","have","will","been","they","them","just","what","your","into","about","there","their","would","could","should","field","remember","memory","coherence","signal","thing","really"]);
-    Field.memory.slice(-32).forEach(m => {
+    memory.slice(-32).forEach(m => {
       (m.tokens || []).forEach(t => {
-        if (!stop.has(t)) freq[t] = (freq[t] || 0) + (m.weight || 1) * ageFactor(m.time);
+        if (!stop.has(t)) freq[t] = (freq[t] || 0) + (m.weight || 1) * ageFactor(m.time, at);
       });
     });
     return Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,limit).map(e=>e[0]);
   },
 
-  resonance(input) {
+  resonance(input, memory = Field.memory, at = now()) {
     const tokens = tokenize(input);
-    return Field.memory.slice(-22).reduce((acc, m) => {
-      return acc + similarity(tokens, m.tokens || []) * (m.weight || 1) * ageFactor(m.time) * 0.05;
+    return memory.slice(-22).reduce((acc, m) => {
+      return acc + similarity(tokens, m.tokens || []) * (m.weight || 1) * ageFactor(m.time, at) * 0.05;
     }, 0);
   },
 
-  echoes(input, limit = 3) {
+  echoes(input, limit = 3, memory = Field.memory, at = now()) {
     const tokens = tokenize(input);
-    return Field.memory
-      .map(m => ({ text: m.text, score: similarity(tokens, m.tokens || []) * (m.weight || 1) * ageFactor(m.time) }))
+    return memory
+      .map(m => ({ text: m.text, score: similarity(tokens, m.tokens || []) * (m.weight || 1) * ageFactor(m.time, at) }))
       .filter(x => x.score > 0.16)
       .sort((a,b) => b.score - a.score)
       .slice(0, limit);
@@ -528,9 +538,9 @@ function detectIntent(input) {
   return "statement";
 }
 
-function contradictionPenalty(input) {
+function contradictionPenalty(input, memory = Field.memory) {
   const lower = input.toLowerCase();
-  const recent = Field.memory.slice(-10).map(m => m.text.toLowerCase());
+  const recent = memory.slice(-10).map(m => m.text.toLowerCase());
   let penalty = 0;
   if (lower.includes("always") && recent.some(t => t.includes("never"))) penalty += 0.03;
   if (lower.includes("never") && recent.some(t => t.includes("always"))) penalty += 0.03;
@@ -539,15 +549,15 @@ function contradictionPenalty(input) {
   return penalty;
 }
 
-function repetitionPenalty(input) {
+function repetitionPenalty(input, messages = Field.messages) {
   const cleaned = input.toLowerCase().replace(/[^\w\s]/g, "").trim();
-  const recentUser = Field.messages.filter(m => m.type === "user").slice(-5).map(m => (m.text || "").toLowerCase().replace(/[^\w\s]/g, "").trim());
+  const recentUser = messages.filter(m => m.type === "user").slice(-5).map(m => (m.text || "").toLowerCase().replace(/[^\w\s]/g, "").trim());
   const repeats = recentUser.filter(x => x === cleaned).length;
   return repeats ? repeats * 0.03 : 0;
 }
 
-function updateCoherence(input) {
-  const before = Field.coherence;
+function evaluateCoherence(input, state, at) {
+  const before = state.coherence;
   const terms = [];
   let delta = 0;
   const addTerm = (label, value) => {
@@ -571,22 +581,41 @@ function updateCoherence(input) {
   addTerm("Length rule", (tokens.length > 8 ? 0.012 : 0) + (tokens.length > 18 ? 0.016 : 0));
   addTerm("Intent rule", intent === "question" ? 0.01 : intent === "exploration" ? 0.014 : intent === "absolute" ? -0.015 : 0);
 
-  addTerm("Prior memory overlap", MemoryEngine.resonance(input));
-  addTerm("Contradiction rule", -contradictionPenalty(input));
-  addTerm("Prior repetition rule", -repetitionPenalty(input));
+  addTerm("Prior memory overlap", MemoryEngine.resonance(input, state.memory, at));
+  addTerm("Contradiction rule", -contradictionPenalty(input, state.memory));
+  addTerm("Prior repetition rule", -repetitionPenalty(input, state.messages));
   addTerm("Baseline drift", -(0.008 + before * 0.009));
 
-  Field.coherence = clamp(before + delta, 0.35, 0.995);
-  Field.lastTransition = { before, delta, after: Field.coherence, terms, clamped: Field.coherence !== before + delta };
+  const after = clamp(before + delta, 0.35, 0.995);
+  return { before, delta, after, terms, clamped: after !== before + delta };
+}
+
+function compareInput(input, at = now()) {
+  // Hold the starting score and timestamp fixed. Only prior memory and message
+  // history are removed in the control; neither branch mutates stored state.
+  const state = { coherence: Field.coherence, memory: Field.memory, messages: Field.messages };
+  const actual = evaluateCoherence(input, state, at);
+  const control = evaluateCoherence(input, { coherence: state.coherence, memory: [], messages: [] }, at);
+  return { actual, control, effect: actual.after - control.after, at };
+}
+
+function updateCoherence(input) {
+  const comparison = compareInput(input);
+  Field.coherence = comparison.actual.after;
+  Field.lastTransition = {
+    ...comparison.actual,
+    evaluatedAt: comparison.at,
+    control: { after: comparison.control.after, delta: comparison.control.delta },
+    memoryEffect: comparison.effect
+  };
   Field.save();
   return Field.lastTransition;
 }
 
-function getResponse(input, autonomous = false) {
-  const c = Field.coherence;
-  const themes = MemoryEngine.themes();
-  const echoes = MemoryEngine.echoes(input, 3);
-  const recent = MemoryEngine.recent(3);
+function getResponse(input, autonomous = false, c = Field.coherence, memory = Field.memory, at = now()) {
+  const themes = MemoryEngine.themes(5, memory, at);
+  const echoes = MemoryEngine.echoes(input, 3, memory, at);
+  const recent = MemoryEngine.recent(3, memory);
   const themeText = themes.length ? escapeHtml(themes.join(", ")) : "remembrance, continuity, signal";
 
   const blocks = [];
@@ -736,8 +765,10 @@ function updateUI() {
 function renderInspector() {
   const summary = document.getElementById("transition-summary");
   const list = document.getElementById("transition-terms");
+  const comparison = document.getElementById("transition-comparison");
   const transition = Field.lastTransition;
   list.replaceChildren();
+  comparison.textContent = "";
   if (transition && Number.isFinite(transition.before) && Number.isFinite(transition.delta) && Number.isFinite(transition.after) && Array.isArray(transition.terms)) {
     summary.textContent = `Model μ: ${transition.before.toFixed(4)} → ${transition.after.toFixed(4)} (sum ${transition.delta >= 0 ? "+" : ""}${transition.delta.toFixed(4)}${transition.clamped ? ", limited to model range" : ""}).`;
     transition.terms.forEach(term => {
@@ -746,12 +777,52 @@ function renderInspector() {
       item.textContent = `${term.label}: ${term.value >= 0 ? "+" : ""}${term.value.toFixed(4)}`;
       list.appendChild(item);
     });
+    if (transition.control && Number.isFinite(transition.control.after) && Number.isFinite(transition.memoryEffect)) {
+      comparison.textContent = `Same starting μ ${transition.before.toFixed(4)}: with prior history ${transition.after.toFixed(4)}, without prior history ${transition.control.after.toFixed(4)}. Immediate history effect: ${transition.memoryEffect >= 0 ? "+" : ""}${transition.memoryEffect.toFixed(4)}. The comparison does not reset the accumulated starting score.`;
+    }
   } else {
     summary.textContent = "No input has changed the model yet.";
   }
   document.getElementById("storage-status").textContent = Field.storageAvailable
     ? "Stored locally in this browser. Downloaded JSON includes your entered text; nothing is uploaded by this app."
     : "Browser storage is unavailable. This session still works, but it will not persist after closing.";
+}
+
+function compareDraft() {
+  const output = document.getElementById("draft-comparison");
+  const input = document.getElementById("input").value.trim();
+  output.replaceChildren();
+  if (!input) {
+    output.textContent = "Enter a draft below, then select Compare draft without saving.";
+    return;
+  }
+
+  const { actual, control, effect, at } = compareInput(input);
+  const panel = document.createElement("div");
+  panel.className = "comparison";
+  const summary = document.createElement("p");
+  summary.textContent = `Predicted μ: ${actual.after.toFixed(4)} with prior history; ${control.after.toFixed(4)} without it. Immediate difference: ${effect >= 0 ? "+" : ""}${effect.toFixed(4)}. Draft and stored state were not changed.`;
+  panel.appendChild(summary);
+
+  const grid = document.createElement("div");
+  grid.className = "comparison-grid";
+  for (const [title, score, memory] of [
+    ["With prior history", actual.after, Field.memory],
+    ["Without prior history", control.after, []]
+  ]) {
+    const card = document.createElement("section");
+    card.className = "comparison-card";
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const preview = document.createElement("div");
+    preview.className = "preview";
+    preview.innerHTML = getResponse(input, false, score, memory, at);
+    card.appendChild(heading);
+    card.appendChild(preview);
+    grid.appendChild(card);
+  }
+  panel.appendChild(grid);
+  output.appendChild(panel);
 }
 
 function downloadState() {
@@ -780,6 +851,7 @@ function resetField() {
 }
 
 function autoResize(el) {
+  document.getElementById("draft-comparison").replaceChildren();
   el.style.height = "52px";
   el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
 }
@@ -800,6 +872,7 @@ function ignite() {
 
   if (!input) return;
 
+  document.getElementById("draft-comparison").replaceChildren();
   Field.busy = true;
   btn.disabled = true;
 
@@ -810,7 +883,7 @@ function ignite() {
   // either memory or message history. Otherwise every input echoes itself and
   // is counted as a repetition on its first appearance.
   updateCoherence(input);
-  const responseText = getResponse(input);
+  const responseText = getResponse(input, false, Field.coherence, Field.memory, Field.lastTransition.evaluatedAt);
   addMessage("user", escapeHtml(input), input);
 
   const typingEl = document.createElement("div");

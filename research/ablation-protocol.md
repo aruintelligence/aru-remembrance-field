@@ -1,0 +1,29 @@
+# Memory ablation protocol
+
+This protocol tests a narrow, falsifiable behavior of the ĀRU Remembrance Field: whether the code's **next** modeled score depends on earlier browser history. It does not test consciousness, human memory, or a physical field.
+
+## Intervention
+
+For each input, run `evaluateCoherence` twice with the same starting μ and millisecond timestamp. The first run receives the prior memory records and messages. The control receives empty memory and messages. Compare the resulting *clamped* scores (`with history − without history`). Both evaluations are pure; the browser's saved state changes only when the visitor submits the input normally.
+
+The response previews follow the same intervention: they use each branch's resulting μ and the corresponding prior memory. A normal submission first evaluates and renders its response from prior history, then adds the current input to history. This prevents self-matching.
+
+## Fixed probes
+
+Use starting μ = `0.64` and timestamp `1700000000000` milliseconds. Each row is a separate fixture, not a sequence. The matched memory record has tokens `["violet", "river"]`, weight `2`, and that same timestamp. The contradiction fixture contains the prior memory text `always` and one prior user message `never`.
+
+| Probe | Current input | Prior history | With history μ | Without history μ | Effect |
+| --- | --- | --- | ---: | ---: | ---: |
+| Positive | `violet river` | Matching memory record | 0.72624 | 0.62624 | +0.10000 |
+| Negative control | `amber comet` | Same matching memory record | 0.62624 | 0.62624 | 0 |
+| Adversarial rule | `never` | `always` memory and `never` user message | 0.55124 | 0.61124 | −0.06000 |
+
+The positive probe's overlap term is `1 × 2 × 0.05 = 0.10`. All three rows include the baseline drift `−(0.008 + 0.64 × 0.009) = −0.01376`. The adversarial probe includes a `−0.015` intent term, a `−0.03` contradiction term, and a `−0.03` repetition term. The comparison therefore shows when prior history raises, leaves unchanged, or lowers this particular model score.
+
+## Reproduce and challenge
+
+Run `node tests/field.test.cjs` from the repository root. The fixed probes use a frozen timestamp and explicit in-memory fixtures. The test suite also checks that a draft comparison makes no storage writes, does not change the draft or score, and escapes restored text in response previews. In the [live demo](https://aruintelligence.github.io/aru-remembrance-field/), enter a phrase, submit it, then type that phrase again and use **Compare draft without saving** to inspect the immediate effect for your own state.
+
+Counterexamples matter. Unrelated words should have no overlap effect, but substring word rules can still change both branches equally. A threshold clamp can make the displayed effect zero even when unclamped terms differ. The contradiction rule checks a few literal word pairs; it does not understand semantic contradiction. Response text is scripted and can change because a score crosses a display threshold, without any learned language understanding.
+
+The ablation holds the *current* score fixed. Since that score may already reflect past inputs, the experiment cannot identify the effect of removing all historical memory from inception. Nor does it establish a measurable benefit in a human task. Those require a separate baseline, task-specific outcomes, blinded evaluation, and independent replication.
