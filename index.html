@@ -344,6 +344,8 @@
     <h1>Interactive Remembrance Field</h1>
     <p>A visual simulation. Inspect exactly how each input changes its modeled state.</p>
     <button class="motion-toggle" id="motion-toggle" type="button" role="switch" aria-checked="true" onclick="toggleVisualMotion()">Visual motion: <span id="motion-state" aria-hidden="true">on</span></button>
+    <button class="motion-toggle" id="session-toggle" type="button" role="switch" aria-checked="false" onclick="toggleSessionOnly()">Session-only: <span id="session-state" aria-hidden="true">off</span></button>
+    <p id="session-mode" role="status" aria-live="polite"></p>
   </div>
 
   <details class="inspector" id="inspector">
@@ -469,6 +471,7 @@ const STORAGE_KEYS = {
   claimCounter: "aru_fact_counter"
 };
 const PROOF_MODEL_REVISION = "aru-field-heuristics-2";
+let sessionOnly = false;
 
 function readStored(key, fallback) {
   try {
@@ -548,6 +551,7 @@ const Field = {
   storageAvailable: canStore(),
   busy: false,
   save() {
+    if (sessionOnly) return;
     try {
       localStorage.setItem(STORAGE_KEYS.coherence, JSON.stringify(this.coherence));
       localStorage.setItem(STORAGE_KEYS.memory, JSON.stringify(this.memory.slice(-100)));
@@ -976,6 +980,27 @@ function updateUI() {
   if (motionPaused() && !document.hidden) paintField();
 }
 
+function toggleSessionOnly() {
+  if (sessionOnly) {
+    if (!window.confirm("Leave session-only mode and discard this session's unsaved changes? Your previously saved browser state will return.")) return;
+    window.location.reload();
+    return;
+  }
+  if (Field.busy) {
+    document.getElementById("session-mode").textContent = "Wait for the current submission to finish before starting session-only mode.";
+    return;
+  }
+  sessionOnly = true;
+  pendingStateImport = null;
+  ++stateImportRequest;
+  document.getElementById("state-import-apply").disabled = true;
+  document.getElementById("state-import-preview").textContent = "Leave session-only mode before replacing saved browser state.";
+  document.getElementById("session-toggle").setAttribute("aria-checked", "true");
+  document.getElementById("session-state").textContent = "on";
+  document.getElementById("session-mode").textContent = "New entries stay in memory only. Leave this mode to discard them and return to your saved state.";
+  renderInspector();
+}
+
 function renderInspector() {
   const summary = document.getElementById("transition-summary");
   const list = document.getElementById("transition-terms");
@@ -997,14 +1022,16 @@ function renderInspector() {
   } else {
     summary.textContent = "No input has changed the model yet.";
   }
-  document.getElementById("storage-status").textContent = Field.storageAvailable
-    ? "Stored locally in this browser. Downloaded JSON includes your entered text; nothing is uploaded by this app."
-    : "Browser storage is unavailable. This session still works, but it will not persist after closing.";
+  document.getElementById("storage-status").textContent = sessionOnly
+    ? "Session-only is on. New entries and score changes are not saved. Earlier stored state remains on this device. Downloads include current session text if you choose to save them."
+    : Field.storageAvailable
+      ? "Stored locally in this browser. Downloaded JSON includes your entered text; nothing is uploaded by this app."
+      : "Browser storage is unavailable. This session still works, but it will not persist after closing.";
   const hasProof = Field.lastProof && Field.lastProof.schema_version === 1 && typeof Field.lastProof.input === "string";
   document.getElementById("proof-download").disabled = !hasProof;
   document.getElementById("proof-erase").disabled = !hasProof;
   document.getElementById("proof-status").textContent = hasProof
-    ? "The last proof copies this input and up to 22 earlier memory texts and five user messages. It stays locally until replaced or erased. Download it only if you want to share those texts. It checks model consistency, not authenticity."
+    ? `The last proof copies this input and up to 22 earlier memory texts and five user messages. ${sessionOnly ? "New proofs stay in memory until you leave this session." : "It stays locally until replaced or erased."} Download it only if you want to share those texts. It checks model consistency, not authenticity.`
     : "Submit an input to create a portable proof of its score change.";
 }
 
@@ -1161,7 +1188,9 @@ function renderLedger() {
 }
 
 function showFactResult(key, prefix = "") {
-  document.getElementById("ledger-result").textContent = `${prefix}${describeFact(key)}${Field.storageAvailable ? "" : " Browser storage is unavailable; these records last only for this session."}`;
+  const status = sessionOnly ? " Session-only mode: new records disappear when you leave."
+    : Field.storageAvailable ? "" : " Browser storage is unavailable; these records last only for this session.";
+  document.getElementById("ledger-result").textContent = `${prefix}${describeFact(key)}${status}`;
 }
 
 function invalidateFactImport() {
@@ -1266,7 +1295,7 @@ function applyFactImport() {
   document.getElementById("fact-import-apply").disabled = true;
   document.getElementById("fact-import-preview").textContent = `Imported ${plan.incoming.length} records. ${plan.conflicts.length} affected name${plan.conflicts.length === 1 ? "" : "s"} now have conflicting current values; use a source explicitly to resolve each conflict.`;
   renderLedger();
-  document.getElementById("ledger-result").textContent = `Import complete. ${Field.storageAvailable ? "Saved in this browser." : "Browser storage is unavailable; these records last only for this session."}`;
+  document.getElementById("ledger-result").textContent = `Import complete. ${sessionOnly ? "Session-only mode: imported records disappear when you leave." : Field.storageAvailable ? "Saved in this browser." : "Browser storage is unavailable; these records last only for this session."}`;
 }
 
 function rememberFact() {
@@ -1617,6 +1646,7 @@ async function previewStateImport() {
   const request = ++stateImportRequest;
   pendingStateImport = null;
   apply.disabled = true;
+  if (sessionOnly) { output.textContent = "Leave session-only mode before replacing saved browser state."; return; }
   const file = input.files && input.files[0];
   if (!file) { output.textContent = "Choose a full state JSON file to preview."; return; }
   if (file.size > STATE_IMPORT_LIMIT) { output.textContent = "State file exceeds the 4 MiB limit."; return; }
@@ -1634,6 +1664,7 @@ async function previewStateImport() {
 }
 
 function applyStateImport() {
+  if (sessionOnly) return;
   const plan = pendingStateImport;
   if (!plan) return;
   const output = document.getElementById("state-import-preview");
