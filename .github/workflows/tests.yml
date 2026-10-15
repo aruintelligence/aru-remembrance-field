@@ -13,5 +13,7 @@ jobs:
         with:
           node-version: '22'
       - run: node tests/field.test.cjs
+      - run: node tests/benchmark.test.cjs
+      - run: node tools/benchmark-evidence.cjs research/evidence-challenge.json
       - run: node tools/verify-proof.cjs research/example-proof.json
       - run: node tools/verify-trajectory.cjs research/example-trajectory.json
