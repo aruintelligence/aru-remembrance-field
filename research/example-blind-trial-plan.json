@@ -1,0 +1,14 @@
+{
+  "format": "aru-blind-trial-plan",
+  "version": 1,
+  "model_revision": "aru-field-heuristics-2",
+  "primary_outcome": "history_win_fraction_all",
+  "cases": [
+    {
+      "id": "synthetic-example",
+      "context": ["violet river"],
+      "prompt": "violet river",
+      "ratings": 1
+    }
+  ]
+}

@@ -14,11 +14,63 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function analyzeTrialFiles(files) {
+function exactKeys(value, keys) {
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+}
+
+function loadTrialPlan(file) {
+  if (typeof file !== 'string' || !file) throw new Error('Provide a trial plan JSON file');
+  let contents;
+  try {
+    if (fs.statSync(file).size > MAX_FILE_BYTES) throw new Error('exceeds 1 MiB');
+    contents = fs.readFileSync(file);
+    if (contents.length > MAX_FILE_BYTES) throw new Error('exceeds 1 MiB');
+  } catch (error) {
+    throw new Error(`Trial plan ${file}: ${error.message}`);
+  }
+  let plan;
+  try { plan = JSON.parse(contents.toString('utf8')); }
+  catch (error) { throw new Error(`Trial plan ${file}: invalid JSON: ${error.message}`); }
+  if (!exactKeys(plan, ['format', 'version', 'model_revision', 'primary_outcome', 'cases']) ||
+    plan.format !== 'aru-blind-trial-plan' || plan.version !== 1 ||
+    plan.model_revision !== 'aru-field-heuristics-2' ||
+    plan.primary_outcome !== 'history_win_fraction_all' ||
+    !Array.isArray(plan.cases) || plan.cases.length < 1 || plan.cases.length > 50) {
+    throw new Error(`Trial plan ${file}: unsupported format, outcome, or case count`);
+  }
+  const byInput = new Map();
+  const ids = new Set();
+  let expected = 0;
+  for (const entry of plan.cases) {
+    if (!exactKeys(entry, ['id', 'context', 'prompt', 'ratings']) ||
+      typeof entry.id !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(entry.id) ||
+      ids.has(entry.id) || !Number.isSafeInteger(entry.ratings) ||
+      entry.ratings < 1 || entry.ratings > MAX_FILES ||
+      !Array.isArray(entry.context) || entry.context.length < 1 || entry.context.length > 8 ||
+      !entry.context.every(line => typeof line === 'string' && line.trim() === line &&
+        line.length >= 1 && line.length <= 500 && !/[\r\n]/.test(line)) ||
+      typeof entry.prompt !== 'string' || entry.prompt.trim() !== entry.prompt ||
+      entry.prompt.length < 1 || entry.prompt.length > 500) {
+      throw new Error(`Trial plan ${file}: invalid case or repeated ID`);
+    }
+    const key = JSON.stringify([entry.context, entry.prompt]);
+    if (byInput.has(key)) throw new Error(`Trial plan ${file}: repeated context and prompt`);
+    byInput.set(key, {id: entry.id, expected: entry.ratings, received: 0,
+      history_wins: 0, control_wins: 0, ties: 0});
+    ids.add(entry.id);
+    expected += entry.ratings;
+  }
+  if (expected > MAX_FILES) throw new Error(`Trial plan ${file}: exceeds ${MAX_FILES} rated trials`);
+  return {sha256: sha256(contents), expected, byInput};
+}
+
+function analyzeTrialFiles(files, {planFile} = {}) {
   if (!Array.isArray(files) || files.length < 1 || files.length > MAX_FILES ||
     files.some(file => typeof file !== 'string' || !file)) {
     throw new Error(`Provide 1–${MAX_FILES} trial JSON files`);
   }
+  const plan = planFile === undefined ? null : loadTrialPlan(planFile);
 
   const summary = {
     trials: 0, history_wins: 0, control_wins: 0, ties: 0, non_ties: 0,
@@ -41,17 +93,31 @@ function analyzeTrialFiles(files) {
       if (totalBytes > MAX_TOTAL_BYTES) throw new Error('exceeds 16 MiB total');
       const report = JSON.parse(contents.toString('utf8'));
       const {preferred} = verifyBlindTrial(report);
+      let slot;
+      if (plan) {
+        slot = plan.byInput.get(JSON.stringify([report.context, report.prompt]));
+        if (!slot) throw new Error('context and prompt are not in the trial plan');
+        if (++slot.received > slot.expected) throw new Error(`trial plan case ${slot.id} exceeds ${slot.expected} ratings`);
+      }
       const position = report.assignment.A === 'with_history' ? 'history_as_A' : 'history_as_B';
       const outcome = preferred === 'with_history' ? 'history_wins' :
         preferred === 'without_history' ? 'control_wins' : 'ties';
       summary.trials++;
       summary[outcome]++;
+      if (slot) slot[outcome]++;
       summary[position].trials++;
       summary[position][outcome]++;
       const hash = sha256(contents);
       hashes.set(hash, (hashes.get(hash) || 0) + 1);
     } catch (error) {
       throw new Error(`${file}: ${error.message}`);
+    }
+  }
+  if (plan) {
+    const missing = [...plan.byInput.values()].filter(slot => slot.received < slot.expected);
+    if (missing.length) {
+      throw new Error(`Incomplete trial plan: ${missing.map(slot =>
+        `${slot.id} ${slot.received}/${slot.expected}`).join(', ')}`);
     }
   }
   summary.non_ties = summary.history_wins + summary.control_wins;
@@ -62,11 +128,17 @@ function analyzeTrialFiles(files) {
   const duplicates = [...hashes].filter(([, copies]) => copies > 1)
     .map(([sha256, copies]) => ({sha256, copies})).sort((a, b) => a.sha256.localeCompare(b.sha256));
   const dataset_sha256 = sha256([...hashes].flatMap(([hash, copies]) => Array(copies).fill(hash)).sort().join('\n'));
-  return {
+  const result = {
     format: 'aru-blind-trial-batch-analysis', version: 1,
     model_revision: 'aru-field-heuristics-2', dataset_sha256, summary, duplicates,
     limitation: LIMITATION
   };
+  if (plan) result.plan = {
+    sha256: plan.sha256, expected_trials: plan.expected, cases: plan.byInput.size,
+    coverage: [...plan.byInput.values()].map(({id, expected, received, history_wins, control_wins, ties}) =>
+      ({id, expected, received, history_wins, control_wins, ties}))
+  };
+  return result;
 }
 
 function formatText(report) {
@@ -78,6 +150,11 @@ function formatText(report) {
     `Among ${s.non_ties} non-ties: history ${s.history_wins}/${s.non_ties} (${s.non_ties ? pct(s.history_win_fraction_non_ties) : 'undefined'}).`,
     `History shown as A: ${s.history_as_A.trials} (history ${s.history_as_A.history_wins}, control ${s.history_as_A.control_wins}, tie ${s.history_as_A.ties}); as B: ${s.history_as_B.trials} (history ${s.history_as_B.history_wins}, control ${s.history_as_B.control_wins}, tie ${s.history_as_B.ties}).`,
     `Byte-identical report copies: ${s.identical_copies} (counted in the totals; ${s.distinct_file_contents} distinct file contents).`,
+    ...(report.plan ? [
+      `Plan complete: ${s.trials}/${report.plan.expected_trials} rated slots across ${report.plan.cases} case${report.plan.cases === 1 ? '' : 's'}. Plan SHA-256: ${report.plan.sha256}`,
+      ...report.plan.coverage.map(row =>
+        `  ${row.id}: ${row.received}/${row.expected}; history ${row.history_wins}, control ${row.control_wins}, tie ${row.ties}.`)
+    ] : []),
     `Dataset SHA-256: ${report.dataset_sha256}`,
     report.limitation
   ].join('\n');
@@ -86,17 +163,35 @@ function formatText(report) {
 if (require.main === module) {
   try {
     const args = process.argv.slice(2);
-    const json = args[0] === '--json';
-    const files = json ? args.slice(1) : args;
-    if (files.some(file => file.startsWith('--'))) {
-      throw new Error('Usage: node tools/analyze-blind-trials.cjs [--json] <trial1.json> [trial2.json ...]');
+    if (args[0] === '--check-plan') {
+      if (args.length !== 2) throw new Error('Usage: node tools/analyze-blind-trials.cjs --check-plan plan.json');
+      const plan = loadTrialPlan(args[1]);
+      console.log(`Valid plan: ${plan.byInput.size} case${plan.byInput.size === 1 ? '' : 's'}, ${plan.expected} expected rating${plan.expected === 1 ? '' : 's'}. Plan SHA-256: ${plan.sha256}`);
+    } else {
+      let json = false, planFile;
+      while (args[0] === '--json' || args[0] === '--plan') {
+        const option = args.shift();
+        if (option === '--json') {
+          if (json) throw new Error('Use --json only once');
+          json = true;
+        } else {
+          if (planFile !== undefined || !args[0] || args[0].startsWith('--')) {
+            throw new Error('Use --plan once with a JSON file');
+          }
+          planFile = args.shift();
+        }
+      }
+      const files = args;
+      if (files.some(file => file.startsWith('--'))) {
+        throw new Error('Usage: node tools/analyze-blind-trials.cjs [--json] [--plan plan.json] <trial1.json> [trial2.json ...]');
+      }
+      const result = analyzeTrialFiles(files, {planFile});
+      console.log(json ? JSON.stringify(result, null, 2) : formatText(result));
     }
-    const result = analyzeTrialFiles(files);
-    console.log(json ? JSON.stringify(result, null, 2) : formatText(result));
   } catch (error) {
     console.error(`FAIL: ${error.message}`);
     process.exitCode = 2;
   }
 }
 
-module.exports = {analyzeTrialFiles, formatText};
+module.exports = {analyzeTrialFiles, formatText, loadTrialPlan};

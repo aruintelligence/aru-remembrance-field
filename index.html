@@ -297,6 +297,8 @@
     .trajectory-lab h2 { color: #a5f3fc; font-size: 0.95rem; }
     .trajectory-lab label { display: block; margin: 0.55rem 0 0.35rem; font-size: 0.82rem; }
     .trajectory-lab textarea { display: block; width: 100%; min-height: 100px; }
+    .trajectory-lab input[type="file"], .trajectory-lab select { display: block; width: 100%; min-height: 44px; padding: 0.5rem; background: #0b1530; color: #e0f2fe; border: 1px solid #38bdf8; border-radius: 8px; }
+    .trajectory-lab input[type="file"]:focus-visible, .trajectory-lab select:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
     .trajectory-scroll { overflow-x: auto; margin-top: 0.6rem; }
     .trajectory-scroll table { width: 100%; border-collapse: collapse; font: 0.76rem/1.4 'JetBrains Mono', monospace; }
     .trajectory-scroll th, .trajectory-scroll td { text-align: left; padding: 0.35rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
@@ -367,6 +369,12 @@
     <section class="trajectory-lab">
       <h2>Blind response trial</h2>
       <p>Test whether the scripted response with prior history is more useful to a reader. Enter 1–8 context lines and a final prompt. The two responses appear as A and B in random order without labels or scores until a choice is made. For a stronger test, ask someone who did not write the context to rate them.</p>
+      <label for="blind-plan-file">Optional fixed trial plan JSON</label>
+      <input type="file" id="blind-plan-file" accept="application/json,.json" onchange="loadBlindTrialPlan()">
+      <label for="blind-plan-case">Planned case</label>
+      <select id="blind-plan-case" onchange="selectBlindPlanCase()" disabled><option value="">Choose a planned case</option></select>
+      <button type="button" onclick="clearBlindTrialPlan()">Clear plan</button>
+      <p id="blind-plan-status" role="status" aria-live="polite">No plan loaded. You can run a custom trial below.</p>
       <label for="blind-context">Earlier context (one line per entry)</label>
       <textarea id="blind-context" rows="3" maxlength="4100" placeholder="violet river" oninput="clearBlindTrial()"></textarea>
       <label for="blind-prompt">Final prompt to compare</label>
@@ -1667,6 +1675,118 @@ function compareDraft() {
 }
 
 let lastBlindTrial = null;
+let blindTrialPlan = null;
+let activeBlindCase = null;
+let blindPlanRead = 0;
+
+function validateBlindTrialPlan(plan) {
+  const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  if (!exact(plan, ["format", "version", "model_revision", "primary_outcome", "cases"]) ||
+      plan.format !== "aru-blind-trial-plan" || plan.version !== 1 ||
+      plan.model_revision !== PROOF_MODEL_REVISION ||
+      plan.primary_outcome !== "history_win_fraction_all" ||
+      !Array.isArray(plan.cases) || plan.cases.length < 1 || plan.cases.length > 50) {
+    throw new Error("Unsupported trial plan format, outcome, or case count.");
+  }
+  let expected = 0;
+  const ids = new Set();
+  const inputs = new Set();
+  for (const row of plan.cases) {
+    if (!exact(row, ["id", "context", "prompt", "ratings"]) ||
+        typeof row.id !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(row.id) ||
+        ids.has(row.id) || !Number.isSafeInteger(row.ratings) || row.ratings < 1 || row.ratings > 100 ||
+        !Array.isArray(row.context) || row.context.length < 1 || row.context.length > 8 ||
+        !row.context.every(line => typeof line === "string" && line.trim() === line &&
+          line.length >= 1 && line.length <= 500 && !/[\r\n]/.test(line)) ||
+        typeof row.prompt !== "string" || row.prompt.trim() !== row.prompt ||
+        row.prompt.length < 1 || row.prompt.length > 500) {
+      throw new Error("Invalid trial plan case or repeated ID.");
+    }
+    const key = JSON.stringify([row.context, row.prompt]);
+    if (inputs.has(key)) throw new Error("Repeated context and prompt in the trial plan.");
+    ids.add(row.id);
+    inputs.add(key);
+    expected += row.ratings;
+  }
+  if (expected > 100) throw new Error("Trial plan exceeds 100 ratings.");
+  return expected;
+}
+
+async function loadBlindTrialPlan() {
+  const request = ++blindPlanRead;
+  const file = document.getElementById("blind-plan-file").files?.[0];
+  const status = document.getElementById("blind-plan-status");
+  blindTrialPlan = null;
+  activeBlindCase = null;
+  const selector = document.getElementById("blind-plan-case");
+  selector.replaceChildren();
+  selector.value = "";
+  selector.disabled = true;
+  clearBlindTrial();
+  if (!file) { status.textContent = "Choose a trial plan JSON file."; return; }
+  if (file.size > 1024 * 1024) { status.textContent = "FAIL: Plan exceeds 1 MiB."; return; }
+  status.textContent = "Checking the trial plan on this device…";
+  try {
+    const raw = await file.text();
+    if (request !== blindPlanRead) return;
+    if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error("Plan exceeds 1 MiB.");
+    const plan = JSON.parse(raw);
+    const expected = validateBlindTrialPlan(plan);
+    selector.replaceChildren();
+    const prompt = document.createElement("option");
+    prompt.value = "";
+    prompt.textContent = "Choose a planned case";
+    selector.appendChild(prompt);
+    plan.cases.forEach((row, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `${row.id} (${row.ratings} rating${row.ratings === 1 ? "" : "s"})`;
+      selector.appendChild(option);
+    });
+    blindTrialPlan = plan;
+    activeBlindCase = null;
+    selector.value = "";
+    selector.disabled = false;
+    clearBlindTrial();
+    status.textContent = `Plan loaded: ${plan.cases.length} case${plan.cases.length === 1 ? "" : "s"}, ${expected} expected rating${expected === 1 ? "" : "s"}. Choose a case before running it. The file stays on this device.`;
+  } catch (error) {
+    if (request === blindPlanRead) status.textContent =
+      `FAIL: ${error instanceof SyntaxError ? "File is not valid JSON." : error.message || "Could not load the plan."}`;
+  }
+}
+
+function selectBlindPlanCase() {
+  const selector = document.getElementById("blind-plan-case");
+  const index = Number(selector.value);
+  if (!blindTrialPlan || selector.value === "" || !Number.isInteger(index) ||
+      index < 0 || index >= blindTrialPlan.cases.length) {
+    activeBlindCase = null;
+    clearBlindTrial();
+    document.getElementById("blind-plan-status").textContent =
+      "Choose a planned case before running it.";
+    return;
+  }
+  activeBlindCase = blindTrialPlan.cases[index];
+  document.getElementById("blind-context").value = activeBlindCase.context.join("\n");
+  document.getElementById("blind-prompt").value = activeBlindCase.prompt;
+  clearBlindTrial();
+  document.getElementById("blind-plan-status").textContent =
+    `Case ${activeBlindCase.id} loaded. Ask a reader to choose A, B, or tie, then download the report. Run a fresh trial for each rating.`;
+}
+
+function clearBlindTrialPlan() {
+  ++blindPlanRead;
+  blindTrialPlan = null;
+  activeBlindCase = null;
+  document.getElementById("blind-plan-file").value = "";
+  const selector = document.getElementById("blind-plan-case");
+  selector.replaceChildren();
+  selector.disabled = true;
+  selector.value = "";
+  clearBlindTrial();
+  document.getElementById("blind-plan-status").textContent = "No plan loaded. You can run a custom trial below.";
+}
 
 function clearBlindTrial() {
   lastBlindTrial = null;
@@ -1674,6 +1794,13 @@ function clearBlindTrial() {
   document.getElementById("blind-vote").hidden = true;
   document.getElementById("blind-reveal").textContent = "";
   document.getElementById("blind-download").disabled = true;
+  if (activeBlindCase && (document.getElementById("blind-context").value !== activeBlindCase.context.join("\n") ||
+      document.getElementById("blind-prompt").value !== activeBlindCase.prompt)) {
+    activeBlindCase = null;
+    document.getElementById("blind-plan-case").value = "";
+    document.getElementById("blind-plan-status").textContent =
+      "Inputs changed. Choose the planned case again for an exact match, or clear the plan for a custom trial.";
+  }
 }
 
 function computeBlindConditions(context, prompt) {
@@ -1701,6 +1828,10 @@ function computeBlindConditions(context, prompt) {
 function runBlindTrial() {
   clearBlindTrial();
   const output = document.getElementById("blind-result");
+  if (blindTrialPlan && !activeBlindCase) {
+    output.textContent = "Choose a planned case or clear the plan before running a custom trial.";
+    return;
+  }
   const raw = document.getElementById("blind-context").value;
   const context = raw.split(/\r\n?|\n/).map(line => line.trim()).filter(Boolean);
   const prompt = document.getElementById("blind-prompt").value.trim();
@@ -1747,7 +1878,10 @@ function rateBlindTrial(choice) {
 
 function downloadBlindTrial() {
   if (lastBlindTrial && lastBlindTrial.choice !== null) {
-    downloadJSON(lastBlindTrial, "aru-blind-response-trial.json");
+    const name = activeBlindCase
+      ? `aru-blind-response-trial-${activeBlindCase.id}-${Date.now()}.json`
+      : "aru-blind-response-trial.json";
+    downloadJSON(lastBlindTrial, name);
   }
 }
 

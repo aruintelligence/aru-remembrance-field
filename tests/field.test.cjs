@@ -422,6 +422,65 @@ test('blind A/B trial hides labels until rating, then exports a replayable local
   assert.equal(app.field.messages.length, 0);
 });
 
+test('a local fixed plan fills a blind case and an edited input cannot masquerade as it', async () => {
+  const app = boot({unrelated_key: 'keep'});
+  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8');
+  const file = app.context.document.getElementById('blind-plan-file');
+  file.files = [{size: Buffer.byteLength(plan), text: async () => plan}];
+  await vm.runInContext('loadBlindTrialPlan()', app.context);
+  const selector = app.elements.get('blind-plan-case');
+  assert.equal(selector.disabled, false);
+  assert.equal(selector.children.length, 2);
+  assert.match(app.elements.get('blind-plan-status').textContent, /1 case, 1 expected rating/);
+  selector.value = '0';
+  vm.runInContext('selectBlindPlanCase()', app.context);
+  assert.equal(app.elements.get('blind-context').value, 'violet river');
+  assert.equal(app.elements.get('blind-prompt').value, 'violet river');
+  vm.runInContext('runBlindTrial()', app.context);
+  vm.runInContext('rateBlindTrial("tie")', app.context);
+  vm.runInContext('downloadBlindTrial()', app.context);
+  const report = JSON.parse(await app.exports[0].text());
+  assert.equal(verifyBlindTrial(report).preferred, 'tie');
+  assert.deepEqual(report.context, ['violet river']);
+  assert.equal(report.prompt, 'violet river');
+
+  app.elements.get('blind-prompt').value = 'edited';
+  vm.runInContext('clearBlindTrial()', app.context);
+  assert.equal(selector.value, '');
+  assert.equal(app.elements.get('blind-download').disabled, true);
+  vm.runInContext('runBlindTrial()', app.context);
+  assert.match(app.elements.get('blind-result').textContent, /Choose a planned case/);
+  assert.equal(JSON.stringify([...app.saved]), JSON.stringify([['unrelated_key', 'keep']]));
+});
+
+test('blind plan loading rejects invalid files and ignores an older read', async () => {
+  const app = boot();
+  const file = app.context.document.getElementById('blind-plan-file');
+  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8');
+  file.files = [{size: Buffer.byteLength(plan), text: async () => plan}];
+  await vm.runInContext('loadBlindTrialPlan()', app.context);
+  assert.equal(app.elements.get('blind-plan-case').disabled, false);
+
+  const repeated = JSON.parse(plan);
+  repeated.cases.push({...repeated.cases[0], id: 'duplicate'});
+  const invalid = JSON.stringify(repeated);
+  file.files = [{size: Buffer.byteLength(invalid), text: async () => invalid}];
+  await vm.runInContext('loadBlindTrialPlan()', app.context);
+  assert.match(app.elements.get('blind-plan-status').textContent, /FAIL: Repeated context and prompt/);
+  assert.equal(app.elements.get('blind-plan-case').disabled, true);
+
+  let finishOld;
+  file.files = [{size: Buffer.byteLength(plan), text: () => new Promise(resolve => { finishOld = resolve; })}];
+  const oldRead = vm.runInContext('loadBlindTrialPlan()', app.context);
+  file.files = [{size: 1024 * 1024 + 1, text: async () => ''}];
+  await vm.runInContext('loadBlindTrialPlan()', app.context);
+  finishOld(plan);
+  await oldRead;
+  assert.match(app.elements.get('blind-plan-status').textContent, /FAIL: Plan exceeds 1 MiB/);
+  assert.equal(app.elements.get('blind-plan-case').disabled, true);
+  assert.equal(app.saved.size, 0);
+});
+
 test('blind trial invalidates an edited question, rejects invalid input, and escapes shared text', () => {
   const app = boot();
   const context = app.context.document.getElementById('blind-context');
