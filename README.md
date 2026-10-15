@@ -34,6 +34,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A one-click three-control challenge with positive, neutral, and negative memory effects and a verifiable report
 - A portable one-step proof capsule that can be recomputed from a local checkout
 - A separate evidence ledger for exact-name fact recall, source IDs, conflicts, explicit resolution, and shareable cited-answer excerpts
+- A composer action for asking recorded facts with sources, without changing the simulation score
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -115,6 +116,8 @@ Open **Evidence memory**, enter a fact name such as `favorite color` and a value
 
 The **Ask what is recorded** box also accepts the narrow forms `What is favorite color?` and `What is my favorite color?` (including `What's`). It removes the question wrapper and looks for exact normalized names in the ledger. If both `favorite color` and `my favorite color` are recorded, the second question is ambiguous and returns no answer. Unknown names, unsupported wording, conflicting current values, and names with only superseded sources also return no answer. A successful answer cites the local source number and labels the value as a user assertion. Asking does not change the modeled score, messages, or storage; changing the ledger clears the old answer. The [question challenge](research/evidence-question-protocol.md) lists reproducible cases.
 
+The main composer now has **Ask recorded facts** beside the simulation send button. Enter the same narrow question there and choose that action for an immediate sourced answer or a clear refusal. It does not submit text to the score or store a chat message. **Review sources & receipt** opens the evidence panel with the same question, where you can inspect records and download a cited answer excerpt or full receipt. Editing the question or ledger invalidates the quick result. The send arrow still runs the symbolic simulation; it does not claim to retrieve a fact.
+
 You can also run a [labeled evidence challenge](research/evidence-benchmark-protocol.md) against the same recall functions from a local checkout:
 
 ```bash
@@ -154,7 +157,7 @@ node tests/benchmark.test.cjs
 node tests/falsifier.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls, the three-control challenge and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, session-only non-persistence and restore blocking, full question receipts, privacy-scoped answer excerpts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
+These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls, the three-control challenge and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and composer abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, session-only non-persistence and restore blocking, full question receipts, privacy-scoped answer excerpts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
 
 ## Research question
 

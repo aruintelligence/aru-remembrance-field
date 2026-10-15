@@ -4,6 +4,8 @@ This challenge tests a small, deterministic question interface over the browser-
 
 Use a fresh browser state or erase local state between independent rows. Open **Evidence memory**, record the named facts, enter the question in **Ask what is recorded**, and select **Ask with sources**.
 
+You can also enter the same question in the main composer and select **Ask recorded facts**. This uses the same exact-name resolver and displays the same answer or refusal without changing the freeform score, messages, or storage. **Review sources & receipt** copies the current question to the evidence panel, where its existing receipt buttons apply. An edited question or ledger invalidates the quick result; the simulation send arrow remains a separate action.
+
 | Recorded facts | Question | Expected result |
 | --- | --- | --- |
 | `favorite color` = `teal` | `What’s my FAVORITE  COLOR?` | Return `teal`, local source #1, and the user-assertion caveat. |
