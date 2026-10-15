@@ -12,6 +12,8 @@ const {loadEvaluator} = require('../tools/verify-proof.cjs');
 
 const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial.json'), 'utf8'));
 const planFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8'));
+const modernFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-v2.json'), 'utf8'));
+const modernPlanFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v2.json'), 'utf8'));
 const cli = path.join(__dirname, '..', 'tools', 'analyze-blind-trials.cjs');
 
 function inTempDir(run) {
@@ -108,7 +110,7 @@ test('a fixed plan checks every case count and preserves its exact-file fingerpr
     assert.match(formatText(result), /synthetic-example: 1\/1; history 0, control 0, tie 1/);
     const check = spawnSync(process.execPath, [cli, '--check-plan', planFile], {encoding: 'utf8'});
     assert.equal(check.status, 0, check.stderr);
-    assert.match(check.stdout, new RegExp(`Valid plan: 1 case, 1 expected rating\\. Plan SHA-256: ${result.plan.sha256}`));
+    assert.match(check.stdout, new RegExp(`Valid aru-response-1 plan: 1 case, 1 expected rating\\. Plan SHA-256: ${result.plan.sha256}`));
     const command = spawnSync(process.execPath, [cli, '--json', '--plan', planFile, rated], {encoding: 'utf8'});
     assert.equal(command.status, 0, command.stderr);
     assert.deepEqual(JSON.parse(command.stdout), result);
@@ -122,7 +124,7 @@ test('a fixed plan checks every case count and preserves its exact-file fingerpr
 
 test('planned cases expose differing outcomes instead of hiding them in one aggregate', () => {
   inTempDir(({write}) => {
-    const second = structuredClone(fixture);
+    const second = structuredClone(modernFixture);
     second.context = ['always'];
     second.prompt = 'never';
     second.choice = 'B';
@@ -148,16 +150,39 @@ test('planned cases expose differing outcomes instead of hiding them in one aggr
         without_history: {score: withoutScore, response_html: getResponse(finalPrompt, false, withoutScore.after, [], at)}
       };
     })()`, model, {timeout: 1000})));
-    const plan = structuredClone(planFixture);
+    const plan = structuredClone(modernPlanFixture);
     plan.cases.push({id: 'contradiction', context: second.context, prompt: second.prompt, ratings: 1});
-    const result = analyzeTrialFiles([write('one.json', fixture), write('two.json', second)],
+    const result = analyzeTrialFiles([write('one.json', modernFixture), write('two.json', second)],
       {planFile: write('plan.json', plan)});
     assert.equal(result.summary.trials, 2);
     assert.equal(result.summary.control_wins, 1);
+    assert.equal(result.response_revision, 'aru-response-2');
+    assert.match(formatText(result), /Verified 2 submitted trials against aru-response-2/);
     assert.deepEqual(result.plan.coverage, [
-      {id: 'synthetic-example', expected: 1, received: 1, history_wins: 0, control_wins: 0, ties: 1},
+      {id: 'negated-color', expected: 1, received: 1, history_wins: 0, control_wins: 0, ties: 1},
       {id: 'contradiction', expected: 1, received: 1, history_wins: 0, control_wins: 1, ties: 0}
     ]);
+  });
+});
+
+test('response revisions are pinned by plans and cannot be combined into one batch', () => {
+  inTempDir(({write}) => {
+    const old = write('old.json', fixture);
+    const current = write('current.json', modernFixture);
+    const oldPlan = write('old-plan.json', planFixture);
+    const currentPlan = write('current-plan.json', modernPlanFixture);
+    assert.equal(analyzeTrialFiles([old], {planFile: oldPlan}).response_revision, 'aru-response-1');
+    assert.equal(analyzeTrialFiles([current], {planFile: currentPlan}).response_revision, 'aru-response-2');
+    assert.equal(loadTrialPlan(currentPlan).responseRevision, 'aru-response-2');
+    const checked = spawnSync(process.execPath, [cli, '--check-plan', currentPlan], {encoding: 'utf8'});
+    assert.equal(checked.status, 0, checked.stderr);
+    assert.match(checked.stdout, /Valid aru-response-2 plan/);
+    assert.throws(() => analyzeTrialFiles([old, current]), /mixed response revisions in one batch/);
+    assert.throws(() => analyzeTrialFiles([current], {planFile: oldPlan}), /does not match trial plan/);
+    assert.throws(() => analyzeTrialFiles([old], {planFile: currentPlan}), /does not match trial plan/);
+    const badRevision = structuredClone(modernPlanFixture);
+    badRevision.response_revision = 'aru-response-9';
+    assert.throws(() => loadTrialPlan(write('bad-plan.json', badRevision)), /unsupported format/);
   });
 });
 

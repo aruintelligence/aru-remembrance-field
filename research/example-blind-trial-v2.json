@@ -1,0 +1,95 @@
+{
+  "format": "aru-blind-response-trial",
+  "version": 1,
+  "model_revision": "aru-field-heuristics-2",
+  "response_revision": "aru-response-2",
+  "context": [
+    "favorite color teal"
+  ],
+  "prompt": "My favorite color is not teal.",
+  "assignment": {
+    "A": "with_history",
+    "B": "without_history"
+  },
+  "conditions": {
+    "with_history": {
+      "score": {
+        "before": 0.62624,
+        "delta": 0.05894390797150804,
+        "after": 0.6851839079715081,
+        "terms": [
+          {
+            "label": "Matched word rules",
+            "value": 0
+          },
+          {
+            "label": "Length rule",
+            "value": 0
+          },
+          {
+            "label": "Intent rule",
+            "value": 0
+          },
+          {
+            "label": "Prior memory overlap",
+            "value": 0.07258006797150804
+          },
+          {
+            "label": "Contradiction rule",
+            "value": 0
+          },
+          {
+            "label": "Prior repetition rule",
+            "value": 0
+          },
+          {
+            "label": "Baseline drift",
+            "value": -0.01363616
+          }
+        ],
+        "clamped": false
+      },
+      "response_html": "Earlier wording may conflict with this input. The affected memory echoes are withheld; review the source before treating them as current.<br><br><em>Reflection:</em> “My favorite color is not teal.”<br><br><strong>Next:</strong> Deepen one active thread with precision."
+    },
+    "without_history": {
+      "score": {
+        "before": 0.62624,
+        "delta": -0.01363616,
+        "after": 0.61260384,
+        "terms": [
+          {
+            "label": "Matched word rules",
+            "value": 0
+          },
+          {
+            "label": "Length rule",
+            "value": 0
+          },
+          {
+            "label": "Intent rule",
+            "value": 0
+          },
+          {
+            "label": "Prior memory overlap",
+            "value": 0
+          },
+          {
+            "label": "Contradiction rule",
+            "value": 0
+          },
+          {
+            "label": "Prior repetition rule",
+            "value": 0
+          },
+          {
+            "label": "Baseline drift",
+            "value": -0.01363616
+          }
+        ],
+        "clamped": false
+      },
+      "response_html": "Pattern alignment in progress. Organizing around themes: <em>remembrance, continuity, signal</em>.<br><br><em>Reflection:</em> “My favorite color is not teal.”<br><br><strong>Next:</strong> Deepen one active thread with precision."
+    }
+  },
+  "choice": "tie"
+}

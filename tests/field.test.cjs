@@ -471,7 +471,7 @@ test('older browsers can still rate in the inspector when a modal dialog is unav
 
 test('a local fixed plan fills a blind case and an edited input cannot masquerade as it', async () => {
   const app = boot({unrelated_key: 'keep'});
-  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8');
+  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v2.json'), 'utf8');
   const file = app.context.document.getElementById('blind-plan-file');
   file.files = [{size: Buffer.byteLength(plan), text: async () => plan}];
   await vm.runInContext('loadBlindTrialPlan()', app.context);
@@ -481,15 +481,16 @@ test('a local fixed plan fills a blind case and an edited input cannot masquerad
   assert.match(app.elements.get('blind-plan-status').textContent, /1 case, 1 expected rating/);
   selector.value = '0';
   vm.runInContext('selectBlindPlanCase()', app.context);
-  assert.equal(app.elements.get('blind-context').value, 'violet river');
-  assert.equal(app.elements.get('blind-prompt').value, 'violet river');
+  assert.equal(app.elements.get('blind-context').value, 'favorite color teal');
+  assert.equal(app.elements.get('blind-prompt').value, 'My favorite color is not teal.');
   vm.runInContext('runBlindTrial()', app.context);
   vm.runInContext('rateBlindTrial("tie")', app.context);
   vm.runInContext('downloadBlindTrial()', app.context);
   const report = JSON.parse(await app.exports[0].text());
   assert.equal(verifyBlindTrial(report).preferred, 'tie');
-  assert.deepEqual(report.context, ['violet river']);
-  assert.equal(report.prompt, 'violet river');
+  assert.deepEqual(report.context, ['favorite color teal']);
+  assert.equal(report.prompt, 'My favorite color is not teal.');
+  assert.equal(report.response_revision, 'aru-response-2');
 
   app.elements.get('blind-prompt').value = 'edited';
   vm.runInContext('clearBlindTrial()', app.context);
@@ -503,7 +504,7 @@ test('a local fixed plan fills a blind case and an edited input cannot masquerad
 test('blind plan loading rejects invalid files and ignores an older read', async () => {
   const app = boot();
   const file = app.context.document.getElementById('blind-plan-file');
-  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8');
+  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v2.json'), 'utf8');
   file.files = [{size: Buffer.byteLength(plan), text: async () => plan}];
   await vm.runInContext('loadBlindTrialPlan()', app.context);
   assert.equal(app.elements.get('blind-plan-case').disabled, false);
@@ -514,6 +515,12 @@ test('blind plan loading rejects invalid files and ignores an older read', async
   file.files = [{size: Buffer.byteLength(invalid), text: async () => invalid}];
   await vm.runInContext('loadBlindTrialPlan()', app.context);
   assert.match(app.elements.get('blind-plan-status').textContent, /FAIL: Repeated context and prompt/);
+  assert.equal(app.elements.get('blind-plan-case').disabled, true);
+
+  const oldPlan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8');
+  file.files = [{size: Buffer.byteLength(oldPlan), text: async () => oldPlan}];
+  await vm.runInContext('loadBlindTrialPlan()', app.context);
+  assert.match(app.elements.get('blind-plan-status').textContent, /FAIL: Unsupported trial plan/);
   assert.equal(app.elements.get('blind-plan-case').disabled, true);
 
   let finishOld;
@@ -553,6 +560,11 @@ test('blind trial invalidates an edited question, rejects invalid input, and esc
 test('blind trial verifier detects altered outputs and context while exposing its rating limit', async () => {
   const example = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial.json'), 'utf8'));
   assert.equal(verifyBlindTrial(example).preferred, 'tie', 'the public fixture is synthetic, not a claimed human win');
+  assert.equal(verifyBlindTrial(example).responseRevision, 'aru-response-1');
+  const guarded = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-v2.json'), 'utf8'));
+  assert.equal(verifyBlindTrial(guarded).responseRevision, 'aru-response-2');
+  assert.match(guarded.conditions.with_history.response_html, /memory echoes are withheld/);
+  assert.doesNotMatch(guarded.conditions.with_history.response_html, /Resonant echoes/);
   const app = boot();
   app.context.document.getElementById('blind-context').value = 'always';
   app.context.document.getElementById('blind-prompt').value = 'never';
@@ -575,6 +587,36 @@ test('blind trial verifier detects altered outputs and context while exposing it
   const unrated = structuredClone(report);
   unrated.choice = null;
   assert.throws(() => verifyBlindTrial(unrated), /invalid assignment or choice/);
+  const unsupported = structuredClone(report);
+  unsupported.response_revision = 'aru-response-9';
+  assert.throws(() => verifyBlindTrial(unsupported), /unsupported blind trial/);
+});
+
+test('response guard withholds direct polarity conflicts and literal contradiction echoes without changing the score', () => {
+  const at = 1700000001000;
+  const model = loadEvaluator();
+  model.memoryToCheck = vm.runInContext('advanceMemory([], "favorite color teal", 0.62624, 1700000000000)', model);
+  model.inputToCheck = 'My favorite color is not teal.';
+  const score = () => vm.runInContext('evaluateCoherence(inputToCheck, {coherence:0.62624, memory:memoryToCheck, messages:[{type:"user", text:"favorite color teal"}]}, 1700000001000)', model);
+  const before = JSON.stringify(score());
+  const memoryBefore = JSON.stringify(model.memoryToCheck);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'tools', 'response-model-v1.js'), 'utf8'), model);
+  const priorOutput = vm.runInContext('getLegacyResponse(inputToCheck, false, 0.6851839079715081, memoryToCheck, 1700000001000)', model);
+  assert.match(priorOutput, /Resonant echoes:<br>• favorite color teal/);
+  const guarded = vm.runInContext('getResponse(inputToCheck, false, 0.6851839079715081, memoryToCheck, 1700000001000)', model);
+  assert.match(guarded, /Earlier wording may conflict/);
+  assert.doesNotMatch(guarded, /Resonant echoes:|Organizing around themes/);
+  assert.equal(JSON.stringify(score()), before);
+  assert.equal(JSON.stringify(model.memoryToCheck), memoryBefore);
+  model.inputToCheck = 'favorite color teal';
+  assert.match(vm.runInContext('getResponse(inputToCheck, false, 0.6851839079715081, memoryToCheck, 1700000001000)', model), /Resonant echoes/);
+  model.inputToCheck = 'notably teal';
+  assert.doesNotMatch(vm.runInContext('getResponse(inputToCheck, false, 0.6851839079715081, memoryToCheck, 1700000001000)', model), /Earlier wording may conflict/);
+  model.inputToCheck = 'not teal';
+  assert.match(vm.runInContext('getResponse(inputToCheck, false, 0.6851839079715081, memoryToCheck, 1700000001000)', model), /Earlier wording may conflict/);
+  model.memoryToCheck = [{text: 'always', tokens: ['always'], weight: 2, time: at}];
+  model.inputToCheck = 'never';
+  assert.match(vm.runInContext('getResponse(inputToCheck, false, 0.6, memoryToCheck, 1700000001000)', model), /Earlier wording may conflict/);
 });
 
 test('full-sequence lab has positive, zero, and negative controls from a fresh initial score', () => {

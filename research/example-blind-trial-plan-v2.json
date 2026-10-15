@@ -1,0 +1,15 @@
+{
+  "format": "aru-blind-trial-plan",
+  "version": 2,
+  "model_revision": "aru-field-heuristics-2",
+  "response_revision": "aru-response-2",
+  "primary_outcome": "history_win_fraction_all",
+  "cases": [
+    {
+      "id": "negated-color",
+      "context": ["favorite color teal"],
+      "prompt": "My favorite color is not teal.",
+      "ratings": 1
+    }
+  ]
+}

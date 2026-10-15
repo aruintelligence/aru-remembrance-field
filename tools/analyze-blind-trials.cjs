@@ -32,9 +32,13 @@ function loadTrialPlan(file) {
   let plan;
   try { plan = JSON.parse(contents.toString('utf8')); }
   catch (error) { throw new Error(`Trial plan ${file}: invalid JSON: ${error.message}`); }
-  if (!exactKeys(plan, ['format', 'version', 'model_revision', 'primary_outcome', 'cases']) ||
-    plan.format !== 'aru-blind-trial-plan' || plan.version !== 1 ||
+  const modern = plan && plan.version === 2;
+  const keys = ['format', 'version', 'model_revision', 'primary_outcome', 'cases'];
+  if (modern) keys.push('response_revision');
+  if (!exactKeys(plan, keys) ||
+    plan.format !== 'aru-blind-trial-plan' || (plan.version !== 1 && !modern) ||
     plan.model_revision !== 'aru-field-heuristics-2' ||
+    (modern && plan.response_revision !== 'aru-response-2') ||
     plan.primary_outcome !== 'history_win_fraction_all' ||
     !Array.isArray(plan.cases) || plan.cases.length < 1 || plan.cases.length > 50) {
     throw new Error(`Trial plan ${file}: unsupported format, outcome, or case count`);
@@ -62,7 +66,8 @@ function loadTrialPlan(file) {
     expected += entry.ratings;
   }
   if (expected > MAX_FILES) throw new Error(`Trial plan ${file}: exceeds ${MAX_FILES} rated trials`);
-  return {sha256: sha256(contents), expected, byInput};
+  return {sha256: sha256(contents), expected, byInput,
+    responseRevision: modern ? 'aru-response-2' : 'aru-response-1'};
 }
 
 function analyzeTrialFiles(files, {planFile} = {}) {
@@ -80,6 +85,7 @@ function analyzeTrialFiles(files, {planFile} = {}) {
     identical_copies: 0, distinct_file_contents: 0
   };
   const hashes = new Map();
+  let batchResponseRevision = null;
   let totalBytes = 0;
   for (const file of files) {
     try {
@@ -92,7 +98,14 @@ function analyzeTrialFiles(files, {planFile} = {}) {
       totalBytes += contents.length;
       if (totalBytes > MAX_TOTAL_BYTES) throw new Error('exceeds 16 MiB total');
       const report = JSON.parse(contents.toString('utf8'));
-      const {preferred} = verifyBlindTrial(report);
+      const {preferred, responseRevision} = verifyBlindTrial(report);
+      if (plan && responseRevision !== plan.responseRevision) {
+        throw new Error(`response revision ${responseRevision} does not match trial plan ${plan.responseRevision}`);
+      }
+      if (batchResponseRevision && responseRevision !== batchResponseRevision) {
+        throw new Error('mixed response revisions in one batch');
+      }
+      batchResponseRevision = responseRevision;
       let slot;
       if (plan) {
         slot = plan.byInput.get(JSON.stringify([report.context, report.prompt]));
@@ -130,7 +143,8 @@ function analyzeTrialFiles(files, {planFile} = {}) {
   const dataset_sha256 = sha256([...hashes].flatMap(([hash, copies]) => Array(copies).fill(hash)).sort().join('\n'));
   const result = {
     format: 'aru-blind-trial-batch-analysis', version: 1,
-    model_revision: 'aru-field-heuristics-2', dataset_sha256, summary, duplicates,
+    model_revision: 'aru-field-heuristics-2', response_revision: batchResponseRevision,
+    dataset_sha256, summary, duplicates,
     limitation: LIMITATION
   };
   if (plan) result.plan = {
@@ -145,7 +159,7 @@ function formatText(report) {
   const s = report.summary;
   const pct = fraction => (fraction * 100).toFixed(1) + '%';
   return [
-    `Verified ${s.trials} submitted trial${s.trials === 1 ? '' : 's'} against the scripted model.`,
+    `Verified ${s.trials} submitted trial${s.trials === 1 ? '' : 's'} against ${report.response_revision}.`,
     `History preferred: ${s.history_wins}/${s.trials} (${pct(s.history_win_fraction_all)} of all); control preferred: ${s.control_wins}/${s.trials}; tie/neither: ${s.ties}/${s.trials}.`,
     `Among ${s.non_ties} non-ties: history ${s.history_wins}/${s.non_ties} (${s.non_ties ? pct(s.history_win_fraction_non_ties) : 'undefined'}).`,
     `History shown as A: ${s.history_as_A.trials} (history ${s.history_as_A.history_wins}, control ${s.history_as_A.control_wins}, tie ${s.history_as_A.ties}); as B: ${s.history_as_B.trials} (history ${s.history_as_B.history_wins}, control ${s.history_as_B.control_wins}, tie ${s.history_as_B.ties}).`,
@@ -166,7 +180,7 @@ if (require.main === module) {
     if (args[0] === '--check-plan') {
       if (args.length !== 2) throw new Error('Usage: node tools/analyze-blind-trials.cjs --check-plan plan.json');
       const plan = loadTrialPlan(args[1]);
-      console.log(`Valid plan: ${plan.byInput.size} case${plan.byInput.size === 1 ? '' : 's'}, ${plan.expected} expected rating${plan.expected === 1 ? '' : 's'}. Plan SHA-256: ${plan.sha256}`);
+      console.log(`Valid ${plan.responseRevision} plan: ${plan.byInput.size} case${plan.byInput.size === 1 ? '' : 's'}, ${plan.expected} expected rating${plan.expected === 1 ? '' : 's'}. Plan SHA-256: ${plan.sha256}`);
     } else {
       let json = false, planFile;
       while (args[0] === '--json' || args[0] === '--plan') {

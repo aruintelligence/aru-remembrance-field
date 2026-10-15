@@ -2,15 +2,22 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 const vm = require('node:vm');
+const {createHash} = require('node:crypto');
 const {loadEvaluator, matchReceipt, requireCondition} = require('./verify-proof.cjs');
 
+const LEGACY_RESPONSE_SHA256 = '11edfc41aa3de393c9539801e366fa81e4659fe3f57a2161a41ad8ab3187bf0e';
+
 function verifyBlindTrial(report) {
+  const versioned = report && typeof report === 'object' && Object.hasOwn(report, 'response_revision');
   const keys = ['format', 'version', 'model_revision', 'context', 'prompt', 'assignment', 'conditions', 'choice'];
+  if (versioned) keys.push('response_revision');
   requireCondition(report && typeof report === 'object' && !Array.isArray(report) &&
     Object.keys(report).length === keys.length && keys.every(key => Object.hasOwn(report, key)) &&
     report.format === 'aru-blind-response-trial' && report.version === 1 &&
-    report.model_revision === 'aru-field-heuristics-2', 'unsupported blind trial');
+    report.model_revision === 'aru-field-heuristics-2' &&
+    (!versioned || report.response_revision === 'aru-response-2'), 'unsupported blind trial');
   requireCondition(Array.isArray(report.context) && report.context.length >= 1 && report.context.length <= 8 &&
     report.context.every(line => typeof line === 'string' && line.trim() === line && line.length >= 1 &&
       line.length <= 500 && !/[\r\n]/.test(line)) &&
@@ -29,6 +36,13 @@ function verifyBlindTrial(report) {
     'missing conditions');
 
   const context = loadEvaluator('aru-field-heuristics-2');
+  if (!versioned) {
+    const archived = fs.readFileSync(path.join(__dirname, 'response-model-v1.js'), 'utf8');
+    requireCondition(createHash('sha256').update(archived).digest('hex') === LEGACY_RESPONSE_SHA256,
+      'archived response model changed');
+    vm.runInContext(archived, context, {timeout: 1000});
+  }
+  context.responseRevision = versioned ? 'aru-response-2' : 'aru-response-1';
   context.trialContext = report.context;
   context.trialPrompt = report.prompt;
   const computed = vm.runInContext(`(() => {
@@ -45,9 +59,10 @@ function verifyBlindTrial(report) {
     const at = startAt + trialContext.length * 1000;
     const withScore = evaluateCoherence(trialPrompt, {coherence: withMu, memory, messages}, at);
     const withoutScore = evaluateCoherence(trialPrompt, {coherence: withoutMu, memory: [], messages: []}, at);
+    const render = responseRevision === 'aru-response-2' ? getResponse : getLegacyResponse;
     return {
-      with_history: {score: withScore, response_html: getResponse(trialPrompt, false, withScore.after, memory, at)},
-      without_history: {score: withoutScore, response_html: getResponse(trialPrompt, false, withoutScore.after, [], at)}
+      with_history: {score: withScore, response_html: render(trialPrompt, false, withScore.after, memory, at)},
+      without_history: {score: withoutScore, response_html: render(trialPrompt, false, withoutScore.after, [], at)}
     };
   })()`, context, {timeout: 1000});
   for (const key of ['with_history', 'without_history']) {
@@ -60,7 +75,7 @@ function verifyBlindTrial(report) {
       `${key} response does not match the model`);
   }
   const preferred = report.choice === 'tie' ? 'tie' : report.assignment[report.choice];
-  return {preferred, withHistory: computed.with_history.score.after,
+  return {preferred, responseRevision: context.responseRevision, withHistory: computed.with_history.score.after,
     withoutHistory: computed.without_history.score.after};
 }
 

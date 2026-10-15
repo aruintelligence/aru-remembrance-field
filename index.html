@@ -555,6 +555,7 @@ const STORAGE_KEYS = {
   claimCounter: "aru_fact_counter"
 };
 const PROOF_MODEL_REVISION = "aru-field-heuristics-2";
+const RESPONSE_MODEL_REVISION = "aru-response-2";
 let sessionOnly = false;
 
 function readStored(key, fallback) {
@@ -869,15 +870,39 @@ function updateCoherence(input) {
   return Field.lastTransition;
 }
 
+function directlyNegatedWords(text) {
+  const words = textWords(text);
+  const negated = new Set();
+  for (let i = 0; i < words.length - 1; i++) {
+    if (words[i] === "not") negated.add(words[i + 1]);
+  }
+  return negated;
+}
+
+function possibleEchoConflict(input, stored) {
+  const current = new Set(tokenize(input));
+  const prior = new Set(tokenize(stored));
+  const currentNegated = directlyNegatedWords(input);
+  const priorNegated = directlyNegatedWords(stored);
+  for (const token of current) {
+    if (prior.has(token) && currentNegated.has(token) !== priorNegated.has(token)) return true;
+  }
+  return contradictionPenalty(input, [{text: stored}]) > 0;
+}
+
 function getResponse(input, autonomous = false, c = Field.coherence, memory = Field.memory, at = now()) {
-  const themes = MemoryEngine.themes(5, memory, at);
-  const echoes = MemoryEngine.echoes(input, 3, memory, at);
-  const recent = MemoryEngine.recent(3, memory);
+  const safeMemory = memory.filter(m => !possibleEchoConflict(input, m.text || ""));
+  const caution = safeMemory.length !== memory.length;
+  const themes = MemoryEngine.themes(5, safeMemory, at);
+  const echoes = MemoryEngine.echoes(input, 3, safeMemory, at);
+  const recent = MemoryEngine.recent(3, safeMemory);
   const themeText = themes.length ? escapeHtml(themes.join(", ")) : "remembrance, continuity, signal";
 
   const blocks = [];
 
-  if (autonomous) {
+  if (caution) {
+    blocks.push("Earlier wording may conflict with this input. The affected memory echoes are withheld; review the source before treating them as current.");
+  } else if (autonomous) {
     blocks.push(`Scheduled simulated reflection. Reviewing stored themes around <em>${themeText}</em>.`);
   } else if (c < 0.58) {
     blocks.push("The simulation is still stabilizing. Your input is being integrated into the visual state.");
@@ -1710,9 +1735,10 @@ let blindPlanRead = 0;
 function validateBlindTrialPlan(plan) {
   const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value) &&
     Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
-  if (!exact(plan, ["format", "version", "model_revision", "primary_outcome", "cases"]) ||
-      plan.format !== "aru-blind-trial-plan" || plan.version !== 1 ||
+  if (!exact(plan, ["format", "version", "model_revision", "response_revision", "primary_outcome", "cases"]) ||
+      plan.format !== "aru-blind-trial-plan" || plan.version !== 2 ||
       plan.model_revision !== PROOF_MODEL_REVISION ||
+      plan.response_revision !== RESPONSE_MODEL_REVISION ||
       plan.primary_outcome !== "history_win_fraction_all" ||
       !Array.isArray(plan.cases) || plan.cases.length < 1 || plan.cases.length > 50) {
     throw new Error("Unsupported trial plan format, outcome, or case count.");
@@ -1918,7 +1944,8 @@ function runBlindTrial() {
     ? {A: "with_history", B: "without_history"}
     : {A: "without_history", B: "with_history"};
   lastBlindTrial = {format: "aru-blind-response-trial", version: 1,
-    model_revision: PROOF_MODEL_REVISION, context, prompt, assignment, conditions, choice: null};
+    model_revision: PROOF_MODEL_REVISION, response_revision: RESPONSE_MODEL_REVISION,
+    context, prompt, assignment, conditions, choice: null};
   output.appendChild(blindResponseGrid(conditions, assignment));
   document.getElementById("blind-reader-context").textContent = context.join("\n");
   document.getElementById("blind-reader-prompt").textContent = prompt;
