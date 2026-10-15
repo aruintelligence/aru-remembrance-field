@@ -804,3 +804,112 @@ test('export includes entered text and reset removes only this app’s keys', as
   assert.equal(app.saved.has('aru_fact_claims'), false);
   assert.equal(app.saved.has('aru_fact_counter'), false);
 });
+
+async function chooseStateFile(app, text) {
+  const input = app.context.document.getElementById('state-import');
+  input.files = [{size: Buffer.byteLength(text), text: async () => text}];
+  input.value = 'aru-remembrance-field-state.json';
+  await vm.runInContext('previewStateImport()', app.context);
+}
+
+test('full state backup restores score, history, and sourced facts across browsers', async () => {
+  const origin = boot();
+  origin.input('Café river');
+  origin.fact('favorite color', 'teal');
+  vm.runInContext('downloadState()', origin.context);
+  const bundle = JSON.parse(await origin.exports[0].text());
+  bundle.memory[0].tokens = ['poisoned'];
+  bundle.memory[0].cleaned = 'poisoned';
+  bundle.messages[1].text = '<img src=x onerror=alert(1)>';
+
+  const target = boot({unrelated_key: 'keep'});
+  target.input('Existing local work');
+  target.fact('old fact', 'old value');
+  await chooseStateFile(target, JSON.stringify(bundle));
+  assert.equal(target.elements.get('state-import-apply').disabled, false);
+  assert.match(target.elements.get('state-import-preview').textContent, /Incoming: μ/);
+  vm.runInContext('applyStateImport()', target.context);
+  assert.equal(target.window.reloaded, true);
+  assert.equal(target.saved.get('unrelated_key'), 'keep');
+
+  const restored = boot(Object.fromEntries(target.saved));
+  assert.equal(restored.field.coherence, origin.field.coherence);
+  assert.equal(restored.field.memory[0].text, 'Café river');
+  assert.equal(restored.field.memory[0].cleaned, 'café river');
+  assert.notDeepEqual([...restored.field.memory[0].tokens], ['poisoned']);
+  assert.equal(restored.field.messages[0].text, 'Café river');
+  assert.equal(restored.elements.get('messages').children[1].textContent, '<img src=x onerror=alert(1)>');
+  assert.equal(restored.elements.get('messages').children[1].innerHTML, '');
+  assert.equal(restored.field.claims[0].value, 'teal');
+  assert.equal(restored.field.claimCounter, origin.field.claimCounter);
+  assert.equal(restored.field.lastProof, null);
+  assert.equal(restored.field.lastTransition, null);
+  restored.input('Café river');
+  assert.ok(restored.field.lastTransition.terms.find(term => term.label === 'Prior memory overlap').value > 0);
+});
+
+test('invalid, duplicate, and oversized state files cannot overwrite local data', async () => {
+  const app = boot();
+  app.input('Keep this');
+  vm.runInContext('downloadState()', app.context);
+  const original = JSON.parse(await app.exports[0].text());
+  const before = [...app.saved];
+  const invalid = [
+    '{bad',
+    JSON.stringify({format: 'aru-evidence-ledger', version: 1, records: []}),
+    JSON.stringify({...original, coherence: 42}),
+    JSON.stringify({...original, memory: [{text: 'x', weight: 99, time: 0, count: 1}]}),
+    JSON.stringify({...original, fact_claims: [{id: 1, key: 'a', value: 'x', time: 0, status: 'active'},
+      {id: 1, key: 'b', value: 'y', time: 0, status: 'active'}], next_fact_id: 2}),
+    ' '.repeat(4 * 1024 * 1024 + 1)
+  ];
+  for (const text of invalid) {
+    await chooseStateFile(app, text);
+    assert.equal(app.elements.get('state-import-apply').disabled, true);
+    vm.runInContext('applyStateImport()', app.context);
+    assert.deepEqual([...app.saved], before);
+    assert.equal(app.window.reloaded, undefined);
+  }
+});
+
+test('restore requires fresh preview after local change and honors cancellation', async () => {
+  const source = boot();
+  source.input('Backup value');
+  vm.runInContext('downloadState()', source.context);
+  const text = await source.exports[0].text();
+  const target = boot();
+  await chooseStateFile(target, text);
+  target.input('A later local change');
+  vm.runInContext('applyStateImport()', target.context);
+  assert.match(target.elements.get('state-import-preview').textContent, /Local state changed/);
+  assert.equal(target.elements.get('state-import-apply').disabled, true);
+  assert.equal(target.window.reloaded, undefined);
+
+  await chooseStateFile(target, text);
+  target.window.confirm = () => false;
+  vm.runInContext('applyStateImport()', target.context);
+  assert.equal(target.window.reloaded, undefined);
+  assert.equal(target.field.memory[0].text, 'A later local change');
+});
+
+test('a storage write failure rolls back every state key before reload', async () => {
+  const source = boot();
+  source.input('New memory');
+  vm.runInContext('downloadState()', source.context);
+  const target = boot({unrelated_key: 'keep'});
+  target.input('Old memory');
+  const before = [...target.saved];
+  await chooseStateFile(target, await source.exports[0].text());
+  const storage = target.context.localStorage;
+  const write = storage.setItem;
+  let failed = false;
+  storage.setItem = (key, value) => {
+    if (key === 'aru_messages' && !failed) { failed = true; throw new Error('quota'); }
+    write(key, value);
+  };
+  vm.runInContext('applyStateImport()', target.context);
+  assert.equal(failed, true);
+  assert.deepEqual([...target.saved], before);
+  assert.equal(target.window.reloaded, undefined);
+  assert.match(target.elements.get('state-import-preview').textContent, /original local state was kept/);
+});

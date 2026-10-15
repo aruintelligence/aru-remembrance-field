@@ -23,6 +23,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A motion control that shows a static field for reduced-motion preferences, pauses work in hidden tabs, and caps active drawing at 30 frames per second
 - A modeled coherence state
 - Persistent browser state through `localStorage`
+- A reviewed full-state backup and restore for moving the simulation between browsers
 - Threshold-driven visual transitions, including “dragon ignition”
 - A response layer framed by Inward Physics™ concepts
 - A dependency-free, inspectable browser implementation
@@ -56,7 +57,9 @@ Open **Inspect model state and last change** after submitting text. The panel sh
 
 The rules are fixed in `evaluateCoherence` in `index.html`: whole Unicode word matches for a short list of words, token-count bonuses, an intent bonus or penalty, overlap with earlier memory, contradiction and repetition penalties against earlier entries, and baseline drift. They are hand-written heuristics, not learned weights or a validated measure. The submitted text is evaluated **before** it enters the message and memory history, so a first entry cannot match itself or count as its own repetition. For example, on a fresh browser state, submitting `What?` changes μ from 0.6400 to 0.6362: +0.0100 for a question and −0.0138 for baseline drift, with zero prior-memory and repetition terms. [Score rules v2](research/whole-word-v2-protocol.md) shows counterexamples and how to replay both rule versions.
 
-Entries and the score are saved in this browser's `localStorage`. The panel can download a JSON copy, including text you entered, or erase this app's local state. The app does not send entries to a server. Browser settings, extensions, or the device's other users may still affect local privacy, and clearing site data also removes the saved state. The full state export is a snapshot for inspection; importing that file is not implemented. The separate evidence ledger has its own portable export and import.
+Entries and the score are saved in this browser's `localStorage`. The panel can download a JSON copy, including text you entered, restore it in another browser, or erase this app's local state. The app does not send entries to a server. Browser settings, extensions, or the device's other users may still affect local privacy, and clearing site data also removes the saved state. The separate evidence ledger also has its own portable merge import.
+
+For a full restore, choose **Restore local state JSON** in the inspector and review the current and incoming score, memory, message, and evidence counts. **Replace with reviewed state** asks for confirmation before replacing this browser's modeled state, history, and evidence ledger. Download the current state first if you may need it: replacement does not merge entries. Version 1 full-state exports, including earlier downloads, are supported within the limits of 4 MiB per file, 256 KiB per memory or message text, 100 memories, 160 messages, and 100 evidence records. Invalid files are rejected before any write. If browser storage rejects a write, the app attempts to restore the previous stored keys and reports if rollback fails. A browser crash during the multi-key write is outside that guarantee. The downloaded file may contain sensitive text; anyone with a copy can edit it, so restore only files you trust. Derived memory tokens are rebuilt from text under the current model rules; the old transition display and proof copy are cleared because their provenance cannot be established by importing a file. Keep a separately downloaded proof if you need it. A local edit after preview requires a fresh preview.
 
 ## Test the memory claim
 
@@ -139,7 +142,7 @@ node tests/benchmark.test.cjs
 node tests/falsifier.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, full question receipts, privacy-scoped answer excerpts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
+These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, full question receipts, privacy-scoped answer excerpts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
 
 ## Research question
 
