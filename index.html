@@ -399,6 +399,15 @@
     <button id="state-import-apply" type="button" disabled onclick="applyStateImport()">Replace with reviewed state</button>
   </details>
 
+  <details class="ledger" id="score-proof-verifier">
+    <summary>Verify a shared score proof</summary>
+    <p>Choose a current-model transition proof JSON. This browser replays the score change and the no-history control from the file's input and prior state. Your own field and ledger stay untouched; the file is not uploaded by this app.</p>
+    <label for="score-proof-file">Transition proof JSON (up to 16 MiB)</label>
+    <input id="score-proof-file" type="file" accept=".json,application/json" onchange="verifyScoreProofFile()">
+    <p id="score-proof-verification" role="status" aria-live="polite">No score proof checked yet.</p>
+    <p>Older v1 files require the repository's command-line verifier. A pass checks this scripted model's arithmetic, not who made the file or whether μ measures anything in the world.</p>
+  </details>
+
   <details class="ledger" id="receipt-verifier">
     <summary>Verify a shared answer receipt</summary>
     <p>Choose a question receipt or cited answer excerpt JSON. This browser recalculates the answer from the records in that file. The file is read on this device; it is not imported into your ledger or uploaded by this app.</p>
@@ -969,6 +978,76 @@ if (typeof motionPreference.addEventListener === "function") {
 }
 
 /* ==================== UI LOGIC ==================== */
+function verifyScoreProof(proof) {
+  const fail = message => { throw new Error(`Invalid proof: ${message}`); };
+  const finite = value => typeof value === "number" && Number.isFinite(value);
+  if (!proof || typeof proof !== "object" || Array.isArray(proof) || proof.schema_version !== 1) fail("unsupported schema.");
+  if (proof.model_revision !== PROOF_MODEL_REVISION) fail("only current v2 score proofs can be checked here; use the command-line verifier for v1.");
+  if (typeof proof.input !== "string" || !finite(proof.evaluated_at) ||
+      !finite(proof.start_mu) || proof.start_mu < 0.35 || proof.start_mu > 0.995 ||
+      !Array.isArray(proof.prior_memory) || proof.prior_memory.length > 22 ||
+      !Array.isArray(proof.prior_user_messages) || proof.prior_user_messages.length > 5) {
+    fail("invalid input, timestamp, starting score, or history count.");
+  }
+  for (const record of proof.prior_memory) {
+    if (!record || typeof record.text !== "string" || !Array.isArray(record.tokens) ||
+        record.tokens.some(token => typeof token !== "string") ||
+        !finite(record.weight) || !finite(record.time)) fail("invalid memory record.");
+  }
+  for (const record of proof.prior_user_messages) {
+    if (!record || record.type !== "user" || typeof record.text !== "string") fail("invalid user message.");
+  }
+  if (!proof.result || typeof proof.result !== "object" || Array.isArray(proof.result)) fail("result missing.");
+
+  const actual = evaluateCoherence(proof.input, {coherence: proof.start_mu,
+    memory: proof.prior_memory, messages: proof.prior_user_messages}, proof.evaluated_at);
+  const control = evaluateCoherence(proof.input, {coherence: proof.start_mu,
+    memory: [], messages: []}, proof.evaluated_at);
+  const numberMatches = (recorded, computed) => finite(recorded) && Math.abs(recorded - computed) <= 1e-10;
+  const checkReceipt = (recorded, computed, label) => {
+    if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) fail(`${label} receipt missing.`);
+    for (const key of ["before", "delta", "after"]) {
+      if (!numberMatches(recorded[key], computed[key])) fail(`${label}.${key} disagrees with the model.`);
+    }
+    if (recorded.clamped !== computed.clamped || !Array.isArray(recorded.terms) ||
+        recorded.terms.length !== computed.terms.length) fail(`${label} clamp or terms disagree with the model.`);
+    computed.terms.forEach((term, index) => {
+      if (!recorded.terms[index] || recorded.terms[index].label !== term.label ||
+          !numberMatches(recorded.terms[index].value, term.value)) {
+        fail(`${label} term ${index + 1} disagrees with the model.`);
+      }
+    });
+  };
+  checkReceipt(proof.result.actual, actual, "actual");
+  checkReceipt(proof.result.control, control, "control");
+  const effect = actual.after - control.after;
+  if (!numberMatches(proof.result.history_effect, effect)) fail("history effect disagrees with the model.");
+  return {withHistory: actual.after, withoutHistory: control.after, effect};
+}
+
+let scoreProofVerificationRequest = 0;
+async function verifyScoreProofFile() {
+  const request = ++scoreProofVerificationRequest;
+  const file = document.getElementById("score-proof-file").files?.[0];
+  const output = document.getElementById("score-proof-verification");
+  if (!file) { output.textContent = "Choose a transition proof JSON file."; return; }
+  if (file.size > 16 * 1024 * 1024) { output.textContent = "FAIL: Proof exceeds the 16 MiB limit."; return; }
+  output.textContent = "Checking score proof on this device…";
+  try {
+    const raw = await file.text();
+    if (request !== scoreProofVerificationRequest) return;
+    if (new TextEncoder().encode(raw).length > 16 * 1024 * 1024) throw new Error("Proof exceeds the 16 MiB limit.");
+    const proof = JSON.parse(raw);
+    const result = verifyScoreProof(proof);
+    const inputPreview = proof.input.length > 160 ? `${proof.input.slice(0, 160)}…` : proof.input;
+    output.textContent = `PASS: input “${inputPreview}”. With history μ ${result.withHistory.toFixed(5)}; no-history control μ ${result.withoutHistory.toFixed(5)}; immediate effect ${result.effect >= 0 ? "+" : ""}${result.effect.toFixed(5)}. Recomputed under the current scripted rules, not authenticated or scientifically validated.`;
+  } catch (error) {
+    if (request === scoreProofVerificationRequest) {
+      output.textContent = `FAIL: ${error instanceof SyntaxError ? "File is not valid JSON." : error.message || "Could not check the proof."}`;
+    }
+  }
+}
+
 function addMessage(type, html, text = "") {
   const wrap = document.getElementById("messages");
   const el = document.createElement("div");

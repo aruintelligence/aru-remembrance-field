@@ -33,6 +33,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A full-sequence challenge that evolves separate with-history and no-history scores from a clean baseline
 - A one-click three-control challenge with positive, neutral, and negative memory effects and a verifiable report
 - A portable one-step proof capsule that can be recomputed from a local checkout
+- A browser-side checker for current-model transition proofs, including the no-history control and every score term
 - A separate evidence ledger for exact-name fact recall, source IDs, conflicts, explicit resolution, and shareable cited-answer excerpts
 - Composer actions for recording a `name: value` assertion and asking recorded facts with sources, without changing the simulation score
 - A browser-side verifier for shared answer receipts and excerpts, with no import or command-line setup
@@ -101,7 +102,7 @@ The repository includes [v1](research/example-trajectory.json) and [v2](research
 
 ## Verify a submitted transition
 
-After submitting text, select **Download last proof JSON** in the inspector. The file captures the input, timestamp, starting score, the exact prior memories and user messages used by the scoring rule, and both score receipts. In a local checkout, run:
+After submitting text, select **Download last proof JSON** in the inspector. The file captures the input, timestamp, starting score, the exact prior memories and user messages used by the scoring rule, and both score receipts. A recipient can open **Verify a shared score proof** in the live app and choose a v2 proof JSON. The browser checks every term, both score receipts, and the immediate history effect without changing its own field or uploading the file. For v1 proofs, or for a command-line check in a local checkout, run:
 
 ```bash
 node tools/verify-proof.cjs /path/to/aru-remembrance-transition-proof.json
@@ -109,7 +110,7 @@ node tools/verify-proof.cjs /path/to/aru-remembrance-transition-proof.json
 
 To try it without entering private text, run `node tools/verify-proof.cjs research/example-proof-v2.json`. It should report `0.62624` with and without history: `nevermore` is not the word `never`, so prior `always` does not trigger a contradiction. The [v1 example](research/example-proof.json) still reports `0.72624` with history and `0.62624` without it. Existing downloaded v1 proof and trajectory files remain verifiable using the frozen [v1 model source](tools/field-model-v1.js); new downloads use v2. Reloading a browser with saved memory recalculates its derived tokens under v2.
 
-The verifier recalculates every score term against the repository's model source and exits with a failure if the recorded result disagrees. This checks **internal consistency**, not the authenticity of a downloaded file: someone who edits both its inputs and results can create a different consistent file. It is not a claim of scientific validation. Proof files contain your current input and up to 22 earlier memory texts and five prior user messages. They are saved locally, replaced by the next submission, and included in the full state export. Select **Erase proof copy** to remove that extra local copy without erasing the main memory; **Erase local state** removes everything. A 16 MiB limit protects the command-line verifier from oversized files.
+The verifiers recalculate every score term and reject mismatches. This checks **internal consistency**, not the authenticity of a downloaded file: someone who edits both its inputs and results can create a different consistent file. It is not a claim of scientific validation. Proof files contain your current input and up to 22 earlier memory texts and five prior user messages. They are saved locally, replaced by the next submission, and included in the full state export. Select **Erase proof copy** to remove that extra local copy without erasing the main memory; **Erase local state** removes everything. A 16 MiB limit protects both verifiers from oversized files.
 
 ## Evidence memory: recall with sources
 
