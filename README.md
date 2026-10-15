@@ -104,6 +104,14 @@ node tools/benchmark-evidence.cjs --json /path/to/your-challenge.json
 
 The included synthetic challenge checks 12 answer and refusal cases; each report shows correct answers, abstentions, unsafe answers, and source citations. A mismatch fails the command and the repository's CI. The JSON mode records case outcomes plus challenge and model hashes. Bring independently written cases to probe the boundary; a passing hand-authored sample is a regression check, not evidence of real-world factual accuracy.
 
+The [seeded falsification lab](research/evidence-falsification-protocol.md) probes the same rules with generated Unicode names, conflicting and superseded sources, irrelevant additions, changed record order, ambiguous questions, and refusals:
+
+```bash
+node tools/falsify-evidence.cjs --seed 20261015 --runs 2000
+```
+
+CI checks 26,000 deterministic properties across those 2,000 cases. A failed property prints a reproducible counterexample; a passing run means no violation was found within this synthetic generator's scope. It does not measure real-world accuracy or validate the field theory.
+
 After selecting **Ask with sources**, you can download a [portable question receipt](research/evidence-receipt-protocol.md) and replay it against a local checkout:
 
 ```bash
@@ -123,9 +131,10 @@ Run the small regression suite with Node.js:
 ```bash
 node tests/field.test.cjs
 node tests/benchmark.test.cjs
+node tests/falsifier.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, question receipts and invalidation, safe text display, corrupted saved data, local data controls, and benchmark failure modes.
+These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, question receipts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
 
 ## Research question
 
