@@ -270,6 +270,72 @@ test('exact-key evidence recall cites user sources and survives reload without c
   assert.equal(reloaded.field.claimCounter, 2);
 });
 
+test('constrained questions return recorded values with sources without scoring the question', () => {
+  const app = boot();
+  app.fact(' Favorite   Color ', 'teal');
+  const savedBefore = JSON.stringify([...app.saved]);
+  const question = app.context.document.getElementById('fact-question');
+  question.value = 'What’s my FAVORITE  COLOR?';
+  vm.runInContext('askEvidence()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /favorite color.*teal.*Source #1.*user assertion/i);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.memory.length, 0);
+  assert.equal(app.field.messages.length, 0);
+  assert.equal(JSON.stringify([...app.saved]), savedBefore);
+  assert.equal(app.field.lastTransition, null);
+  question.value = 'What is my favorite color and my age?';
+  vm.runInContext('askEvidence()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /No exact recorded name.*No answer given/);
+});
+
+test('question matching abstains on unsupported grammar and ambiguous stored names', () => {
+  const app = boot();
+  app.fact('favorite color', 'teal');
+  app.fact('my favorite color', 'amber');
+  const question = app.context.document.getElementById('fact-question');
+  question.value = 'What is my favorite color?';
+  vm.runInContext('askEvidence()', app.context);
+  const ambiguous = app.elements.get('fact-answer').textContent;
+  assert.match(ambiguous, /multiple recorded names.*No answer given/);
+  assert.match(ambiguous, /“favorite color”/);
+  assert.match(ambiguous, /“my favorite color”/);
+  question.value = 'What is favorite color?';
+  vm.runInContext('askEvidence()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /teal.*Source #1/);
+  question.value = 'Who knows my favorite color?';
+  vm.runInContext('askEvidence()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /Use.*What is.*No answer given/);
+});
+
+test('conflicts and deletions invalidate prior question answers and require a new source choice', () => {
+  const app = boot();
+  const question = app.context.document.getElementById('fact-question');
+  question.value = 'What is my favorite color?';
+  app.fact('favorite color', 'teal');
+  vm.runInContext('askEvidence()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /teal.*Source #1/);
+  app.fact('favorite color', 'amber');
+  assert.match(app.elements.get('fact-answer').textContent, /ledger changed.*Ask again/i);
+  vm.runInContext('askEvidence()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /Conflicting.*#1, #2.*No answer given/);
+  vm.runInContext('selectFact(1)', app.context);
+  vm.runInContext('askEvidence()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /teal.*Source #1/);
+  vm.runInContext('deleteFact(1)', app.context);
+  vm.runInContext('askEvidence()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /Only superseded.*No answer given/);
+});
+
+test('answers from untrusted values render as text', () => {
+  const app = boot();
+  app.fact('quote', '<img src=x onerror=alert(1)>');
+  app.context.document.getElementById('fact-question').value = 'What is quote?';
+  vm.runInContext('askEvidence()', app.context);
+  const answer = app.elements.get('fact-answer');
+  assert.match(answer.textContent, /<img src=x onerror=alert\(1\)>/);
+  assert.equal(answer.innerHTML, '');
+});
+
 test('conflicting assertions force abstention until one source is selected', () => {
   const app = boot();
   const lookup = vm.runInContext('lookupFact', app.context);
@@ -337,6 +403,9 @@ test('evidence-only export previews and merges a conflict with new local source 
 
   const target = boot();
   target.fact('favorite color', 'teal');
+  target.context.document.getElementById('fact-question').value = 'What is my favorite color?';
+  vm.runInContext('askEvidence()', target.context);
+  assert.match(target.elements.get('fact-answer').textContent, /teal.*Source #1/);
   const before = JSON.stringify(target.field.claims);
   target.elements.get('fact-import').files = [{size: Buffer.byteLength(json), text: async () => json}];
   target.elements.get('fact-import').value = 'aru-evidence-ledger.json';
@@ -348,6 +417,9 @@ test('evidence-only export previews and merges a conflict with new local source 
   assert.match(preview.children[1].textContent, /Incoming #1 → local #2.*amber/);
   assert.match(preview.children[2].textContent, /local #1 = teal.*local #2 = amber.*withhold an answer/);
   vm.runInContext('applyFactImport()', target.context);
+  assert.match(target.elements.get('fact-answer').textContent, /ledger changed.*Ask again/i);
+  vm.runInContext('askEvidence()', target.context);
+  assert.match(target.elements.get('fact-answer').textContent, /Conflicting.*No answer given/);
   assert.equal(target.field.claims.length, 2);
   assert.equal(target.field.claims[1].id, 2);
   assert.equal(target.field.claims[1].imported, true);
@@ -357,6 +429,10 @@ test('evidence-only export previews and merges a conflict with new local source 
   const reloaded = boot(Object.fromEntries(target.saved));
   assert.equal(vm.runInContext('lookupFact("favorite color").kind', reloaded.context), 'conflict');
   assert.match(reloaded.elements.get('ledger-entries').children[0].children[1].textContent, /imported assertion/);
+  reloaded.context.document.getElementById('fact-question').value = 'What is my favorite color?';
+  vm.runInContext('selectFact(2)', reloaded.context);
+  vm.runInContext('askEvidence()', reloaded.context);
+  assert.match(reloaded.elements.get('fact-answer').textContent, /amber.*Source #2.*user assertion/);
 });
 
 test('malformed and over-capacity imports are rejected in full without changing records', async () => {
