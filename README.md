@@ -52,7 +52,7 @@ Open **Inspect model state and last change** after submitting text. The panel sh
 
 The rules are fixed in `updateCoherence` in `index.html`: substring matches for a short list of words, token-count bonuses, an intent bonus or penalty, overlap with earlier memory, contradiction and repetition penalties against earlier entries, and baseline drift. They are hand-written heuristics, not learned weights or a validated measure. The submitted text is evaluated **before** it enters the message and memory history, so a first entry cannot match itself or count as its own repetition. For example, on a fresh browser state, submitting `What?` changes μ from 0.6400 to 0.6362: +0.0100 for a question and −0.0138 for baseline drift, with zero prior-memory and repetition terms.
 
-Entries and the score are saved in this browser's `localStorage`. The panel can download a JSON copy, including text you entered, or erase this app's local state. The app does not send entries to a server. Browser settings, extensions, or the device's other users may still affect local privacy, and clearing site data also removes the saved state. The export is a snapshot for inspection; importing it is not implemented.
+Entries and the score are saved in this browser's `localStorage`. The panel can download a JSON copy, including text you entered, or erase this app's local state. The app does not send entries to a server. Browser settings, extensions, or the device's other users may still affect local privacy, and clearing site data also removes the saved state. The full state export is a snapshot for inspection; importing that file is not implemented. The separate evidence ledger has its own portable export and import.
 
 ## Test the memory claim
 
@@ -82,13 +82,15 @@ If you record a different value under that name, the ledger displays a conflict 
 
 This is a separate, deterministic feature. Fact records do not affect the freeform score or its transition proof. They stay in this browser, are included in the full state export, and are removed by **Erase local state**. Source numbers refer only to user entries in this browser; they are not independent evidence that the entered value is true. The [evidence ledger protocol](research/evidence-ledger-protocol.md) gives the test cases and limits.
 
+To move the ledger to another browser, select **Download evidence JSON**. On the other browser, choose that file under **Import evidence JSON**. The preview lists every incoming value and its new local source number; **Apply reviewed import** merges those records with the existing ledger. It never replaces a local assertion or silently resolves a conflict. An import that would exceed 100 entries or contains an invalid record is rejected in full. A local edit after preview requires a fresh preview. The file can contain sensitive assertions, so share it only deliberately. Imported records are marked as such, but a file or its source numbers can be edited by anyone who has access to it.
+
 Run the small regression suite with Node.js:
 
 ```bash
 node tests/field.test.cjs
 ```
 
-It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, draft non-mutation, proof replay and changed-file detection, exact-name recall, conflicts and resolution, safe text display, corrupted saved data, and local data controls.
+It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, draft non-mutation, proof replay and changed-file detection, exact-name recall, conflicts and resolution, portable ledger merging and rejection, safe text display, corrupted saved data, and local data controls.
 
 ## Research question
 

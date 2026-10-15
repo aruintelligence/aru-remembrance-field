@@ -257,6 +257,101 @@ test('full fact ledger refuses overflow rather than silently evicting sources', 
   assert.match(app.elements.get('ledger-result').textContent, /nothing was silently removed/);
 });
 
+test('evidence-only export previews and merges a conflict with new local source IDs', async () => {
+  const origin = boot();
+  origin.fact('favorite color', 'amber');
+  vm.runInContext('downloadFactLedger()', origin.context);
+  const json = await origin.exports[0].text();
+  const bundle = JSON.parse(json);
+  assert.equal(bundle.format, 'aru-evidence-ledger');
+  assert.equal(bundle.version, 1);
+  assert.equal(bundle.records.length, 1);
+  assert.equal(bundle.records[0].value, 'amber');
+  assert.equal(bundle.memory, undefined);
+
+  const target = boot();
+  target.fact('favorite color', 'teal');
+  const before = JSON.stringify(target.field.claims);
+  target.elements.get('fact-import').files = [{size: Buffer.byteLength(json), text: async () => json}];
+  target.elements.get('fact-import').value = 'aru-evidence-ledger.json';
+  await vm.runInContext('previewFactImport()', target.context);
+  assert.equal(JSON.stringify(target.field.claims), before, 'preview must not change the ledger');
+  assert.equal(target.elements.get('fact-import-apply').disabled, false);
+  const preview = target.elements.get('fact-import-preview');
+  assert.match(preview.children[0].textContent, /1 affected name will have conflicting/);
+  assert.match(preview.children[1].textContent, /Incoming #1 → local #2.*amber/);
+  assert.match(preview.children[2].textContent, /local #1 = teal.*local #2 = amber.*withhold an answer/);
+  vm.runInContext('applyFactImport()', target.context);
+  assert.equal(target.field.claims.length, 2);
+  assert.equal(target.field.claims[1].id, 2);
+  assert.equal(target.field.claims[1].imported, true);
+  assert.equal(target.field.coherence, 0.64);
+  assert.equal(target.field.memory.length, 0);
+  assert.equal(vm.runInContext('lookupFact("favorite color").kind', target.context), 'conflict');
+  const reloaded = boot(Object.fromEntries(target.saved));
+  assert.equal(vm.runInContext('lookupFact("favorite color").kind', reloaded.context), 'conflict');
+  assert.match(reloaded.elements.get('ledger-entries').children[0].children[1].textContent, /imported assertion/);
+});
+
+test('malformed and over-capacity imports are rejected in full without changing records', async () => {
+  const app = boot();
+  app.fact('already here', 'yes');
+  const good = {id: 1, key: 'new', value: 'value', time: Date.now(), status: 'active'};
+  const bad = {...good, id: 2, time: 'invalid'};
+  const preview = async records => {
+    const text = JSON.stringify({format: 'aru-evidence-ledger', version: 1, records});
+    app.elements.get('fact-import').files = [{size: Buffer.byteLength(text), text: async () => text}];
+    app.elements.get('fact-import').value = 'candidate.json';
+    await vm.runInContext('previewFactImport()', app.context);
+  };
+  await preview([good, bad]);
+  assert.match(app.elements.get('fact-import-preview').textContent, /invalid or duplicate/);
+  assert.equal(app.elements.get('fact-import-apply').disabled, true);
+  assert.equal(app.field.claims.length, 1);
+  await preview(Array.from({length: 100}, (_, i) => ({...good, id: i + 1})));
+  assert.match(app.elements.get('fact-import-preview').textContent, /exceed 100 records/);
+  assert.equal(app.field.claims.length, 1);
+  const input = app.elements.get('fact-import');
+  input.files = [{size: 262145, text: async () => { throw Error('should not read'); }}];
+  input.value = 'too-large.json';
+  await vm.runInContext('previewFactImport()', app.context);
+  assert.match(app.elements.get('fact-import-preview').textContent, /256 KiB limit/);
+  assert.equal(app.field.claims.length, 1);
+});
+
+test('a local edit invalidates an import preview before it can be applied', async () => {
+  const app = boot();
+  const json = JSON.stringify({format: 'aru-evidence-ledger', version: 1,
+    records: [{id: 1, key: 'imported', value: 'value', time: Date.now(), status: 'active'}]});
+  app.context.document.getElementById('fact-import').files = [{size: Buffer.byteLength(json), text: async () => json}];
+  app.elements.get('fact-import').value = 'candidate.json';
+  await vm.runInContext('previewFactImport()', app.context);
+  app.fact('local', 'value');
+  assert.equal(app.elements.get('fact-import-apply').disabled, true);
+  vm.runInContext('applyFactImport()', app.context);
+  assert.equal(app.field.claims.length, 1);
+  assert.equal(app.field.claims[0].key, 'local');
+  assert.match(app.elements.get('fact-import-preview').textContent, /Choose the file again/);
+});
+
+test('imported markup remains text in both preview and stored cards', async () => {
+  const app = boot();
+  const json = JSON.stringify({format: 'aru-evidence-ledger', version: 1,
+    records: [{id: 1, key: '<img src=x onerror=alert(1)>', value: '<svg onload=alert(1)>',
+      time: Date.now(), status: 'active'}]});
+  const input = app.context.document.getElementById('fact-import');
+  input.files = [{size: Buffer.byteLength(json), text: async () => json}];
+  input.value = 'candidate.json';
+  await vm.runInContext('previewFactImport()', app.context);
+  const preview = app.elements.get('fact-import-preview').children[1];
+  assert.match(preview.textContent, /<svg onload=alert\(1\)>/);
+  assert.equal(preview.innerHTML, '');
+  vm.runInContext('applyFactImport()', app.context);
+  const card = app.elements.get('ledger-entries').children[0];
+  assert.match(card.children[0].textContent, /<svg onload=alert\(1\)>/);
+  assert.equal(card.children[0].innerHTML, '');
+});
+
 test('corrupt saved data falls back safely and saved messages restore as text', () => {
   const app = boot({
     aru_coherence: 'null',
