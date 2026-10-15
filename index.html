@@ -370,9 +370,11 @@
     <section class="evidence-question">
       <h2>Ask what is recorded</h2>
       <label for="fact-question">Question</label>
-      <input id="fact-question" maxlength="200" autocomplete="off" placeholder="What is my favorite color?">
+      <input id="fact-question" maxlength="200" autocomplete="off" placeholder="What is my favorite color?" oninput="invalidateEvidenceQuestion()">
       <div class="ledger-actions"><button type="button" onclick="askEvidence()">Ask with sources</button></div>
       <p id="fact-answer" role="status" aria-live="polite">Ask about a named fact, or record one below.</p>
+      <p>The question receipt contains a copy of your entire evidence ledger, including unrelated facts. Download it only if you want to inspect or share those assertions.</p>
+      <button type="button" id="evidence-receipt-download" onclick="downloadEvidenceReceipt()" disabled>Download question receipt JSON</button>
     </section>
     <label for="fact-key">Fact name</label>
     <input id="fact-key" maxlength="120" autocomplete="off" placeholder="favorite color">
@@ -930,6 +932,7 @@ function renderInspector() {
 /* ==================== EXPLICIT EVIDENCE MEMORY ==================== */
 let pendingFactImport = null;
 let factImportRequest = 0;
+let lastEvidenceAnswer = null;
 
 function lookupFact(key, claims = Field.claims) {
   const normalized = normalizeFactKey(key);
@@ -964,8 +967,18 @@ function resolveEvidenceQuestion(question, claims = Field.claims) {
   return {name: recordName, ...lookupFact(key, claims)};
 }
 
+function evidenceAnswerSummary(result) {
+  if (result.kind === "known") return {kind: result.kind, value: result.value, sources: [...result.sources]};
+  if (result.kind === "conflict" || result.kind === "historical") {
+    return {kind: result.kind, sources: result.records.map(claim => claim.id)};
+  }
+  if (result.kind === "ambiguous") return {kind: result.kind, names: [...result.names]};
+  return {kind: result.kind};
+}
+
 function askEvidence() {
-  const result = resolveEvidenceQuestion(document.getElementById("fact-question").value);
+  const question = document.getElementById("fact-question").value;
+  const result = resolveEvidenceQuestion(question);
   const output = document.getElementById("fact-answer");
   if (result.kind === "empty") output.textContent = "Enter a question first.";
   else if (result.kind === "unsupported") output.textContent = "Use ‘What is [fact name]?’ or ‘What is my [fact name]?’ No answer given.";
@@ -974,10 +987,37 @@ function askEvidence() {
   else if (result.kind === "historical") output.textContent = `Only superseded records exist for “${result.name}”. No answer given. Select a source explicitly.`;
   else if (result.kind === "conflict") output.textContent = `Conflicting current records for “${result.name}” (${result.records.map(claim => `#${claim.id}`).join(", ")}). No answer given. Select a source explicitly.`;
   else output.textContent = `Recorded answer for “${result.name}”: ${result.value}. Source ${result.sources.map(id => `#${id}`).join(", ")}. This is a user assertion, not an independently verified fact.`;
+  lastEvidenceAnswer = {question, snapshot: JSON.stringify(Field.claims), answer: evidenceAnswerSummary(result)};
+  document.getElementById("evidence-receipt-download").disabled = false;
 }
 
 function invalidateEvidenceAnswer() {
+  lastEvidenceAnswer = null;
+  document.getElementById("evidence-receipt-download").disabled = true;
   document.getElementById("fact-answer").textContent = "The ledger changed. Ask again for a current sourced answer.";
+}
+
+function invalidateEvidenceQuestion() {
+  lastEvidenceAnswer = null;
+  document.getElementById("evidence-receipt-download").disabled = true;
+  document.getElementById("fact-answer").textContent = "Question changed. Ask again for a current sourced answer.";
+}
+
+function downloadEvidenceReceipt() {
+  if (!lastEvidenceAnswer) return;
+  if (lastEvidenceAnswer.question !== document.getElementById("fact-question").value) {
+    invalidateEvidenceQuestion();
+    return;
+  }
+  if (lastEvidenceAnswer.snapshot !== JSON.stringify(Field.claims)) {
+    invalidateEvidenceAnswer();
+    return;
+  }
+  downloadJSON({
+    format: "aru-evidence-question-receipt", version: 1,
+    model_revision: "aru-evidence-questions-1", question: lastEvidenceAnswer.question,
+    records: JSON.parse(lastEvidenceAnswer.snapshot), answer: lastEvidenceAnswer.answer
+  }, "aru-evidence-question-receipt.json");
 }
 
 function describeFact(key) {

@@ -5,6 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { verifyProof } = require('../tools/verify-proof.cjs');
 const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
+const { verifyEvidenceReceipt } = require('../tools/verify-evidence-receipt.cjs');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -286,6 +287,67 @@ test('constrained questions return recorded values with sources without scoring 
   question.value = 'What is my favorite color and my age?';
   vm.runInContext('askEvidence()', app.context);
   assert.match(app.elements.get('fact-answer').textContent, /No exact recorded name.*No answer given/);
+});
+
+test('a question receipt replays a sourced answer using the full ledger without saving another copy', async () => {
+  const app = boot();
+  app.fact('favorite color', 'teal');
+  app.fact('unrelated private assertion', 'hidden');
+  const before = JSON.stringify([...app.saved]);
+  const question = app.context.document.getElementById('fact-question');
+  question.value = 'What is my favorite color?';
+  vm.runInContext('askEvidence()', app.context);
+  assert.equal(app.elements.get('evidence-receipt-download').disabled, false);
+  vm.runInContext('downloadEvidenceReceipt()', app.context);
+  const receipt = JSON.parse(await app.exports[0].text());
+  assert.equal(receipt.records.length, 2, 'the receipt must disclose the full snapshot');
+  assert.equal(receipt.records[1].value, 'hidden');
+  assert.deepEqual(receipt.answer, {kind: 'known', value: 'teal', sources: [1]});
+  assert.equal(verifyEvidenceReceipt(receipt).kind, 'known');
+  assert.equal(JSON.stringify([...app.saved]), before);
+
+  const changedValue = structuredClone(receipt);
+  changedValue.records[0].value = 'amber';
+  assert.throws(() => verifyEvidenceReceipt(changedValue), /recorded answer does not match/);
+  const hiddenConflict = structuredClone(receipt);
+  hiddenConflict.records.push({...hiddenConflict.records[0], id: 3, value: 'amber'});
+  assert.throws(() => verifyEvidenceReceipt(hiddenConflict), /recorded answer does not match/);
+  question.value = 'What is unrelated private assertion?';
+  vm.runInContext('downloadEvidenceReceipt()', app.context);
+  assert.equal(app.exports.length, 1, 'a changed question cannot export the old answer');
+  assert.equal(app.elements.get('evidence-receipt-download').disabled, true);
+});
+
+test('ledger edits invalidate receipts; conflict receipts replay abstention', async () => {
+  const app = boot();
+  const question = app.context.document.getElementById('fact-question');
+  app.fact('favorite color', 'teal');
+  question.value = 'What is favorite color?';
+  vm.runInContext('askEvidence()', app.context);
+  app.fact('favorite color', 'amber');
+  assert.equal(app.elements.get('evidence-receipt-download').disabled, true);
+  vm.runInContext('downloadEvidenceReceipt()', app.context);
+  assert.equal(app.exports.length, 0);
+  vm.runInContext('askEvidence()', app.context);
+  vm.runInContext('downloadEvidenceReceipt()', app.context);
+  const receipt = JSON.parse(await app.exports[0].text());
+  assert.deepEqual(receipt.answer, {kind: 'conflict', sources: [1, 2]});
+  assert.equal(verifyEvidenceReceipt(receipt).kind, 'conflict');
+  vm.runInContext('selectFact(1)', app.context);
+  assert.equal(app.elements.get('evidence-receipt-download').disabled, true);
+  vm.runInContext('invalidateEvidenceQuestion()', app.context);
+  assert.match(app.elements.get('fact-answer').textContent, /Question changed/);
+});
+
+test('receipt verifier rejects duplicate records and altered source citations', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-receipt.json'), 'utf8'));
+  assert.equal(verifyEvidenceReceipt(fixture).sources[0], 1);
+  const citation = structuredClone(fixture);
+  citation.answer.sources = [2];
+  assert.throws(() => verifyEvidenceReceipt(citation), /recorded answer does not match/);
+  const duplicate = structuredClone(fixture);
+  duplicate.records.push({...duplicate.records[0]});
+  assert.throws(() => verifyEvidenceReceipt(duplicate), /invalid or duplicate record/);
 });
 
 test('question matching abstains on unsupported grammar and ambiguous stored names', () => {
