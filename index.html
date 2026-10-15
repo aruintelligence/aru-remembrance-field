@@ -445,11 +445,12 @@
 
   <div class="input-area">
     <div class="input-row">
-      <textarea id="input" aria-label="Enter text for the simulation or a recorded-fact question" placeholder="Enter remembrance, or ask: What is my favorite color?" rows="1"
+      <textarea id="input" aria-label="Enter text for the simulation, record a fact, or ask a recorded-fact question" placeholder="Enter remembrance, record: favorite color: teal, or ask: What is my favorite color?" rows="1"
         oninput="autoResize(this)" onkeydown="handleKey(event)"></textarea>
       <button class="send-btn" id="send-btn" aria-label="Send input to simulation" onclick="ignite()">↑</button>
     </div>
     <div class="composer-evidence-actions">
+      <button type="button" onclick="recordComposerFact()">Record name: value</button>
       <button type="button" onclick="askComposerEvidence()">Ask recorded facts</button>
       <button type="button" id="quick-evidence-review" onclick="reviewComposerEvidence()" disabled>Review sources &amp; receipt</button>
     </div>
@@ -1120,6 +1121,36 @@ function clearComposerEvidence() {
   document.getElementById("quick-evidence-result").textContent = "";
 }
 
+function recordComposerFact() {
+  const output = document.getElementById("quick-evidence-result");
+  if (Field.busy) {
+    output.textContent = "Wait for the simulation to finish before recording a fact.";
+    return;
+  }
+  const input = document.getElementById("input");
+  const match = /^([^:\r\n]+):\s*([\s\S]+)$/.exec(input.value.trim());
+  if (!match) {
+    output.textContent = "Use fact name: value, for example favorite color: teal. No fact was recorded.";
+    return;
+  }
+  const plan = prepareFact(match[1], match[2]);
+  if (plan.error) { output.textContent = `${plan.error} No fact was recorded.`; return; }
+  const conflict = lookupFact(plan.key, [...Field.claims,
+    {id: plan.id, key: plan.key, value: plan.value, status: "active"}]).kind === "conflict";
+  const warning = conflict
+    ? " This creates conflicting current values. Recall will withhold an answer until you select a source in Evidence memory."
+    : "";
+  if (!window.confirm(`Record “${plan.key}: ${plan.value}” as user assertion source #${plan.id}?${warning}`)) {
+    output.textContent = "Recording canceled. Your text is still here.";
+    return;
+  }
+  recordFact(plan);
+  input.value = "";
+  input.style.height = "52px";
+  document.getElementById("draft-comparison").replaceChildren();
+  output.textContent = document.getElementById("ledger-result").textContent;
+}
+
 function askComposerEvidence() {
   clearComposerEvidence();
   const question = document.getElementById("input").value.trim();
@@ -1348,34 +1379,41 @@ function applyFactImport() {
   document.getElementById("ledger-result").textContent = `Import complete. ${sessionOnly ? "Session-only mode: imported records disappear when you leave." : Field.storageAvailable ? "Saved in this browser." : "Browser storage is unavailable; these records last only for this session."}`;
 }
 
-function rememberFact() {
-  const keyInput = document.getElementById("fact-key");
-  const valueInput = document.getElementById("fact-value");
-  const key = keyInput.value.trim().replace(/\s+/g, " ");
-  const value = valueInput.value.trim();
+function prepareFact(rawKey, rawValue) {
+  const key = rawKey.trim().replace(/\s+/g, " ");
+  const value = rawValue.trim();
   if (!key || !value || key.length > 120 || value.length > 500) {
-    document.getElementById("ledger-result").textContent = "Enter a fact name (up to 120 characters) and value (up to 500 characters).";
-    return;
+    return {error: "Enter a fact name (up to 120 characters) and value (up to 500 characters)."};
   }
   if (Field.claims.length >= 100) {
-    document.getElementById("ledger-result").textContent = "The 100-record limit is full. Delete an old record before adding another; nothing was silently removed.";
-    return;
+    return {error: "The 100-record limit is full. Delete an old record before adding another; nothing was silently removed."};
   }
   const next = Number.isSafeInteger(Field.claimCounter) && Field.claimCounter > 0 && Field.claimCounter <= 1e9
     ? Field.claimCounter : 1;
   const id = Math.max(next, ...Field.claims.map(claim => claim.id + 1));
   if (id > 1e9) {
-    document.getElementById("ledger-result").textContent = "The record counter has reached its limit. Export and erase local state to start a new ledger.";
-    return;
+    return {error: "The record counter has reached its limit. Export and erase local state to start a new ledger."};
   }
+  return {id, key, value};
+}
+
+function recordFact({id, key, value}) {
   invalidateFactImport();
   Field.claims.push({ id, key, value, time: now(), status: "active", imported: false });
   Field.claimCounter = id + 1;
   Field.save();
   invalidateEvidenceAnswer();
-  valueInput.value = "";
   renderLedger();
   showFactResult(key, `Recorded source #${id}. `);
+}
+
+function rememberFact() {
+  const keyInput = document.getElementById("fact-key");
+  const valueInput = document.getElementById("fact-value");
+  const plan = prepareFact(keyInput.value, valueInput.value);
+  if (plan.error) { document.getElementById("ledger-result").textContent = plan.error; return; }
+  recordFact(plan);
+  valueInput.value = "";
 }
 
 function recallFact() {

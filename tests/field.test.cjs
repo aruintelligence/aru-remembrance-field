@@ -490,6 +490,102 @@ test('main composer asks a recorded fact with a source and opens a verifiable re
   assert.equal(JSON.stringify([...app.saved]), before);
 });
 
+test('composer records a reviewed assertion without scoring and can immediately recall its source', () => {
+  const app = boot();
+  const prompts = [];
+  app.window.confirm = prompt => { prompts.push(prompt); return true; };
+  const input = app.context.document.getElementById('input');
+  app.context.document.getElementById('fact-key').value = 'unfinished ledger draft';
+  app.context.document.getElementById('fact-value').value = 'keep me';
+  input.value = '  Favorite   Color: teal  ';
+  vm.runInContext('recordComposerFact()', app.context);
+  assert.match(html, /onclick="recordComposerFact\(\)"/);
+  assert.match(prompts[0], /Favorite Color: teal.*source #1/);
+  assert.equal(input.value, '');
+  assert.equal(app.elements.get('fact-key').value, 'unfinished ledger draft');
+  assert.equal(app.elements.get('fact-value').value, 'keep me');
+  assert.equal(app.field.claims[0].key, 'Favorite Color');
+  assert.equal(app.field.claims[0].value, 'teal');
+  assert.match(app.elements.get('quick-evidence-result').textContent, /Recorded source #1.*teal.*user assertion/);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.memory.length, 0);
+  assert.equal(app.field.messages.length, 0);
+  assert.equal(app.field.lastTransition, null);
+  const reopened = boot(Object.fromEntries(app.saved));
+  reopened.context.document.getElementById('input').value = 'What is my favorite color?';
+  vm.runInContext('askComposerEvidence()', reopened.context);
+  assert.match(reopened.elements.get('quick-evidence-result').textContent, /teal.*Source #1.*user assertion/);
+});
+
+test('composer leaves draft and ledger unchanged on invalid input, cancellation, capacity, and busy state', () => {
+  const app = boot();
+  const input = app.context.document.getElementById('input');
+  let prompts = 0;
+  app.window.confirm = () => { prompts++; return false; };
+  input.value = 'no separator';
+  vm.runInContext('recordComposerFact()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /No fact was recorded/);
+  input.value = 'favorite color: teal';
+  const before = JSON.stringify([...app.saved]);
+  vm.runInContext('recordComposerFact()', app.context);
+  assert.equal(prompts, 1);
+  assert.equal(input.value, 'favorite color: teal');
+  assert.equal(app.field.claims.length, 0);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  app.field.busy = true;
+  vm.runInContext('recordComposerFact()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /Wait for the simulation/);
+  assert.equal(prompts, 1);
+  app.field.busy = false;
+  app.field.claims = Array.from({length: 100}, (_, index) => ({
+    id: index + 1, key: `key ${index}`, value: 'value', status: 'active'
+  }));
+  vm.runInContext('recordComposerFact()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /100-record limit/);
+  assert.equal(prompts, 1);
+  assert.equal(input.value, 'favorite color: teal');
+  assert.equal(app.field.claims.length, 100);
+  assert.equal(JSON.stringify([...app.saved]), before);
+});
+
+test('composer warns when a second assertion conflicts and recall abstains until source selection', () => {
+  const app = boot();
+  app.fact('favorite color', 'teal');
+  const input = app.context.document.getElementById('input');
+  let prompt = '';
+  app.window.confirm = message => { prompt = message; return true; };
+  input.value = 'FAVORITE COLOR: amber';
+  vm.runInContext('recordComposerFact()', app.context);
+  assert.match(prompt, /source #2.*conflicting current values.*withhold an answer/);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /Conflicting current records.*No answer given/);
+  input.value = 'What is my favorite color?';
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /Conflicting current records.*No answer given/);
+  vm.runInContext('selectFact(2)', app.context);
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /amber.*Source #2/);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.messages.length, 0);
+});
+
+test('composer recording follows session-only mode without writing browser storage', () => {
+  const origin = boot();
+  origin.fact('saved fact', 'blue');
+  const app = boot(Object.fromEntries(origin.saved));
+  const before = JSON.stringify([...app.saved]);
+  vm.runInContext('toggleSessionOnly()', app.context);
+  const input = app.context.document.getElementById('input');
+  input.value = 'session fact: amber';
+  vm.runInContext('recordComposerFact()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /Session-only mode/);
+  assert.equal(app.field.claims[1].value, 'amber');
+  assert.equal(JSON.stringify([...app.saved]), before);
+  input.value = 'What is my session fact?';
+  vm.runInContext('askComposerEvidence()', app.context);
+  assert.match(app.elements.get('quick-evidence-result').textContent, /amber.*Source #2/);
+  assert.equal(boot(Object.fromEntries(app.saved)).field.claims.length, 1);
+});
+
 test('composer refuses unsupported, missing, conflicting, and ambiguous questions as text', () => {
   const app = boot();
   app.fact('favorite color', '<img src=x onerror=alert(1)>');
