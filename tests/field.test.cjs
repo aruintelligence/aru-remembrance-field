@@ -266,6 +266,70 @@ test('portable proof replays the exact prior state and detects changed receipts 
   assert.ok(app.field.lastTransition);
 });
 
+async function chooseScoreProofFile(app, text, size = Buffer.byteLength(text)) {
+  const input = app.context.document.getElementById('score-proof-file');
+  input.files = [{size, text: async () => text}];
+  await vm.runInContext('verifyScoreProofFile()', app.context);
+  return app.elements.get('score-proof-verification').textContent;
+}
+
+test('browser replays a shared v2 proof and a fresh positive history effect without changing local state', async () => {
+  const visitor = boot({unrelated_key: 'keep'});
+  visitor.fact('private fact', 'do not overwrite');
+  const before = JSON.stringify([...visitor.saved]);
+  const fixture = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof-v2.json'), 'utf8');
+  assert.match(await chooseScoreProofFile(visitor, fixture), /PASS: input “nevermore”.*With history μ 0.62624; no-history control μ 0.62624; immediate effect \+0.00000/);
+  assert.equal(verifyProof(JSON.parse(fixture)).effect, 0);
+  const origin = boot();
+  origin.input('violet river');
+  origin.input('violet river');
+  const raw = JSON.stringify(origin.field.lastProof);
+  const expected = verifyProof(JSON.parse(raw));
+  assert.ok(expected.effect > 0);
+  assert.match(await chooseScoreProofFile(visitor, raw), /PASS: input “violet river”/);
+  assert.match(visitor.elements.get('score-proof-verification').textContent, /immediate effect \+/);
+  assert.equal(JSON.stringify([...visitor.saved]), before);
+  assert.equal(visitor.field.coherence, 0.64);
+  assert.equal(visitor.field.messages.length, 0);
+  assert.equal(visitor.field.claims[0].value, 'do not overwrite');
+});
+
+test('browser score verifier rejects changed terms, control, effect, unsupported revision, and malformed files', async () => {
+  const app = boot();
+  const proof = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof-v2.json'), 'utf8'));
+  const term = structuredClone(proof);
+  term.result.actual.terms[0].value += 0.01;
+  assert.match(await chooseScoreProofFile(app, JSON.stringify(term)), /FAIL: Invalid proof: actual term 1/);
+  const control = structuredClone(proof);
+  control.result.control.after += 0.01;
+  assert.match(await chooseScoreProofFile(app, JSON.stringify(control)), /FAIL: Invalid proof: control.after/);
+  const effect = structuredClone(proof);
+  effect.result.history_effect += 0.01;
+  assert.match(await chooseScoreProofFile(app, JSON.stringify(effect)), /FAIL: Invalid proof: history effect/);
+  const legacy = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof.json'), 'utf8');
+  assert.ok(verifyProof(JSON.parse(legacy)).effect > 0);
+  assert.match(await chooseScoreProofFile(app, legacy), /FAIL: Invalid proof: only current v2/);
+  assert.match(await chooseScoreProofFile(app, '{oops'), /FAIL: File is not valid JSON/);
+  assert.match(await chooseScoreProofFile(app, '{}', 16 * 1024 * 1024 + 1), /FAIL: Proof exceeds the 16 MiB limit/);
+  assert.equal(app.saved.size, 0);
+});
+
+test('browser score proof output treats untrusted input as text and ignores a stale read', async () => {
+  const origin = boot();
+  origin.input('<img src=x onerror=alert(1)>');
+  const app = boot();
+  assert.match(await chooseScoreProofFile(app, JSON.stringify(origin.field.lastProof)), /PASS: input “<img src=x onerror=alert\(1\)>”/);
+  assert.equal(app.elements.get('score-proof-verification').innerHTML, '');
+  const input = app.context.document.getElementById('score-proof-file');
+  let finishFirst;
+  input.files = [{size: 2, text: () => new Promise(resolve => { finishFirst = resolve; })}];
+  const first = vm.runInContext('verifyScoreProofFile()', app.context);
+  assert.match(await chooseScoreProofFile(app, '{}'), /FAIL: Invalid proof: unsupported schema/);
+  finishFirst('{}');
+  await first;
+  assert.match(app.elements.get('score-proof-verification').textContent, /FAIL: Invalid proof: unsupported schema/);
+});
+
 test('whole-word v2 rules reject substrings and retain Unicode and punctuation boundaries', () => {
   const current = loadEvaluator('aru-field-heuristics-2');
   const legacy = loadEvaluator('aru-field-heuristics-1');
