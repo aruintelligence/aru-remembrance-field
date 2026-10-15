@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "model_revision": "aru-field-heuristics-2",
+  "scope": "one-step symbolic score; not an authenticated record",
+  "input": "nevermore",
+  "evaluated_at": 1700000000000,
+  "start_mu": 0.64,
+  "prior_memory": [
+    {
+      "text": "always",
+      "tokens": [
+        "always"
+      ],
+      "weight": 1,
+      "time": 1700000000000
+    }
+  ],
+  "prior_user_messages": [],
+  "result": {
+    "actual": {
+      "before": 0.64,
+      "delta": -0.01376,
+      "after": 0.62624,
+      "terms": [
+        {
+          "label": "Matched word rules",
+          "value": 0
+        },
+        {
+          "label": "Length rule",
+          "value": 0
+        },
+        {
+          "label": "Intent rule",
+          "value": 0
+        },
+        {
+          "label": "Prior memory overlap",
+          "value": 0
+        },
+        {
+          "label": "Contradiction rule",
+          "value": 0
+        },
+        {
+          "label": "Prior repetition rule",
+          "value": 0
+        },
+        {
+          "label": "Baseline drift",
+          "value": -0.01376
+        }
+      ],
+      "clamped": false
+    },
+    "control": {
+      "before": 0.64,
+      "delta": -0.01376,
+      "after": 0.62624,
+      "terms": [
+        {
+          "label": "Matched word rules",
+          "value": 0
+        },
+        {
+          "label": "Length rule",
+          "value": 0
+        },
+        {
+          "label": "Intent rule",
+          "value": 0
+        },
+        {
+          "label": "Prior memory overlap",
+          "value": 0
+        },
+        {
+          "label": "Contradiction rule",
+          "value": 0
+        },
+        {
+          "label": "Prior repetition rule",
+          "value": 0
+        },
+        {
+          "label": "Baseline drift",
+          "value": -0.01376
+        }
+      ],
+      "clamped": false
+    },
+    "history_effect": 0
+  }
+}
