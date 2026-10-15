@@ -28,6 +28,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - An in-app receipt for each modeled score change and a local JSON export
 - A memory ablation lab that previews the same draft with and without prior history
 - A portable one-step proof capsule that can be recomputed from a local checkout
+- A separate evidence ledger for exact-name fact recall, source IDs, conflicts, and explicit resolution
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -73,13 +74,21 @@ To try it without entering private text, run `node tools/verify-proof.cjs resear
 
 The verifier recalculates every score term against the repository's model source and exits with a failure if the recorded result disagrees. This checks **internal consistency**, not the authenticity of a downloaded file: someone who edits both its inputs and results can create a different consistent file. It is not a claim of scientific validation. Proof files contain your current input and up to 22 earlier memory texts and five prior user messages. They are saved locally, replaced by the next submission, and included in the full state export. Select **Erase proof copy** to remove that extra local copy without erasing the main memory; **Erase local state** removes everything. A 16 MiB limit protects the command-line verifier from oversized files.
 
+## Evidence memory: recall with sources
+
+Open **Evidence memory**, enter a fact name such as `favorite color` and a value such as `teal`, then select **Record fact**. Entering `FAVORITE  COLOR` and selecting **Recall by name** retrieves the recorded value and its local source number. Matching ignores case, repeated spaces, and Unicode compatibility forms in the *name*; it does not infer synonyms or the meaning of prose.
+
+If you record a different value under that name, the ledger displays a conflict and refuses to return a single answer. **Use # as current** explicitly selects a source and keeps earlier records marked superseded. A later conflicting entry reopens the conflict. **Delete #** removes an individual record; deleting the chosen source never silently restores an older assertion. The ledger stops at 100 records and asks you to delete one before adding more.
+
+This is a separate, deterministic feature. Fact records do not affect the freeform score or its transition proof. They stay in this browser, are included in the full state export, and are removed by **Erase local state**. Source numbers refer only to user entries in this browser; they are not independent evidence that the entered value is true. The [evidence ledger protocol](research/evidence-ledger-protocol.md) gives the test cases and limits.
+
 Run the small regression suite with Node.js:
 
 ```bash
 node tests/field.test.cjs
 ```
 
-It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, draft non-mutation, proof replay and changed-file detection, safe preview and restored text display, corrupted saved data, and local data controls.
+It covers first and repeated input scoring, matched and unrelated memory controls, negative history effects, draft non-mutation, proof replay and changed-file detection, exact-name recall, conflicts and resolution, safe text display, corrupted saved data, and local data controls.
 
 ## Research question
 

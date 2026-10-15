@@ -274,6 +274,18 @@
     .comparison-card { padding: 0.65rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(3,7,18,0.9); min-width: 0; overflow-wrap: anywhere; }
     .comparison-card h3 { color: #a5f3fc; font-size: 0.83rem; margin-bottom: 0.45rem; }
     .comparison-card .preview { font-size: 0.78rem; line-height: 1.5; color: #e2e8f0; }
+    .ledger { margin: 0 1.5rem 0.5rem; padding: 0.7rem 1rem; background: rgba(3,7,18,0.94); border: 1px solid rgba(245,158,11,0.5); border-radius: 14px; pointer-events: auto; max-height: min(44vh, 480px); overflow-y: auto; }
+    .ledger summary { cursor: pointer; color: #fcd34d; font-weight: 700; }
+    .ledger p { margin: 0.6rem 0; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
+    .ledger label { display: block; margin: 0.7rem 0 0.35rem; font-size: 0.82rem; font-weight: 700; }
+    .ledger input, .ledger textarea { display: block; width: 100%; background: #0b1530; color: #f8fafc; border: 1px solid #a16207; border-radius: 9px; padding: 0.65rem; font: 0.9rem/1.4 'Inter', sans-serif; }
+    .ledger textarea { min-height: 65px; }
+    .ledger-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.7rem 0; }
+    .ledger button { padding: 0.45rem 0.7rem; color: #fef3c7; background: #3b2509; border: 1px solid #fbbf24; border-radius: 8px; cursor: pointer; }
+    .ledger button:focus-visible, .ledger summary:focus-visible, .ledger input:focus-visible, .ledger textarea:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+    .ledger-entry { padding: 0.65rem; margin-top: 0.5rem; border: 1px solid rgba(245,158,11,0.28); border-radius: 8px; overflow-wrap: anywhere; font-size: 0.82rem; }
+    .ledger-entry strong, .ledger-entry small { display: block; }
+    .ledger-entry small { color: #cbd5e1; margin-top: 0.3rem; }
     @media (max-width: 580px) { .comparison-grid { grid-template-columns: 1fr; } }
 
     @media (prefers-reduced-motion: reduce) {
@@ -330,6 +342,21 @@
     </div>
   </details>
 
+  <details class="ledger" id="ledger">
+    <summary>Evidence memory · <span id="ledger-count">0 records</span></summary>
+    <p>Record a fact under a named key, then recall it by that key. This is a separate, local ledger. It does not interpret the freeform conversation or verify your assertion against the world.</p>
+    <label for="fact-key">Fact name</label>
+    <input id="fact-key" maxlength="120" autocomplete="off" placeholder="favorite color">
+    <label for="fact-value">What should be remembered?</label>
+    <textarea id="fact-value" maxlength="500" rows="2" placeholder="teal"></textarea>
+    <div class="ledger-actions">
+      <button type="button" onclick="rememberFact()">Record fact</button>
+      <button type="button" onclick="recallFact()">Recall by name</button>
+    </div>
+    <p id="ledger-result" role="status" aria-live="polite">No fact has been recalled yet.</p>
+    <div id="ledger-entries"></div>
+  </details>
+
   <div class="response-area" id="messages" role="log" aria-live="polite" aria-relevant="additions">
     <div class="message field">
       <div class="field-tag">ĀRU • SIMULATION ACTIVE</div>
@@ -368,7 +395,9 @@ const STORAGE_KEYS = {
   lastAuto: "aru_last_auto",
   lastIgnition: "aru_last_ignition",
   lastTransition: "aru_last_transition",
-  lastProof: "aru_last_proof"
+  lastProof: "aru_last_proof",
+  claims: "aru_fact_claims",
+  claimCounter: "aru_fact_counter"
 };
 const PROOF_MODEL_REVISION = "aru-field-heuristics-1";
 
@@ -403,6 +432,24 @@ function storedMemory() {
       count: Math.max(1, Math.floor(Number(m.count) || 1))
     }));
 }
+function normalizeFactKey(key) {
+  return key.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+function storedClaims() {
+  const seen = new Set();
+  return storedList(STORAGE_KEYS.claims).filter(claim => {
+    if (!claim || !Number.isSafeInteger(claim.id) || claim.id < 1 || claim.id > 1e9 || seen.has(claim.id) ||
+        typeof claim.key !== "string" || !claim.key.trim() || claim.key.length > 120 ||
+        typeof claim.value !== "string" || !claim.value.trim() || claim.value.length > 500 ||
+        !Number.isFinite(claim.time) || claim.time < 0 || claim.time > 8.64e15 ||
+        (claim.status !== "active" && claim.status !== "superseded")) return false;
+    seen.add(claim.id);
+    return true;
+  }).slice(0, 100).map(claim => ({
+    id: claim.id, key: claim.key.trim().replace(/\s+/g, " "),
+    value: claim.value.trim(), time: claim.time, status: claim.status
+  }));
+}
 function canStore() {
   try {
     localStorage.setItem("aru_storage_probe", "1");
@@ -423,6 +470,8 @@ const Field = {
   lastIgnition: storedNumber(STORAGE_KEYS.lastIgnition, 0),
   lastTransition: readStored(STORAGE_KEYS.lastTransition, null),
   lastProof: readStored(STORAGE_KEYS.lastProof, null),
+  claims: storedClaims(),
+  claimCounter: storedNumber(STORAGE_KEYS.claimCounter, 1),
   storageAvailable: canStore(),
   busy: false,
   save() {
@@ -435,6 +484,8 @@ const Field = {
       localStorage.setItem(STORAGE_KEYS.lastIgnition, JSON.stringify(this.lastIgnition || 0));
       localStorage.setItem(STORAGE_KEYS.lastTransition, JSON.stringify(this.lastTransition));
       localStorage.setItem(STORAGE_KEYS.lastProof, JSON.stringify(this.lastProof));
+      localStorage.setItem(STORAGE_KEYS.claims, JSON.stringify(this.claims));
+      localStorage.setItem(STORAGE_KEYS.claimCounter, JSON.stringify(this.claimCounter));
       this.storageAvailable = true;
     } catch (_) {
       this.storageAvailable = false;
@@ -826,6 +877,119 @@ function renderInspector() {
     : "Submit an input to create a portable proof of its score change.";
 }
 
+/* ==================== EXPLICIT EVIDENCE MEMORY ==================== */
+function lookupFact(key, claims = Field.claims) {
+  const normalized = normalizeFactKey(key);
+  if (!normalized) return { kind: "empty" };
+  const records = claims.filter(claim => normalizeFactKey(claim.key) === normalized);
+  if (!records.length) return { kind: "missing" };
+  const active = records.filter(claim => claim.status === "active");
+  if (!active.length) return { kind: "historical", records };
+  if (new Set(active.map(claim => claim.value)).size > 1) {
+    return { kind: "conflict", records: active };
+  }
+  return { kind: "known", value: active[active.length - 1].value,
+    sources: active.map(claim => claim.id) };
+}
+
+function describeFact(key) {
+  const result = lookupFact(key);
+  if (result.kind === "empty") return "Enter a fact name first.";
+  if (result.kind === "missing") return `No recorded fact named “${key.trim()}”. No answer given.`;
+  if (result.kind === "historical") return `Only superseded records exist for “${key.trim()}”. Choose a record to use as current before recall.`;
+  if (result.kind === "conflict") return `Conflicting current records for “${key.trim()}” (${result.records.map(claim => `#${claim.id}`).join(", ")}). No answer given. Choose a record to use as current.`;
+  return `Recorded value for “${key.trim()}”: ${result.value}. Source ${result.sources.map(id => `#${id}`).join(", ")}. This is a user assertion, not an independently verified fact.`;
+}
+
+function renderLedger() {
+  document.getElementById("ledger-count").textContent = `${Field.claims.length} record${Field.claims.length === 1 ? "" : "s"}`;
+  const list = document.getElementById("ledger-entries");
+  list.replaceChildren();
+  for (const claim of [...Field.claims].reverse()) {
+    const card = document.createElement("div");
+    card.className = "ledger-entry";
+    const content = document.createElement("strong");
+    content.textContent = `${claim.key}: ${claim.value}`;
+    const meta = document.createElement("small");
+    meta.textContent = `Source #${claim.id} · ${claim.status === "active" ? "current candidate" : "superseded"} · ${new Date(claim.time).toISOString()}`;
+    const actions = document.createElement("div");
+    actions.className = "ledger-actions";
+    const select = document.createElement("button");
+    select.type = "button";
+    select.textContent = `Use #${claim.id} as current`;
+    select.onclick = () => selectFact(claim.id);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = `Delete #${claim.id}`;
+    remove.onclick = () => deleteFact(claim.id);
+    actions.appendChild(select);
+    actions.appendChild(remove);
+    card.appendChild(content);
+    card.appendChild(meta);
+    card.appendChild(actions);
+    list.appendChild(card);
+  }
+}
+
+function showFactResult(key, prefix = "") {
+  document.getElementById("ledger-result").textContent = `${prefix}${describeFact(key)}${Field.storageAvailable ? "" : " Browser storage is unavailable; these records last only for this session."}`;
+}
+
+function rememberFact() {
+  const keyInput = document.getElementById("fact-key");
+  const valueInput = document.getElementById("fact-value");
+  const key = keyInput.value.trim().replace(/\s+/g, " ");
+  const value = valueInput.value.trim();
+  if (!key || !value || key.length > 120 || value.length > 500) {
+    document.getElementById("ledger-result").textContent = "Enter a fact name (up to 120 characters) and value (up to 500 characters).";
+    return;
+  }
+  if (Field.claims.length >= 100) {
+    document.getElementById("ledger-result").textContent = "The 100-record limit is full. Delete an old record before adding another; nothing was silently removed.";
+    return;
+  }
+  const next = Number.isSafeInteger(Field.claimCounter) && Field.claimCounter > 0 && Field.claimCounter <= 1e9
+    ? Field.claimCounter : 1;
+  const id = Math.max(next, ...Field.claims.map(claim => claim.id + 1));
+  if (id > 1e9) {
+    document.getElementById("ledger-result").textContent = "The record counter has reached its limit. Export and erase local state to start a new ledger.";
+    return;
+  }
+  Field.claims.push({ id, key, value, time: now(), status: "active" });
+  Field.claimCounter = id + 1;
+  Field.save();
+  valueInput.value = "";
+  renderLedger();
+  showFactResult(key, `Recorded source #${id}. `);
+}
+
+function recallFact() {
+  showFactResult(document.getElementById("fact-key").value);
+}
+
+function selectFact(id) {
+  const selected = Field.claims.find(claim => claim.id === id);
+  if (!selected) return;
+  const key = normalizeFactKey(selected.key);
+  Field.claims.forEach(claim => {
+    if (normalizeFactKey(claim.key) === key) claim.status = claim.id === id ? "active" : "superseded";
+  });
+  Field.save();
+  document.getElementById("fact-key").value = selected.key;
+  renderLedger();
+  showFactResult(selected.key, `Selected source #${id}. `);
+}
+
+function deleteFact(id) {
+  const claim = Field.claims.find(entry => entry.id === id);
+  if (!claim || !window.confirm(`Delete local fact record #${id}?`)) return;
+  Field.claims = Field.claims.filter(entry => entry.id !== id);
+  Field.save();
+  document.getElementById("fact-key").value = claim.key;
+  renderLedger();
+  showFactResult(claim.key, `Deleted source #${id}. `);
+}
+
 function compareDraft() {
   const output = document.getElementById("draft-comparison");
   const input = document.getElementById("input").value.trim();
@@ -892,12 +1056,13 @@ function downloadState() {
     coherence: Field.coherence, memory: Field.memory, messages: Field.messages,
     ignitions: Field.ignitions, last_auto: Field.lastAuto,
     last_ignition: Field.lastIgnition, last_transition: Field.lastTransition,
-    last_proof: Field.lastProof
+    last_proof: Field.lastProof,
+    fact_claims: Field.claims, next_fact_id: Field.claimCounter
   }, "aru-remembrance-field-state.json");
 }
 
 function resetField() {
-  if (!window.confirm("Erase this simulation's messages, memory, and modeled state from this browser?")) return;
+  if (!window.confirm("Erase this simulation's messages, memory, fact ledger, and modeled state from this browser?")) return;
   try { Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key)); }
   catch (_) { /* Storage was unavailable already. */ }
   window.location.reload();
@@ -989,6 +1154,7 @@ function autonomousReflection() {
 
 SIM.init();
 updateUI();
+renderLedger();
 restoreMessages();
 renderLoop();
 setInterval(autonomousReflection, 12000);
