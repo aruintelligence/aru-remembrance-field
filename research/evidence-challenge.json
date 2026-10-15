@@ -1,0 +1,94 @@
+{
+  "format": "aru-evidence-benchmark",
+  "version": 1,
+  "title": "Synthetic exact-name recall challenge",
+  "cases": [
+    {
+      "id": "direct-answer",
+      "claims": [{"id": 1, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "active"}],
+      "question": "What is favorite color?",
+      "expected": {"kind": "known", "value": "teal", "sources": [1]}
+    },
+    {
+      "id": "unicode-and-spaces",
+      "claims": [{"id": 4, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "active"}],
+      "question": "What’s my ＦＡＶＯＲＩＴＥ　ＣＯＬＯＲ?",
+      "expected": {"kind": "known", "value": "teal", "sources": [4]}
+    },
+    {
+      "id": "agreement-cites-both",
+      "claims": [
+        {"id": 11, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "active"},
+        {"id": 12, "key": "FAVORITE  COLOR", "value": "teal", "time": 1700000000001, "status": "active"}
+      ],
+      "question": "What's my favorite color?",
+      "expected": {"kind": "known", "value": "teal", "sources": [11, 12]}
+    },
+    {
+      "id": "unknown-name",
+      "claims": [{"id": 1, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "active"}],
+      "question": "What is favorite food?",
+      "expected": {"kind": "missing"}
+    },
+    {
+      "id": "unsupported-question",
+      "claims": [{"id": 1, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "active"}],
+      "question": "Why is my favorite color teal?",
+      "expected": {"kind": "unsupported"}
+    },
+    {
+      "id": "possessive-ambiguity",
+      "claims": [
+        {"id": 1, "key": "city", "value": "Rome", "time": 1700000000000, "status": "active"},
+        {"id": 2, "key": "my city", "value": "Paris", "time": 1700000000001, "status": "active"}
+      ],
+      "question": "What is my city?",
+      "expected": {"kind": "ambiguous"}
+    },
+    {
+      "id": "active-conflict",
+      "claims": [
+        {"id": 1, "key": "city", "value": "Rome", "time": 1700000000000, "status": "active"},
+        {"id": 2, "key": "city", "value": "Paris", "time": 1700000000001, "status": "active"}
+      ],
+      "question": "What is city?",
+      "expected": {"kind": "conflict"}
+    },
+    {
+      "id": "historical-only",
+      "claims": [{"id": 1, "key": "city", "value": "Rome", "time": 1700000000000, "status": "superseded"}],
+      "question": "What is city?",
+      "expected": {"kind": "historical"}
+    },
+    {
+      "id": "selected-current-source",
+      "claims": [
+        {"id": 1, "key": "city", "value": "Rome", "time": 1700000000000, "status": "superseded"},
+        {"id": 2, "key": "city", "value": "Paris", "time": 1700000000001, "status": "active"}
+      ],
+      "question": "What is city?",
+      "expected": {"kind": "known", "value": "Paris", "sources": [2]}
+    },
+    {
+      "id": "case-sensitive-values",
+      "claims": [
+        {"id": 1, "key": "tag", "value": "Teal", "time": 1700000000000, "status": "active"},
+        {"id": 2, "key": "tag", "value": "teal", "time": 1700000000001, "status": "active"}
+      ],
+      "question": "What is tag?",
+      "expected": {"kind": "conflict"}
+    },
+    {
+      "id": "empty-question",
+      "claims": [],
+      "question": "  ",
+      "expected": {"kind": "empty"}
+    },
+    {
+      "id": "too-long-question",
+      "claims": [{"id": 1, "key": "tag", "value": "teal", "time": 1700000000000, "status": "active"}],
+      "question": "What is tag? This question deliberately exceeds the two hundred character limit of the browser interface, so the evidence resolver should decline it even when a matching active claim exists in the ledger. The remaining text makes the input longer than the limit.",
+      "expected": {"kind": "unsupported"}
+    }
+  ]
+}
