@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { verifyProof } = require('../tools/verify-proof.cjs');
+const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -185,6 +186,71 @@ test('portable proof replays the exact prior state and detects changed receipts 
   assert.equal(app.field.lastProof, null);
   assert.equal(app.saved.has('aru_last_proof'), false);
   assert.ok(app.field.lastTransition);
+});
+
+test('full-sequence lab has positive, zero, and negative controls from a fresh initial score', () => {
+  const app = boot({aru_coherence: '0.9', aru_memory: JSON.stringify([
+    {text: 'violet river', time: Date.now(), weight: 2}
+  ])});
+  const savedBefore = JSON.stringify([...app.saved]);
+  const run = vm.runInContext('runTrajectory', app.context);
+  const positive = run(['violet river', 'violet river']);
+  const unrelated = run(['amber comet', 'violet river']);
+  const negative = run(['always', 'never']);
+  assert.equal(positive.steps[0].effect, 0);
+  assert.ok(Math.abs(positive.final.difference - 0.06677342396201069) < 1e-12);
+  assert.equal(unrelated.final.difference, 0);
+  assert.ok(Math.abs(negative.final.difference + 0.03) < 1e-12);
+  assert.equal(negative.steps[1].actual.terms.find(t => t.label === 'Contradiction rule').value, -0.03);
+  assert.equal(app.field.coherence, 0.9);
+  assert.equal(app.field.memory.length, 1);
+  assert.equal(JSON.stringify([...app.saved]), savedBefore);
+});
+
+test('trajectory download recomputes all steps, rejects altered results, and stays out of local storage', async () => {
+  const app = boot();
+  const input = app.context.document.getElementById('trajectory-input');
+  input.value = 'violet river\nviolet river\n<svg onload=alert(1)>';
+  vm.runInContext('runTrajectoryLab()', app.context);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.memory.length, 0);
+  assert.equal(app.saved.size, 0);
+  const output = app.elements.get('trajectory-result');
+  const table = output.children[1].children[0];
+  const thirdInput = table.children[1].children[2].children[1];
+  assert.match(thirdInput.textContent, /<svg onload=alert\(1\)>/);
+  assert.equal(thirdInput.innerHTML, '');
+  vm.runInContext('downloadTrajectory()', app.context);
+  const proof = JSON.parse(await app.exports[0].text());
+  assert.equal(proof.inputs.length, 3);
+  assert.equal(verifyTrajectory(proof).steps, 3);
+  const changedScore = structuredClone(proof);
+  changedScore.steps[1].actual.after += 0.01;
+  assert.throws(() => verifyTrajectory(changedScore), /step 2 with history\.after/);
+  const changedInput = structuredClone(proof);
+  changedInput.inputs[1] = 'amber comet';
+  assert.throws(() => verifyTrajectory(changedInput), /does not match/);
+  input.value = 'new draft';
+  vm.runInContext('clearTrajectoryResult()', app.context);
+  assert.equal(app.elements.get('trajectory-download').disabled, true);
+  vm.runInContext('downloadTrajectory()', app.context);
+  assert.equal(app.exports.length, 1);
+});
+
+test('trajectory limits invalid sequences and verifies the public synthetic fixture', () => {
+  const app = boot();
+  const input = app.context.document.getElementById('trajectory-input');
+  input.value = 'one';
+  vm.runInContext('runTrajectoryLab()', app.context);
+  assert.match(app.elements.get('trajectory-result').textContent, /2–24/);
+  assert.equal(app.elements.get('trajectory-download').disabled, true);
+  input.value = `${'a'.repeat(501)}\nsecond`;
+  vm.runInContext('runTrajectoryLab()', app.context);
+  assert.match(app.elements.get('trajectory-result').textContent, /500 characters/);
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-trajectory.json'), 'utf8'));
+  const result = verifyTrajectory(fixture);
+  assert.equal(result.steps, 5);
+  assert.ok(Math.abs(result.difference - 0.034986718779233206) < 1e-12);
 });
 
 test('exact-key evidence recall cites user sources and survives reload without changing freeform memory', () => {
