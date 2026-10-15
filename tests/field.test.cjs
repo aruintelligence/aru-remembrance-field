@@ -953,3 +953,62 @@ test('a storage write failure rolls back every state key before reload', async (
   assert.equal(target.window.reloaded, undefined);
   assert.match(target.elements.get('state-import-preview').textContent, /original local state was kept/);
 });
+
+test('session-only mode keeps new score, messages, proofs, and facts out of browser storage', async () => {
+  const origin = boot();
+  origin.input('Earlier saved memory');
+  origin.fact('saved fact', 'blue');
+  const app = boot(Object.fromEntries(origin.saved));
+  const before = JSON.stringify([...app.saved]);
+  vm.runInContext('toggleSessionOnly()', app.context);
+  assert.equal(app.elements.get('session-toggle').getAttribute('aria-checked'), 'true');
+  assert.match(app.elements.get('storage-status').textContent, /not saved/);
+  app.input('Private session phrase');
+  app.fact('session fact', 'amber');
+  assert.equal(app.field.memory.some(m => m.text === 'Private session phrase'), true);
+  assert.equal(app.field.claims.some(c => c.key === 'session fact'), true);
+  assert.equal(app.field.lastProof.input, 'Private session phrase');
+  assert.equal(JSON.stringify([...app.saved]), before);
+  vm.runInContext('downloadState()', app.context);
+  const explicitDownload = await app.exports[0].text();
+  assert.match(explicitDownload, /Private session phrase/);
+
+  app.window.confirm = () => false;
+  vm.runInContext('toggleSessionOnly()', app.context);
+  assert.equal(app.window.reloaded, undefined);
+  assert.equal(app.elements.get('session-toggle').getAttribute('aria-checked'), 'true');
+  app.window.confirm = () => true;
+  vm.runInContext('toggleSessionOnly()', app.context);
+  assert.equal(app.window.reloaded, true);
+  const reopened = boot(Object.fromEntries(app.saved));
+  assert.equal(reopened.field.memory.some(m => m.text === 'Private session phrase'), false);
+  assert.equal(reopened.field.claims.some(c => c.key === 'session fact'), false);
+  assert.equal(reopened.field.memory[0].text, 'Earlier saved memory');
+  assert.equal(reopened.field.claims[0].value, 'blue');
+  assert.equal(vm.runInContext('sessionOnly', reopened.context), false);
+});
+
+test('session-only mode blocks replacement of saved state even after a prior preview', async () => {
+  const source = boot();
+  source.input('Backup value');
+  vm.runInContext('downloadState()', source.context);
+  const app = boot();
+  await chooseStateFile(app, await source.exports[0].text());
+  assert.equal(app.elements.get('state-import-apply').disabled, false);
+  vm.runInContext('toggleSessionOnly()', app.context);
+  assert.equal(app.elements.get('state-import-apply').disabled, true);
+  vm.runInContext('applyStateImport()', app.context);
+  assert.equal(app.window.reloaded, undefined);
+  assert.equal(app.saved.size, 0);
+  await chooseStateFile(app, await source.exports[0].text());
+  assert.match(app.elements.get('state-import-preview').textContent, /Leave session-only mode/);
+  assert.equal(app.elements.get('state-import-apply').disabled, true);
+});
+
+test('session-only mode cannot start midway through a saving submission', () => {
+  const app = boot();
+  app.field.busy = true;
+  vm.runInContext('toggleSessionOnly()', app.context);
+  assert.equal(vm.runInContext('sessionOnly', app.context), false);
+  assert.match(app.elements.get('session-mode').textContent, /Wait for the current submission/);
+});
