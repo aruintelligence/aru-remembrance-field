@@ -18,6 +18,7 @@ jobs:
       - run: node tests/field.test.cjs
       - run: node tests/benchmark.test.cjs
       - run: node tests/falsifier.test.cjs
+      - run: node tests/blind-analyzer.test.cjs
       - run: node tools/benchmark-evidence.cjs research/evidence-challenge.json
       - run: node tools/falsify-evidence.cjs --seed 20261015 --runs 2000
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json
@@ -28,6 +29,7 @@ jobs:
       - run: node tools/verify-trajectory.cjs research/example-trajectory-v2.json
       - run: node tools/verify-memory-challenge.cjs research/example-memory-challenge.json
       - run: node tools/verify-blind-trial.cjs research/example-blind-trial.json
+      - run: node tools/analyze-blind-trials.cjs research/example-blind-trial.json
       - run: |
           python3 tools/differential-field-v2.py --seed 20261015 --runs 2000 --json | tee /tmp/aru-score-differential.json
           diff -u research/example-score-differential-report.json /tmp/aru-score-differential.json
