@@ -67,6 +67,11 @@ function boot(values = {}) {
     input(value) {
       document.getElementById('input').value = value;
       vm.runInContext('ignite()', context);
+    },
+    fact(key, value) {
+      document.getElementById('fact-key').value = key;
+      document.getElementById('fact-value').value = value;
+      vm.runInContext('rememberFact()', context);
     }
   };
 }
@@ -182,6 +187,76 @@ test('portable proof replays the exact prior state and detects changed receipts 
   assert.ok(app.field.lastTransition);
 });
 
+test('exact-key evidence recall cites user sources and survives reload without changing freeform memory', () => {
+  const app = boot();
+  app.fact(' Favorite   Color ', 'teal');
+  assert.equal(app.field.claims.length, 1);
+  assert.equal(app.field.memory.length, 0);
+  assert.equal(app.field.messages.length, 0);
+  assert.equal(app.field.coherence, 0.64);
+  app.elements.get('fact-key').value = 'FAVORITE COLOR';
+  vm.runInContext('recallFact()', app.context);
+  assert.match(app.elements.get('ledger-result').textContent, /teal.*Source #1/);
+  const reloaded = boot(Object.fromEntries(app.saved));
+  reloaded.context.document.getElementById('fact-key').value = 'favorite color';
+  vm.runInContext('recallFact()', reloaded.context);
+  assert.match(reloaded.elements.get('ledger-result').textContent, /teal.*Source #1/);
+  assert.equal(reloaded.field.claimCounter, 2);
+});
+
+test('conflicting assertions force abstention until one source is selected', () => {
+  const app = boot();
+  const lookup = vm.runInContext('lookupFact', app.context);
+  app.fact('favorite color', 'teal');
+  app.fact('FAVORITE COLOR', 'amber');
+  assert.equal(lookup('favorite color').kind, 'conflict');
+  assert.match(app.elements.get('ledger-result').textContent, /No answer given/);
+  vm.runInContext('selectFact(1)', app.context);
+  assert.equal(lookup('favorite color').kind, 'known');
+  assert.equal(lookup('favorite color').value, 'teal');
+  assert.equal(app.field.claims[1].status, 'superseded');
+  const reloaded = boot(Object.fromEntries(app.saved));
+  assert.equal(vm.runInContext('lookupFact("favorite color")', reloaded.context).value, 'teal');
+  app.fact('favorite color', 'violet');
+  assert.equal(lookup('favorite color').kind, 'conflict');
+  vm.runInContext('deleteFact(3)', app.context);
+  assert.equal(lookup('favorite color').value, 'teal');
+  vm.runInContext('deleteFact(1)', app.context);
+  assert.equal(lookup('favorite color').kind, 'historical');
+});
+
+test('a case change in a value is a conflict rather than silent agreement', () => {
+  const app = boot();
+  app.fact('identifier', 'US');
+  app.fact('identifier', 'us');
+  assert.equal(vm.runInContext('lookupFact("identifier").kind', app.context), 'conflict');
+});
+
+test('fact rendering treats entered markup as text and malformed saved records are rejected', () => {
+  const app = boot();
+  app.fact('<img src=x onerror=alert(1)>', '<svg onload=alert(1)>');
+  const card = app.elements.get('ledger-entries').children[0];
+  assert.match(card.children[0].textContent, /<svg onload=alert\(1\)>/);
+  assert.equal(card.children[0].innerHTML, '');
+  const restored = boot({ aru_fact_claims: JSON.stringify([
+    { id: 1, key: 'valid', value: 'yes', time: Date.now(), status: 'active' },
+    { id: 1, key: 'duplicate', value: 'no', time: Date.now(), status: 'active' },
+    { id: 2, key: 'bad', value: '<script>', time: 'not a time', status: 'active' }
+  ]) });
+  assert.equal(restored.field.claims.length, 1);
+  assert.equal(restored.field.claims[0].key, 'valid');
+});
+
+test('full fact ledger refuses overflow rather than silently evicting sources', () => {
+  const claims = Array.from({length: 100}, (_, i) => ({
+    id: i + 1, key: `key ${i}`, value: `value ${i}`, time: Date.now(), status: 'active'
+  }));
+  const app = boot({aru_fact_claims: JSON.stringify(claims), aru_fact_counter: '101'});
+  app.fact('another', 'value');
+  assert.equal(app.field.claims.length, 100);
+  assert.match(app.elements.get('ledger-result').textContent, /nothing was silently removed/);
+});
+
 test('corrupt saved data falls back safely and saved messages restore as text', () => {
   const app = boot({
     aru_coherence: 'null',
@@ -219,10 +294,13 @@ test('export includes entered text and reset removes only this app’s keys', as
   assert.equal(data.schema_version, 1);
   assert.equal(data.last_transition.memoryEffect, 0);
   assert.equal(data.last_transition.control.after, data.last_transition.after);
+  assert.deepEqual(data.fact_claims, []);
 
   vm.runInContext('resetField()', app.context);
   assert.equal(app.window.reloaded, true);
   assert.equal(app.saved.get('unrelated_key'), 'keep');
   assert.equal(app.saved.has('aru_memory'), false);
   assert.equal(app.saved.has('aru_last_transition'), false);
+  assert.equal(app.saved.has('aru_fact_claims'), false);
+  assert.equal(app.saved.has('aru_fact_counter'), false);
 });
