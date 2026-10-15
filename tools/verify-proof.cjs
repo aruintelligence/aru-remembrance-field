@@ -4,8 +4,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createHash} = require('node:crypto');
 
-const MODEL_REVISION = 'aru-field-heuristics-1';
+const MODEL_REVISION = 'aru-field-heuristics-2';
+const LEGACY_REVISION = 'aru-field-heuristics-1';
+const LEGACY_SHA256 = 'a36dd8b2f577f9c1010df1b79ad17861c2c421e6667b075841467743d2cd3039';
 
 function requireCondition(condition, label) {
   if (!condition) throw new Error(`Invalid proof: ${label}`);
@@ -16,7 +19,8 @@ function finite(value) { return typeof value === 'number' && Number.isFinite(val
 function checkShape(proof) {
   requireCondition(proof && typeof proof === 'object' && !Array.isArray(proof), 'object expected');
   requireCondition(proof.schema_version === 1, 'unsupported schema version');
-  requireCondition(proof.model_revision === MODEL_REVISION, 'unsupported model revision');
+  requireCondition(proof.model_revision === MODEL_REVISION || proof.model_revision === LEGACY_REVISION,
+    'unsupported model revision');
   requireCondition(typeof proof.input === 'string', 'input must be text');
   requireCondition(finite(proof.evaluated_at), 'timestamp must be finite');
   requireCondition(finite(proof.start_mu) && proof.start_mu >= 0.35 && proof.start_mu <= 0.995, 'starting score out of range');
@@ -31,9 +35,18 @@ function checkShape(proof) {
   requireCondition(proof.result && typeof proof.result === 'object', 'result missing');
 }
 
-function loadEvaluator() {
+function loadEvaluator(revision = MODEL_REVISION) {
+  if (revision === LEGACY_REVISION) {
+    const legacy = fs.readFileSync(path.join(__dirname, 'field-model-v1.js'), 'utf8');
+    requireCondition(createHash('sha256').update(legacy).digest('hex') === LEGACY_SHA256,
+      'archived v1 model source changed');
+    const context = vm.createContext({});
+    vm.runInContext(legacy, context, {timeout: 1000});
+    return context;
+  }
+  requireCondition(revision === MODEL_REVISION, 'unsupported model revision');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const start = html.indexOf('function tokenize(');
+  const start = html.indexOf('function textWords(');
   const end = html.indexOf('/* ==================== PLASMA FIELD SIMULATION', start);
   requireCondition(start !== -1 && end > start, 'model source not found');
   const context = vm.createContext({});
@@ -58,7 +71,7 @@ function matchReceipt(recorded, computed, label) {
 
 function verifyProof(proof) {
   checkShape(proof);
-  const context = loadEvaluator();
+  const context = loadEvaluator(proof.model_revision);
   context.proof = proof;
   const computed = vm.runInContext(`({
     actual: evaluateCoherence(proof.input, {

@@ -7,7 +7,9 @@ const {loadEvaluator, matchReceipt, matchNumber, requireCondition} = require('./
 
 function verifyTrajectory(proof) {
   requireCondition(proof && typeof proof === 'object' && !Array.isArray(proof), 'trajectory object expected');
-  requireCondition(proof.schema_version === 1 && proof.model_revision === 'aru-field-heuristics-1', 'unsupported trajectory version');
+  requireCondition(proof.schema_version === 1 &&
+    (proof.model_revision === 'aru-field-heuristics-1' || proof.model_revision === 'aru-field-heuristics-2'),
+    'unsupported trajectory version');
   requireCondition(proof.start_mu === 0.64 && proof.start_at === 1700000000000 && proof.step_ms === 1000,
     'trajectory must use the fixed initial score and clock');
   requireCondition(Array.isArray(proof.inputs) && proof.inputs.length >= 2 && proof.inputs.length <= 24,
@@ -19,7 +21,7 @@ function verifyTrajectory(proof) {
   requireCondition(Array.isArray(proof.steps) && proof.steps.length === proof.inputs.length, 'step count does not match');
   requireCondition(proof.final && typeof proof.final === 'object', 'final scores missing');
 
-  const context = loadEvaluator();
+  const context = loadEvaluator(proof.model_revision);
   context.proof = proof;
   const computed = vm.runInContext('runTrajectory(proof.inputs, proof.start_mu, proof.start_at, proof.step_ms)',
     context, {timeout: 1000});

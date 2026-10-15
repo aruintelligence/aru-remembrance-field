@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { verifyProof } = require('../tools/verify-proof.cjs');
+const { verifyProof, loadEvaluator } = require('../tools/verify-proof.cjs');
 const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
 const { verifyEvidenceReceipt } = require('../tools/verify-evidence-receipt.cjs');
 
@@ -169,7 +169,7 @@ test('portable proof replays the exact prior state and detects changed receipts 
   app.input('violet river');
   vm.runInContext('downloadProof()', app.context);
   const proof = JSON.parse(await app.exports[0].text());
-  assert.equal(proof.model_revision, 'aru-field-heuristics-1');
+  assert.equal(proof.model_revision, 'aru-field-heuristics-2');
   assert.equal(proof.prior_memory.length, 1);
   assert.equal(proof.prior_user_messages.length, 1);
   assert.equal(proof.prior_user_messages[0].text, 'violet river');
@@ -187,6 +187,65 @@ test('portable proof replays the exact prior state and detects changed receipts 
   assert.equal(app.field.lastProof, null);
   assert.equal(app.saved.has('aru_last_proof'), false);
   assert.ok(app.field.lastTransition);
+});
+
+test('whole-word v2 rules reject substrings and retain Unicode and punctuation boundaries', () => {
+  const current = loadEvaluator('aru-field-heuristics-2');
+  const legacy = loadEvaluator('aru-field-heuristics-1');
+  const at = 1700000000000;
+  const state = {coherence: 0.64, memory: [
+    {text: 'always', tokens: ['always'], weight: 1, time: at}
+  ], messages: [{type: 'user', text: 'rose river'}]};
+  const evaluate = (context, input) => {
+    context.input = input;
+    context.state = state;
+    return vm.runInContext('evaluateCoherence(input, state, 1700000000000)', context);
+  };
+  const term = (receipt, label) => receipt.terms.find(item => item.label === label).value;
+  assert.equal(term(evaluate(legacy, 'misremember'), 'Matched word rules'), 0.035);
+  assert.equal(term(evaluate(current, 'misremember'), 'Matched word rules'), 0);
+  assert.equal(term(evaluate(legacy, 'untruth'), 'Matched word rules'), 0.024);
+  assert.equal(term(evaluate(current, 'untruth'), 'Matched word rules'), 0);
+  assert.equal(term(evaluate(legacy, 'nevermore'), 'Contradiction rule'), -0.03);
+  assert.ok(term(evaluate(current, 'nevermore'), 'Contradiction rule') === 0);
+  assert.equal(term(evaluate(current, 'never'), 'Contradiction rule'), -0.03);
+  assert.equal(term(evaluate(current, 'rose-river'), 'Prior repetition rule'), -0.03);
+  assert.ok(term(evaluate(legacy, 'rose-river'), 'Prior repetition rule') === 0);
+  assert.equal(vm.runInContext('JSON.stringify(tokenize("ＣＡＦÉ river"))', current), '["café","river"]');
+  assert.equal(vm.runInContext('detectIntent("nevermore")', current), 'fragment');
+  assert.equal(vm.runInContext('detectIntent("never")', current), 'absolute');
+});
+
+test('every scored keyword requires its own word boundary', () => {
+  const current = loadEvaluator('aru-field-heuristics-2');
+  const keywords = ['awareness', 'remember', 'remembrance', 'memory', 'sovereign',
+    'consciousness', 'truth', 'presence', 'ignite', 'witness', 'inward'];
+  const state = {coherence: 0.64, memory: [], messages: []};
+  for (const word of keywords) {
+    current.state = state;
+    current.input = word;
+    const isolated = vm.runInContext('evaluateCoherence(input, state, 1700000000000)', current);
+    assert.ok(isolated.terms[0].value > 0, `${word} should score alone`);
+    for (const input of [`prefix${word}`, `${word}suffix`, `prefix${word}suffix`]) {
+      current.input = input;
+      const wrapped = vm.runInContext('evaluateCoherence(input, state, 1700000000000)', current);
+      assert.ok(wrapped.terms[0].value === 0, `${input} must not earn a word bonus`);
+    }
+    current.input = `(${word})`;
+    const punctuated = vm.runInContext('evaluateCoherence(input, state, 1700000000000)', current);
+    assert.equal(punctuated.terms[0].value, isolated.terms[0].value);
+  }
+});
+
+test('v1 and v2 archived score receipts and trajectories verify under their own revisions', () => {
+  const read = file => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', file), 'utf8'));
+  assert.ok(verifyProof(read('example-proof.json')).effect > 0);
+  assert.equal(verifyProof(read('example-proof-v2.json')).effect, 0);
+  assert.equal(verifyTrajectory(read('example-trajectory.json')).steps, 5);
+  assert.equal(verifyTrajectory(read('example-trajectory-v2.json')).steps, 3);
+  const wrongRevision = read('example-proof-v2.json');
+  wrongRevision.model_revision = 'aru-field-heuristics-1';
+  assert.throws(() => verifyProof(wrongRevision), /does not match the model/);
 });
 
 test('full-sequence lab has positive, zero, and negative controls from a fresh initial score', () => {
@@ -580,6 +639,18 @@ test('malformed memory numbers and tokens are repaired before scoring', () => {
   assert.ok(Number.isFinite(app.field.coherence));
   assert.ok(app.field.lastTransition.terms.find(term => term.label === 'Prior memory overlap').value > 0);
   assert.equal(app.field.memory[0].count, 2);
+});
+
+test('saved v1 memory text is retokenized under v2 on reload', () => {
+  const app = boot({aru_memory: JSON.stringify([{
+    text: 'ＣＡＦÉ river', cleaned: 'caf river', tokens: ['caf', 'river'],
+    time: Date.now(), weight: 2, count: 1
+  }])});
+  assert.equal(JSON.stringify(app.field.memory[0].tokens), '["café","river"]');
+  assert.equal(app.field.memory[0].cleaned, 'café river');
+  app.input('café river');
+  const overlap = app.field.lastTransition.terms.find(term => term.label === 'Prior memory overlap').value;
+  assert.ok(overlap > 0.09, `expected restored Unicode memory overlap; got ${overlap}`);
 });
 
 test('export includes entered text and reset removes only this app’s keys', async () => {

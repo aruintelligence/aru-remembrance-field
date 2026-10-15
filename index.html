@@ -334,6 +334,7 @@
 
   <details class="inspector" id="inspector">
     <summary>Inspect model state and last change</summary>
+    <p>Score rules v2 match whole Unicode words. The score is a scripted simulation, and earlier v1 receipts remain verifiable from this repository.</p>
     <p>μ is a scripted score, not a measure of a person or of consciousness. The breakdown uses prior memory and messages only; this input cannot match itself.</p>
     <p id="transition-summary">No input has changed the model yet.</p>
     <ol id="transition-terms"></ol>
@@ -438,7 +439,7 @@ const STORAGE_KEYS = {
   claims: "aru_fact_claims",
   claimCounter: "aru_fact_counter"
 };
-const PROOF_MODEL_REVISION = "aru-field-heuristics-1";
+const PROOF_MODEL_REVISION = "aru-field-heuristics-2";
 
 function readStored(key, fallback) {
   try {
@@ -464,7 +465,7 @@ function storedMemory() {
     .slice(-100)
     .map(m => ({
       text: m.text,
-      cleaned: m.text.toLowerCase().replace(/[^\w\s]/g, "").trim(),
+      cleaned: cleanText(m.text),
       tokens: tokenize(m.text),
       weight: clamp(Number(m.weight) || 1, 0.15, 6),
       time: Number(m.time),
@@ -536,9 +537,11 @@ const Field = {
   }
 };
 
-function tokenize(text) {
-  return text.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+function textWords(text) {
+  return text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}\p{M}]+/gu) || [];
 }
+function cleanText(text) { return textWords(text).join(" "); }
+function tokenize(text) { return textWords(text).filter(word => [...word].length > 2); }
 
 function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 function now() { return Date.now(); }
@@ -598,7 +601,7 @@ const MemoryEngine = {
 function advanceMemory(memory, input, coherence, at) {
   const next = memory.map(m => ({...m, tokens: [...(m.tokens || [])]}));
   const tokens = tokenize(input);
-  const cleaned = input.toLowerCase().replace(/[^\w\s]/g, "").trim();
+  const cleaned = cleanText(input);
   let best = null;
   let bestScore = 0;
   for (const m of next.slice(-24)) {
@@ -622,29 +625,31 @@ function advanceMemory(memory, input, coherence, at) {
 }
 
 function detectIntent(input) {
-  const lower = input.toLowerCase().trim();
-  if (lower.includes("?")) return "question";
-  if (/\b(i am|i feel|i remember|i know|i believe|this is)\b/.test(lower)) return "identity";
-  if (/\b(why|how|what if|explain|show|help|explore)\b/.test(lower)) return "exploration";
-  if (/\b(always|never|must|cannot)\b/.test(lower)) return "absolute";
-  if (lower.split(/\s+/).length <= 4) return "fragment";
+  const words = textWords(input);
+  const padded = ` ${words.join(" ")} `;
+  const has = phrase => padded.includes(` ${phrase} `);
+  if (/[?？]/u.test(input)) return "question";
+  if (["i am", "i feel", "i remember", "i know", "i believe", "this is"].some(has)) return "identity";
+  if (["why", "how", "what if", "explain", "show", "help", "explore"].some(has)) return "exploration";
+  if (["always", "never", "must", "cannot"].some(has)) return "absolute";
+  if (words.length <= 4) return "fragment";
   return "statement";
 }
 
 function contradictionPenalty(input, memory = Field.memory) {
-  const lower = input.toLowerCase();
-  const recent = memory.slice(-10).map(m => m.text.toLowerCase());
+  const current = new Set(textWords(input));
+  const recent = memory.slice(-10).map(m => new Set(textWords(m.text)));
   let penalty = 0;
-  if (lower.includes("always") && recent.some(t => t.includes("never"))) penalty += 0.03;
-  if (lower.includes("never") && recent.some(t => t.includes("always"))) penalty += 0.03;
-  if (lower.includes("true") && recent.some(t => t.includes("false"))) penalty += 0.02;
-  if (lower.includes("false") && recent.some(t => t.includes("true"))) penalty += 0.02;
+  if (current.has("always") && recent.some(words => words.has("never"))) penalty += 0.03;
+  if (current.has("never") && recent.some(words => words.has("always"))) penalty += 0.03;
+  if (current.has("true") && recent.some(words => words.has("false"))) penalty += 0.02;
+  if (current.has("false") && recent.some(words => words.has("true"))) penalty += 0.02;
   return penalty;
 }
 
 function repetitionPenalty(input, messages = Field.messages) {
-  const cleaned = input.toLowerCase().replace(/[^\w\s]/g, "").trim();
-  const recentUser = messages.filter(m => m.type === "user").slice(-5).map(m => (m.text || "").toLowerCase().replace(/[^\w\s]/g, "").trim());
+  const cleaned = cleanText(input);
+  const recentUser = messages.filter(m => m.type === "user").slice(-5).map(m => cleanText(m.text || ""));
   const repeats = recentUser.filter(x => x === cleaned).length;
   return repeats ? repeats * 0.03 : 0;
 }
@@ -657,7 +662,7 @@ function evaluateCoherence(input, state, at) {
     terms.push({ label, value });
     delta += value;
   };
-  const lower = input.toLowerCase();
+  const words = new Set(textWords(input));
   const intent = detectIntent(input);
   const tokens = tokenize(input);
 
@@ -668,7 +673,7 @@ function evaluateCoherence(input, state, at) {
   };
 
   let wordBonus = 0;
-  Object.entries(powerWords).forEach(([w, b]) => { if (lower.includes(w)) wordBonus += b; });
+  Object.entries(powerWords).forEach(([w, b]) => { if (words.has(w)) wordBonus += b; });
   addTerm("Matched word rules", wordBonus);
 
   addTerm("Length rule", (tokens.length > 8 ? 0.012 : 0) + (tokens.length > 18 ? 0.016 : 0));

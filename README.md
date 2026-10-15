@@ -51,7 +51,7 @@ On Windows, double-click `index.html`. No build step or server is required for t
 
 Open **Inspect model state and last change** after submitting text. The panel shows the previous modeled μ, the summed change, the new value, and each term in the calculation. Each term is visible even when its contribution is zero. The score is limited to the range 0.35–0.995.
 
-The rules are fixed in `updateCoherence` in `index.html`: substring matches for a short list of words, token-count bonuses, an intent bonus or penalty, overlap with earlier memory, contradiction and repetition penalties against earlier entries, and baseline drift. They are hand-written heuristics, not learned weights or a validated measure. The submitted text is evaluated **before** it enters the message and memory history, so a first entry cannot match itself or count as its own repetition. For example, on a fresh browser state, submitting `What?` changes μ from 0.6400 to 0.6362: +0.0100 for a question and −0.0138 for baseline drift, with zero prior-memory and repetition terms.
+The rules are fixed in `evaluateCoherence` in `index.html`: whole Unicode word matches for a short list of words, token-count bonuses, an intent bonus or penalty, overlap with earlier memory, contradiction and repetition penalties against earlier entries, and baseline drift. They are hand-written heuristics, not learned weights or a validated measure. The submitted text is evaluated **before** it enters the message and memory history, so a first entry cannot match itself or count as its own repetition. For example, on a fresh browser state, submitting `What?` changes μ from 0.6400 to 0.6362: +0.0100 for a question and −0.0138 for baseline drift, with zero prior-memory and repetition terms. [Score rules v2](research/whole-word-v2-protocol.md) shows counterexamples and how to replay both rule versions.
 
 Entries and the score are saved in this browser's `localStorage`. The panel can download a JSON copy, including text you entered, or erase this app's local state. The app does not send entries to a server. Browser settings, extensions, or the device's other users may still affect local privacy, and clearing site data also removes the saved state. The full state export is a snapshot for inspection; importing that file is not implemented. The separate evidence ledger has its own portable export and import.
 
@@ -75,7 +75,7 @@ Select **Download trajectory proof JSON**, then check the receipt from a local c
 node tools/verify-trajectory.cjs /path/to/aru-remembrance-trajectory-proof.json
 ```
 
-The repository includes a [synthetic example](research/example-trajectory.json) for a no-private-data check. The verifier recomputes every step and term against the local model source and rejects changed inputs or results. It checks internal consistency only: the file can be edited and recomputed by someone else. The sequence stays in the page until edited or closed; only an explicit download makes a proof file containing your lines.
+The repository includes [v1](research/example-trajectory.json) and [v2](research/example-trajectory-v2.json) synthetic examples for a no-private-data check. The verifier selects the rules named by `model_revision` and recomputes every step and term, rejecting changed inputs or results. It checks internal consistency only: the file can be edited and recomputed by someone else. The sequence stays in the page until edited or closed; only an explicit download makes a proof file containing your lines.
 
 ## Verify a submitted transition
 
@@ -85,7 +85,7 @@ After submitting text, select **Download last proof JSON** in the inspector. The
 node tools/verify-proof.cjs /path/to/aru-remembrance-transition-proof.json
 ```
 
-To try it without entering private text, run `node tools/verify-proof.cjs research/example-proof.json`. The synthetic example should report `0.72624` with history and `0.62624` without it.
+To try it without entering private text, run `node tools/verify-proof.cjs research/example-proof-v2.json`. It should report `0.62624` with and without history: `nevermore` is not the word `never`, so prior `always` does not trigger a contradiction. The [v1 example](research/example-proof.json) still reports `0.72624` with history and `0.62624` without it. Existing downloaded v1 proof and trajectory files remain verifiable using the frozen [v1 model source](tools/field-model-v1.js); new downloads use v2. Reloading a browser with saved memory recalculates its derived tokens under v2.
 
 The verifier recalculates every score term against the repository's model source and exits with a failure if the recorded result disagrees. This checks **internal consistency**, not the authenticity of a downloaded file: someone who edits both its inputs and results can create a different consistent file. It is not a claim of scientific validation. Proof files contain your current input and up to 22 earlier memory texts and five prior user messages. They are saved locally, replaced by the next submission, and included in the full state export. Select **Erase proof copy** to remove that extra local copy without erasing the main memory; **Erase local state** removes everything. A 16 MiB limit protects the command-line verifier from oversized files.
 

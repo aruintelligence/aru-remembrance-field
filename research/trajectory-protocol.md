@@ -14,7 +14,7 @@ Start each row from a fresh μ of `0.6400` with the fixed clock. Enter one phras
 | `amber comet` → `violet river` | 0.61260 | 0.61260 | 0 | Unrelated history does not change this score. |
 | `always` → `never` | 0.55274 | 0.58274 | −0.03000 | A literal contradiction lowers the with-history score. |
 
-The [synthetic five-step receipt](example-trajectory.json) combines these challenges and ends at `0.57755` with history and `0.54256` without history. Run `node tools/verify-trajectory.cjs research/example-trajectory.json` from the repository root. You can also download a receipt for your own sequence and pass its path to that command. The verifier recalculates each term, step score, and final difference against the model source checked out alongside it; CI runs the synthetic receipt. A changed recorded input or score fails unless other fields are also edited to make a new consistent receipt.
+The [synthetic five-step v1 receipt](example-trajectory.json) combines these challenges and ends at `0.57755` with history and `0.54256` without history. The [v2 receipt](example-trajectory-v2.json) probes `always` → `nevermore` → `never`: the middle step has no contradiction, while the last step does. Run `node tools/verify-trajectory.cjs research/example-trajectory-v2.json` from the repository root, or use the path to a downloaded receipt. The verifier selects the declared model revision, recalculates each term, step score, and final difference, and CI runs both synthetic receipts. A changed recorded input or score fails unless other fields are also edited to make a new consistent receipt.
 
 ## Interpretation
 

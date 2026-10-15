@@ -19,4 +19,6 @@ jobs:
       - run: node tools/falsify-evidence.cjs --seed 20261015 --runs 2000
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json
       - run: node tools/verify-proof.cjs research/example-proof.json
+      - run: node tools/verify-proof.cjs research/example-proof-v2.json
       - run: node tools/verify-trajectory.cjs research/example-trajectory.json
+      - run: node tools/verify-trajectory.cjs research/example-trajectory-v2.json
