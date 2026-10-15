@@ -104,6 +104,14 @@ node tools/benchmark-evidence.cjs --json /path/to/your-challenge.json
 
 The included synthetic challenge checks 12 answer and refusal cases; each report shows correct answers, abstentions, unsafe answers, and source citations. A mismatch fails the command and the repository's CI. The JSON mode records case outcomes plus challenge and model hashes. Bring independently written cases to probe the boundary; a passing hand-authored sample is a regression check, not evidence of real-world factual accuracy.
 
+After selecting **Ask with sources**, you can download a [portable question receipt](research/evidence-receipt-protocol.md) and replay it against a local checkout:
+
+```bash
+node tools/verify-evidence-receipt.cjs /path/to/aru-evidence-question-receipt.json
+```
+
+The receipt contains the **entire evidence ledger**, including facts unrelated to that question. Download and share it deliberately. Editing the question or ledger disables the old receipt; asking and downloading do not add another copy to browser storage. The repository includes a [synthetic receipt](research/example-evidence-receipt.json). Verification checks that the answer follows from the supplied snapshot and local code. It does not establish that the snapshot is complete, authentic, or factually true.
+
 If you record a different value under that name, the ledger displays a conflict and refuses to return a single answer. **Use # as current** explicitly selects a source and keeps earlier records marked superseded. A later conflicting entry reopens the conflict. **Delete #** removes an individual record; deleting the chosen source never silently restores an older assertion. The ledger stops at 100 records and asks you to delete one before adding more.
 
 This is a separate, deterministic feature. Fact records do not affect the freeform score or its transition proof. They stay in this browser, are included in the full state export, and are removed by **Erase local state**. Source numbers refer only to user entries in this browser; they are not independent evidence that the entered value is true. The [evidence ledger protocol](research/evidence-ledger-protocol.md) gives the test cases and limits.
@@ -117,7 +125,7 @@ node tests/field.test.cjs
 node tests/benchmark.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, safe text display, corrupted saved data, local data controls, and benchmark failure modes.
+These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, question receipts and invalidation, safe text display, corrupted saved data, local data controls, and benchmark failure modes.
 
 ## Research question
 

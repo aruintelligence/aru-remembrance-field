@@ -1,0 +1,10 @@
+{
+  "format": "aru-evidence-question-receipt",
+  "version": 1,
+  "model_revision": "aru-evidence-questions-1",
+  "question": "What is my favorite color?",
+  "records": [
+    {"id": 1, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "active", "imported": false}
+  ],
+  "answer": {"kind": "known", "value": "teal", "sources": [1]}
+}

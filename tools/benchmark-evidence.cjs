@@ -45,14 +45,8 @@ function loadModel() {
     resolve(question, claims) {
       context.question = question;
       context.claims = claims;
-      const result = vm.runInContext("resolveEvidenceQuestion(question, claims)", context, { timeout: 1000 });
-      // Copy only the answer fields. The model's conflict records are not emitted in full.
-      if (result.kind === "known") return { kind: "known", value: result.value, sources: Array.from(result.sources) };
-      if (result.kind === "conflict" || result.kind === "historical") {
-        return { kind: result.kind, sources: Array.from(result.records, record => record.id) };
-      }
-      if (result.kind === "ambiguous") return { kind: result.kind, names: Array.from(result.names) };
-      return { kind: result.kind };
+      const result = vm.runInContext("evidenceAnswerSummary(resolveEvidenceQuestion(question, claims))", context, { timeout: 1000 });
+      return JSON.parse(JSON.stringify(result));
     }
   };
 }
