@@ -81,7 +81,14 @@ The [ablation protocol](research/ablation-protocol.md) lists exact positive, neg
 
 Open **Blind response trial** in the inspector. Enter one to eight earlier context lines and a final prompt. Two independent model branches start at μ = 0.6400 and receive the same context in order; the control discards earlier memory and messages at each step. The app presents the two resulting scripted responses in randomized A/B positions with score and branch labels hidden. A reader chooses A, B, or tie before the condition labels and scores appear. Nothing is saved to browser storage. **Download rated trial JSON** is the only way to keep the context, prompt, response text, assignment, and choice.
 
-The exported trial can be replayed from a checkout with `node tools/verify-blind-trial.cjs /path/to/aru-blind-response-trial.json`. The [synthetic example report](research/example-blind-trial.json) can be checked with `node tools/verify-blind-trial.cjs research/example-blind-trial.json`. The verifier checks recorded scores and response text against the model. It cannot establish that a person rated the pair, that the random assignment was followed, or that the file was not later edited. The [blind trial protocol](research/blind-response-trial-protocol.md) describes a preregistered, independently rated pilot and how to report ties and unfavorable outcomes. No human benefit has been measured by the included software tests.
+The exported trial can be replayed from a checkout with `node tools/verify-blind-trial.cjs /path/to/aru-blind-response-trial.json`. The [synthetic example report](research/example-blind-trial.json) can be checked with `node tools/verify-blind-trial.cjs research/example-blind-trial.json`. To count a batch of saved reports, including control wins and ties, run:
+
+```bash
+node tools/analyze-blind-trials.cjs /path/to/trials/*.json
+node tools/analyze-blind-trials.cjs --json /path/to/trials/*.json
+```
+
+The batch tool replays every report before counting it, shows the all-trials preference fraction and A/B position breakdown, and flags byte-identical copies. It fails the entire batch if any file is invalid. Pass **all** completed rated trials from a prespecified pilot, not a selection of favorable ones; avoid unrelated JSON in the glob. The JSON summary contains hashes and counts, not the entered text. Keep the original files privately if an audit is needed: they contain the full context and response. Verification cannot establish that a person rated a pair, that the random assignment was followed, that the submitted set is complete, or that files were not later edited. The [blind trial protocol](research/blind-response-trial-protocol.md) describes a preregistered, independently rated pilot. No human benefit has been measured by the included software tests.
 
 For an independent code-level check of the v2 score, run `python3 tools/differential-field-v2.py --seed 20261015 --runs 2000`. A separately written Python implementation compares all seven score terms, delta, final μ, and clamp decision with the browser's JavaScript across 16 fixed and 2,000 generated cases. CI repeats this [differential challenge](research/score-differential-protocol.md). Agreement checks implementation consistency under these inputs; both implementations can still share a mistaken specification.
 
@@ -168,9 +175,10 @@ Run the small regression suite with Node.js:
 node tests/field.test.cjs
 node tests/benchmark.test.cjs
 node tests/falsifier.test.cjs
+node tests/blind-analyzer.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls, the three-control challenge and proof replay, blinded response assignment and rated report replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and composer abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, session-only non-persistence and restore blocking, full question receipts, privacy-scoped answer excerpts and browser verification, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
+These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls, the three-control challenge and proof replay, blinded response assignment, rated report replay and batch counting, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and composer abstention, conflicts and resolution, portable ledger merging and rejection, reviewed full-state restore and rollback, session-only non-persistence and restore blocking, full question receipts, privacy-scoped answer excerpts and browser verification, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
 
 ## Research question
 
