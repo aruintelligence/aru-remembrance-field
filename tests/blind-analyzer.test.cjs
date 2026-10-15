@@ -27,6 +27,36 @@ function inTempDir(run) {
   finally { fs.rmSync(dir, {recursive: true, force: true}); }
 }
 
+function modernTrial(context, prompt, choice) {
+  const report = structuredClone(modernFixture);
+  report.context = context;
+  report.prompt = prompt;
+  report.choice = choice;
+  const model = loadEvaluator();
+  model.inputs = context;
+  model.finalPrompt = prompt;
+  report.conditions = JSON.parse(JSON.stringify(vm.runInContext(`(() => {
+    const startAt = 1700000000000;
+    let withMu = 0.64, withoutMu = 0.64, memory = [];
+    const messages = [];
+    inputs.forEach((input, index) => {
+      const at = startAt + index * 1000;
+      withMu = evaluateCoherence(input, {coherence: withMu, memory, messages}, at).after;
+      withoutMu = evaluateCoherence(input, {coherence: withoutMu, memory: [], messages: []}, at).after;
+      memory = advanceMemory(memory, input, withMu, at);
+      messages.push({type: 'user', text: input});
+    });
+    const at = startAt + inputs.length * 1000;
+    const withScore = evaluateCoherence(finalPrompt, {coherence: withMu, memory, messages}, at);
+    const withoutScore = evaluateCoherence(finalPrompt, {coherence: withoutMu, memory: [], messages: []}, at);
+    return {
+      with_history: {score: withScore, response_html: getResponse(finalPrompt, false, withScore.after, memory, at)},
+      without_history: {score: withoutScore, response_html: getResponse(finalPrompt, false, withoutScore.after, [], at)}
+    };
+  })()`, model, {timeout: 1000})));
+  return report;
+}
+
 test('replayed reports count both wins and ties with the all-trials denominator and A/B positions', () => {
   inTempDir(({write}) => {
     const history = structuredClone(fixture);
@@ -46,6 +76,14 @@ test('replayed reports count both wins and ties with the all-trials denominator 
     });
     assert.match(result.dataset_sha256, /^[0-9a-f]{64}$/);
     assert.match(formatText(result), /History preferred: 1\/3 \(33\.3% of all\)/);
+    assert.deepEqual(result.diagnostics, {
+      score_higher_with_history: {trials: 3, history_wins: 1, control_wins: 1, ties: 1},
+      score_equal: {trials: 0, history_wins: 0, control_wins: 0, ties: 0},
+      score_higher_without_history: {trials: 0, history_wins: 0, control_wins: 0, ties: 0},
+      decisive_score_choice_agreement: {aligned: 1, opposed: 1, total: 2},
+      history_win_fraction_all_wilson95: {lower: 0.06149194472039621, upper: 0.7923403991979522}
+    });
+    assert.match(formatText(result), /aligned 1\/2; opposed 1\/2/);
     const cliResult = spawnSync(process.execPath, [cli, '--json', ...reports], {encoding: 'utf8'});
     assert.equal(cliResult.status, 0, cliResult.stderr);
     assert.deepEqual(JSON.parse(cliResult.stdout), result);
@@ -64,7 +102,26 @@ test('identical file copies remain in the denominator and are flagged', () => {
     assert.equal(result.summary.identical_copies, 1);
     assert.equal(result.duplicates[0].copies, 2);
     assert.match(formatText(result), /Among 0 non-ties: history 0\/0 \(undefined\)/);
+    assert.match(formatText(result), /no decisive comparisons \(agreement undefined\)/);
     assert.equal(result.dataset_sha256, analyzeTrialFiles([copy, file]).dataset_sha256);
+  });
+});
+
+test('the primary interval handles zero and all wins while flagging duplicate files', () => {
+  inTempDir(({write}) => {
+    const one = write('one.json', fixture);
+    const zeroWins = analyzeTrialFiles([one]);
+    assert.equal(zeroWins.diagnostics.history_win_fraction_all_wilson95.lower, 0);
+    assert.ok(Math.abs(zeroWins.diagnostics.history_win_fraction_all_wilson95.upper - 0.7934506856227627) < 1e-12);
+    const selected = structuredClone(fixture);
+    selected.choice = 'A';
+    const win = write('win.json', selected);
+    const allWins = analyzeTrialFiles([win, win]);
+    assert.equal(allWins.diagnostics.history_win_fraction_all_wilson95.upper, 1);
+    assert.ok(allWins.diagnostics.history_win_fraction_all_wilson95.lower > 0.34);
+    assert.equal(allWins.summary.identical_copies, 1);
+    assert.match(formatText(allWins), /assuming independent ratings/);
+    assert.match(allWins.limitation, /unauthenticated files cannot establish/);
   });
 });
 
@@ -79,6 +136,10 @@ test('any invalid or altered input fails the whole batch without a partial score
     assert.equal(result.status, 2);
     assert.equal(result.stdout, '');
     assert.match(result.stderr, /bad\.json/);
+    const forgedScore = structuredClone(fixture);
+    forgedScore.conditions.with_history.score.after = 0.35;
+    assert.throws(() => analyzeTrialFiles([good, write('forged-score.json', forgedScore)]),
+      /forged-score\.json: Invalid proof: with_history.after does not match/);
     const malformed = path.join(path.dirname(good), 'malformed.json');
     fs.writeFileSync(malformed, '{');
     assert.throws(() => analyzeTrialFiles([malformed]), /malformed\.json/);
@@ -104,7 +165,8 @@ test('a fixed plan checks every case count and preserves its exact-file fingerpr
     assert.deepEqual(result.plan, {
       sha256: loadTrialPlan(planFile).sha256, expected_trials: 1, cases: 1,
       coverage: [{id: 'synthetic-example', expected: 1, received: 1,
-        history_wins: 0, control_wins: 0, ties: 1}]
+        history_wins: 0, control_wins: 0, ties: 1,
+        score_direction: 'score_higher_with_history', score_choice_aligned: 0, score_choice_opposed: 0}]
     });
     assert.match(formatText(result), /Plan complete: 1\/1 rated slots across 1 case/);
     assert.match(formatText(result), /synthetic-example: 1\/1; history 0, control 0, tie 1/);
@@ -124,32 +186,7 @@ test('a fixed plan checks every case count and preserves its exact-file fingerpr
 
 test('planned cases expose differing outcomes instead of hiding them in one aggregate', () => {
   inTempDir(({write}) => {
-    const second = structuredClone(modernFixture);
-    second.context = ['always'];
-    second.prompt = 'never';
-    second.choice = 'B';
-    const model = loadEvaluator();
-    model.inputs = second.context;
-    model.finalPrompt = second.prompt;
-    second.conditions = JSON.parse(JSON.stringify(vm.runInContext(`(() => {
-      const startAt = 1700000000000;
-      let withMu = 0.64, withoutMu = 0.64, memory = [];
-      const messages = [];
-      inputs.forEach((input, index) => {
-        const at = startAt + index * 1000;
-        withMu = evaluateCoherence(input, {coherence: withMu, memory, messages}, at).after;
-        withoutMu = evaluateCoherence(input, {coherence: withoutMu, memory: [], messages: []}, at).after;
-        memory = advanceMemory(memory, input, withMu, at);
-        messages.push({type: 'user', text: input});
-      });
-      const at = startAt + inputs.length * 1000;
-      const withScore = evaluateCoherence(finalPrompt, {coherence: withMu, memory, messages}, at);
-      const withoutScore = evaluateCoherence(finalPrompt, {coherence: withoutMu, memory: [], messages: []}, at);
-      return {
-        with_history: {score: withScore, response_html: getResponse(finalPrompt, false, withScore.after, memory, at)},
-        without_history: {score: withoutScore, response_html: getResponse(finalPrompt, false, withoutScore.after, [], at)}
-      };
-    })()`, model, {timeout: 1000})));
+    const second = modernTrial(['always'], 'never', 'B');
     const plan = structuredClone(modernPlanFixture);
     plan.cases.push({id: 'contradiction', context: second.context, prompt: second.prompt, ratings: 1});
     const result = analyzeTrialFiles([write('one.json', modernFixture), write('two.json', second)],
@@ -157,11 +194,42 @@ test('planned cases expose differing outcomes instead of hiding them in one aggr
     assert.equal(result.summary.trials, 2);
     assert.equal(result.summary.control_wins, 1);
     assert.equal(result.response_revision, 'aru-response-2');
+    assert.equal(result.diagnostics.score_higher_without_history.control_wins, 1);
+    assert.deepEqual(result.diagnostics.decisive_score_choice_agreement,
+      {aligned: 1, opposed: 0, total: 1});
     assert.match(formatText(result), /Verified 2 submitted trials against aru-response-2/);
+    assert.match(formatText(result), /contradiction: 1\/1;.*modeled control higher; aligned 1, opposed 0/);
     assert.deepEqual(result.plan.coverage, [
-      {id: 'negated-color', expected: 1, received: 1, history_wins: 0, control_wins: 0, ties: 1},
-      {id: 'contradiction', expected: 1, received: 1, history_wins: 0, control_wins: 1, ties: 0}
+      {id: 'negated-color', expected: 1, received: 1, history_wins: 0, control_wins: 0, ties: 1,
+        score_direction: 'score_higher_with_history', score_choice_aligned: 0, score_choice_opposed: 0},
+      {id: 'contradiction', expected: 1, received: 1, history_wins: 0, control_wins: 1, ties: 0,
+        score_direction: 'score_higher_without_history', score_choice_aligned: 1, score_choice_opposed: 0}
     ]);
+  });
+});
+
+test('the score audit separates positive, negative, and zero effects from recorded preferences', () => {
+  inTempDir(({write}) => {
+    const positive = modernTrial(['favorite color teal'], 'My favorite color is not teal.', 'A');
+    const negative = modernTrial(['always'], 'never', 'A');
+    const zero = modernTrial(['amber comet'], 'violet river', 'A');
+    const reports = [
+      positive, {...positive, choice: 'B'}, {...positive, choice: 'tie'},
+      negative, {...negative, choice: 'B'}, {...negative, choice: 'tie'},
+      zero, {...zero, choice: 'B'}, {...zero, choice: 'tie'}
+    ].map((report, index) => write(`${index}.json`, report));
+    const result = analyzeTrialFiles(reports);
+    assert.deepEqual(result.diagnostics.score_higher_with_history,
+      {trials: 3, history_wins: 1, control_wins: 1, ties: 1});
+    assert.deepEqual(result.diagnostics.score_higher_without_history,
+      {trials: 3, history_wins: 1, control_wins: 1, ties: 1});
+    assert.deepEqual(result.diagnostics.score_equal,
+      {trials: 3, history_wins: 1, control_wins: 1, ties: 1});
+    assert.deepEqual(result.diagnostics.decisive_score_choice_agreement,
+      {aligned: 2, opposed: 2, total: 4});
+    assert.equal(result.summary.history_win_fraction_all, 1 / 3);
+    assert.match(formatText(result), /Modeled scores equal: 3/);
+    assert.match(formatText(result), /aligned 2\/4; opposed 2\/4/);
   });
 });
 

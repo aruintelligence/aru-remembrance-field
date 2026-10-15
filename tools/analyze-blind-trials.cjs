@@ -8,7 +8,17 @@ const {verifyBlindTrial} = require('./verify-blind-trial.cjs');
 const MAX_FILES = 100;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
-const LIMITATION = 'These counts describe only the supplied files. They cannot establish independent readers, original assignments or ratings, complete submission, or real-world benefit.';
+const LIMITATION = 'These counts describe only the supplied files. They cannot establish independent readers, original assignments or ratings, or complete submission. The Wilson interval assumes independent ratings; duplicate or unauthenticated files cannot establish that assumption. Neither score agreement nor the interval proves usefulness or real-world benefit.';
+
+function wilsonInterval(wins, trials) {
+  const z = 1.959963984540054;
+  const p = wins / trials;
+  const z2 = z * z;
+  const denominator = 1 + z2 / trials;
+  const center = (p + z2 / (2 * trials)) / denominator;
+  const radius = z * Math.sqrt(p * (1 - p) / trials + z2 / (4 * trials * trials)) / denominator;
+  return {lower: Math.max(0, center - radius), upper: Math.min(1, center + radius)};
+}
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -61,7 +71,8 @@ function loadTrialPlan(file) {
     const key = JSON.stringify([entry.context, entry.prompt]);
     if (byInput.has(key)) throw new Error(`Trial plan ${file}: repeated context and prompt`);
     byInput.set(key, {id: entry.id, expected: entry.ratings, received: 0,
-      history_wins: 0, control_wins: 0, ties: 0});
+      history_wins: 0, control_wins: 0, ties: 0,
+      score_direction: null, score_choice_aligned: 0, score_choice_opposed: 0});
     ids.add(entry.id);
     expected += entry.ratings;
   }
@@ -84,6 +95,12 @@ function analyzeTrialFiles(files, {planFile} = {}) {
     history_as_B: {trials: 0, history_wins: 0, control_wins: 0, ties: 0},
     identical_copies: 0, distinct_file_contents: 0
   };
+  const blankOutcomes = () => ({trials: 0, history_wins: 0, control_wins: 0, ties: 0});
+  const diagnostics = {
+    score_higher_with_history: blankOutcomes(), score_equal: blankOutcomes(),
+    score_higher_without_history: blankOutcomes(),
+    decisive_score_choice_agreement: {aligned: 0, opposed: 0, total: 0}
+  };
   const hashes = new Map();
   let batchResponseRevision = null;
   let totalBytes = 0;
@@ -98,7 +115,7 @@ function analyzeTrialFiles(files, {planFile} = {}) {
       totalBytes += contents.length;
       if (totalBytes > MAX_TOTAL_BYTES) throw new Error('exceeds 16 MiB total');
       const report = JSON.parse(contents.toString('utf8'));
-      const {preferred, responseRevision} = verifyBlindTrial(report);
+      const {preferred, responseRevision, withHistory, withoutHistory} = verifyBlindTrial(report);
       if (plan && responseRevision !== plan.responseRevision) {
         throw new Error(`response revision ${responseRevision} does not match trial plan ${plan.responseRevision}`);
       }
@@ -120,6 +137,20 @@ function analyzeTrialFiles(files, {planFile} = {}) {
       if (slot) slot[outcome]++;
       summary[position].trials++;
       summary[position][outcome]++;
+      const effect = withHistory - withoutHistory;
+      const scoreDirection = Math.abs(effect) <= 1e-10 ? 'score_equal' :
+        effect > 0 ? 'score_higher_with_history' : 'score_higher_without_history';
+      diagnostics[scoreDirection].trials++;
+      diagnostics[scoreDirection][outcome]++;
+      if (slot) slot.score_direction = scoreDirection;
+      if (scoreDirection !== 'score_equal' && outcome !== 'ties') {
+        const agreement = diagnostics.decisive_score_choice_agreement;
+        agreement.total++;
+        const aligned = (scoreDirection === 'score_higher_with_history' && outcome === 'history_wins') ||
+          (scoreDirection === 'score_higher_without_history' && outcome === 'control_wins');
+        agreement[aligned ? 'aligned' : 'opposed']++;
+        if (slot) slot[aligned ? 'score_choice_aligned' : 'score_choice_opposed']++;
+      }
       const hash = sha256(contents);
       hashes.set(hash, (hashes.get(hash) || 0) + 1);
     } catch (error) {
@@ -138,36 +169,53 @@ function analyzeTrialFiles(files, {planFile} = {}) {
   if (summary.non_ties) summary.history_win_fraction_non_ties = summary.history_wins / summary.non_ties;
   summary.distinct_file_contents = hashes.size;
   summary.identical_copies = summary.trials - hashes.size;
+  diagnostics.history_win_fraction_all_wilson95 = wilsonInterval(summary.history_wins, summary.trials);
   const duplicates = [...hashes].filter(([, copies]) => copies > 1)
     .map(([sha256, copies]) => ({sha256, copies})).sort((a, b) => a.sha256.localeCompare(b.sha256));
   const dataset_sha256 = sha256([...hashes].flatMap(([hash, copies]) => Array(copies).fill(hash)).sort().join('\n'));
   const result = {
     format: 'aru-blind-trial-batch-analysis', version: 1,
     model_revision: 'aru-field-heuristics-2', response_revision: batchResponseRevision,
-    dataset_sha256, summary, duplicates,
+    dataset_sha256, summary, diagnostics, duplicates,
     limitation: LIMITATION
   };
   if (plan) result.plan = {
     sha256: plan.sha256, expected_trials: plan.expected, cases: plan.byInput.size,
-    coverage: [...plan.byInput.values()].map(({id, expected, received, history_wins, control_wins, ties}) =>
-      ({id, expected, received, history_wins, control_wins, ties}))
+    coverage: [...plan.byInput.values()].map(({id, expected, received, history_wins, control_wins,
+      ties, score_direction, score_choice_aligned, score_choice_opposed}) =>
+      ({id, expected, received, history_wins, control_wins, ties,
+        score_direction, score_choice_aligned, score_choice_opposed}))
   };
   return result;
 }
 
 function formatText(report) {
   const s = report.summary;
+  const d = report.diagnostics;
   const pct = fraction => (fraction * 100).toFixed(1) + '%';
+  const scoreRow = (label, row) => `${label}: ${row.trials} (history ${row.history_wins}, control ${row.control_wins}, tie ${row.ties}).`;
+  const directionLabel = {
+    score_higher_with_history: 'history higher',
+    score_equal: 'equal',
+    score_higher_without_history: 'control higher'
+  };
   return [
     `Verified ${s.trials} submitted trial${s.trials === 1 ? '' : 's'} against ${report.response_revision}.`,
     `History preferred: ${s.history_wins}/${s.trials} (${pct(s.history_win_fraction_all)} of all); control preferred: ${s.control_wins}/${s.trials}; tie/neither: ${s.ties}/${s.trials}.`,
     `Among ${s.non_ties} non-ties: history ${s.history_wins}/${s.non_ties} (${s.non_ties ? pct(s.history_win_fraction_non_ties) : 'undefined'}).`,
+    `Wilson 95% interval for history preference among all ratings (assuming independent ratings): ${pct(d.history_win_fraction_all_wilson95.lower)}–${pct(d.history_win_fraction_all_wilson95.upper)}.`,
+    scoreRow('Modeled score higher with history', d.score_higher_with_history),
+    scoreRow('Modeled scores equal', d.score_equal),
+    scoreRow('Modeled score higher without history', d.score_higher_without_history),
+    d.decisive_score_choice_agreement.total
+      ? `Where both score and recorded choice selected a side: aligned ${d.decisive_score_choice_agreement.aligned}/${d.decisive_score_choice_agreement.total}; opposed ${d.decisive_score_choice_agreement.opposed}/${d.decisive_score_choice_agreement.total}.`
+      : 'Where both score and recorded choice selected a side: no decisive comparisons (agreement undefined).',
     `History shown as A: ${s.history_as_A.trials} (history ${s.history_as_A.history_wins}, control ${s.history_as_A.control_wins}, tie ${s.history_as_A.ties}); as B: ${s.history_as_B.trials} (history ${s.history_as_B.history_wins}, control ${s.history_as_B.control_wins}, tie ${s.history_as_B.ties}).`,
     `Byte-identical report copies: ${s.identical_copies} (counted in the totals; ${s.distinct_file_contents} distinct file contents).`,
     ...(report.plan ? [
       `Plan complete: ${s.trials}/${report.plan.expected_trials} rated slots across ${report.plan.cases} case${report.plan.cases === 1 ? '' : 's'}. Plan SHA-256: ${report.plan.sha256}`,
       ...report.plan.coverage.map(row =>
-        `  ${row.id}: ${row.received}/${row.expected}; history ${row.history_wins}, control ${row.control_wins}, tie ${row.ties}.`)
+        `  ${row.id}: ${row.received}/${row.expected}; history ${row.history_wins}, control ${row.control_wins}, tie ${row.ties}; modeled ${directionLabel[row.score_direction]}; aligned ${row.score_choice_aligned}, opposed ${row.score_choice_opposed}.`)
     ] : []),
     `Dataset SHA-256: ${report.dataset_sha256}`,
     report.limitation
