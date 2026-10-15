@@ -20,6 +20,7 @@ Created by **Daniel Jacob Read IV** and stewarded by **ĀRU Intelligence Inc.**
 The interface lets a visitor enter a remembrance, declaration, or question and observe a client-side visual system respond. It explores:
 
 - A 72 × 72 animated scalar field
+- A motion control that shows a static field for reduced-motion preferences, pauses work in hidden tabs, and caps active drawing at 30 frames per second
 - A modeled coherence state
 - Persistent browser state through `localStorage`
 - Threshold-driven visual transitions, including “dragon ignition”
@@ -46,6 +47,8 @@ open index.html
 ```
 
 On Windows, double-click `index.html`. No build step or server is required for the core experience.
+
+The **Visual motion** switch stops the Canvas update loop when set to off. It follows your device's reduced-motion setting until you choose a different state with the switch. The field stays visible and still responds with a static image when you submit text. Hidden tabs also stop visual work. [Motion checks](research/visual-motion-protocol.md) describe the behavior and its limits.
 
 ## Inspect a transition
 

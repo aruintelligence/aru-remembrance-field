@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>ĀRU • Remembrance Field Simulation — ĀRU Intelligence Inc.</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -124,6 +124,19 @@
       color: var(--dim);
       margin-top: 0.25rem;
     }
+
+    .motion-toggle {
+      margin-top: 0.65rem;
+      min-height: 44px;
+      padding: 0.45rem 0.85rem;
+      border-radius: 9999px;
+      border: 1px solid #67e8f9;
+      color: #cffafe;
+      background: rgba(8,20,43,0.9);
+      font: 600 0.8rem 'Inter', sans-serif;
+      cursor: pointer;
+    }
+    .motion-toggle:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
 
     .response-area {
       flex: 1;
@@ -330,6 +343,7 @@
   <div class="field-label">
     <h1>Interactive Remembrance Field</h1>
     <p>A visual simulation. Inspect exactly how each input changes its modeled state.</p>
+    <button class="motion-toggle" id="motion-toggle" type="button" role="switch" aria-checked="true" onclick="toggleVisualMotion()">Visual motion: <span id="motion-state" aria-hidden="true">on</span></button>
   </div>
 
   <details class="inspector" id="inspector">
@@ -840,17 +854,16 @@ const canvas = document.getElementById("field");
 const ctx = canvas.getContext("2d");
 
 function resize() {
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = window.innerWidth * dpr;
   canvas.height = window.innerHeight * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (SIM.grid && !document.hidden) paintField();
 }
 resize();
 window.addEventListener("resize", resize);
 
-function renderLoop() {
-  SIM.step();
-
+function paintField() {
   const S = SIM.S;
   const cw = window.innerWidth / S;
   const ch = window.innerHeight / S;
@@ -870,7 +883,52 @@ function renderLoop() {
     }
   }
 
-  requestAnimationFrame(renderLoop);
+}
+
+const motionPreference = typeof window.matchMedia === "function"
+  ? window.matchMedia("(prefers-reduced-motion: reduce)") : {matches: false};
+let motionOverride = null;
+let animationFrameId = null;
+let lastDrawAt = -Infinity;
+
+function motionPaused() { return motionOverride === null ? motionPreference.matches : motionOverride; }
+function shouldAnimate() { return !motionPaused() && !document.hidden; }
+
+function renderLoop(timestamp) {
+  animationFrameId = null;
+  if (!shouldAnimate()) return;
+  if (timestamp - lastDrawAt >= 1000 / 30) {
+    SIM.step();
+    paintField();
+    lastDrawAt = timestamp;
+  }
+  animationFrameId = requestAnimationFrame(renderLoop);
+}
+
+function syncVisualMotion() {
+  const button = document.getElementById("motion-toggle");
+  button.setAttribute("aria-checked", String(!motionPaused()));
+  document.getElementById("motion-state").textContent = motionPaused() ? "off" : "on";
+  if (shouldAnimate()) {
+    if (animationFrameId === null) animationFrameId = requestAnimationFrame(renderLoop);
+  } else {
+    if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+    lastDrawAt = -Infinity;
+    if (!document.hidden) paintField();
+  }
+}
+
+function toggleVisualMotion() {
+  motionOverride = !motionPaused();
+  syncVisualMotion();
+}
+
+document.addEventListener("visibilitychange", syncVisualMotion);
+if (typeof motionPreference.addEventListener === "function") {
+  motionPreference.addEventListener("change", () => { if (motionOverride === null) syncVisualMotion(); });
+} else if (typeof motionPreference.addListener === "function") {
+  motionPreference.addListener(() => { if (motionOverride === null) syncVisualMotion(); });
 }
 
 /* ==================== UI LOGIC ==================== */
@@ -903,6 +961,7 @@ function updateUI() {
   document.getElementById("coherence-val").textContent = Field.coherence.toFixed(3);
   document.getElementById("initial-state").textContent = `Current modeled μ = ${Field.coherence.toFixed(3)}.`;
   renderInspector();
+  if (motionPaused() && !document.hidden) paintField();
 }
 
 function renderInspector() {
@@ -1474,7 +1533,7 @@ function ignite() {
 }
 
 function autonomousReflection() {
-  if (Field.busy) return;
+  if (Field.busy || document.hidden) return;
   if (Field.coherence < 0.9) return;
   if (Field.memory.length < 5) return;
   if (now() - Field.lastAuto < 26000) return;
@@ -1493,7 +1552,7 @@ SIM.init();
 updateUI();
 renderLedger();
 restoreMessages();
-renderLoop();
+syncVisualMotion();
 setInterval(autonomousReflection, 12000);
 </script>
 </body>
