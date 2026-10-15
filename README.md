@@ -29,7 +29,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A memory ablation lab that previews the same draft with and without prior history
 - A full-sequence challenge that evolves separate with-history and no-history scores from a clean baseline
 - A portable one-step proof capsule that can be recomputed from a local checkout
-- A separate evidence ledger for exact-name fact recall, source IDs, conflicts, and explicit resolution
+- A separate evidence ledger for exact-name fact recall, source IDs, conflicts, explicit resolution, and shareable cited-answer excerpts
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -112,13 +112,13 @@ node tools/falsify-evidence.cjs --seed 20261015 --runs 2000
 
 CI checks 26,000 deterministic properties across those 2,000 cases. A failed property prints a reproducible counterexample; a passing run means no violation was found within this synthetic generator's scope. It does not measure real-world accuracy or validate the field theory.
 
-After selecting **Ask with sources**, you can download a [portable question receipt](research/evidence-receipt-protocol.md) and replay it against a local checkout:
+After selecting **Ask with sources**, a known answer offers **Download cited answer excerpt JSON**. It includes only the assertions cited for that answer, omitting unrelated ledger facts. You can also download a **full question receipt** for any answer or refusal; that file includes every ledger record. Both formats use the [portable receipt protocol](research/evidence-receipt-protocol.md) and the same local verifier:
 
 ```bash
 node tools/verify-evidence-receipt.cjs /path/to/aru-evidence-question-receipt.json
 ```
 
-The receipt contains the **entire evidence ledger**, including facts unrelated to that question. Download and share it deliberately. Editing the question or ledger disables the old receipt; asking and downloading do not add another copy to browser storage. The repository includes a [synthetic receipt](research/example-evidence-receipt.json). Verification checks that the answer follows from the supplied snapshot and local code. It does not establish that the snapshot is complete, authentic, or factually true.
+Try the [synthetic excerpt](research/example-evidence-excerpt.json) and [full receipt](research/example-evidence-receipt.json) with that command. The excerpt contains the question and cited assertions, which may themselves be private. It cannot establish that no conflicting or ambiguous records were omitted. The full receipt may expose unrelated private facts. Editing the question or ledger disables both old downloads; asking and downloading do not add another copy to browser storage. Verification checks that the answer follows from the supplied records and local code. It does not establish completeness, authenticity, or factual truth.
 
 If you record a different value under that name, the ledger displays a conflict and refuses to return a single answer. **Use # as current** explicitly selects a source and keeps earlier records marked superseded. A later conflicting entry reopens the conflict. **Delete #** removes an individual record; deleting the chosen source never silently restores an older assertion. The ledger stops at 100 records and asks you to delete one before adding more.
 
@@ -134,7 +134,7 @@ node tests/benchmark.test.cjs
 node tests/falsifier.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, question receipts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
+These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls and proof replay, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and abstention, conflicts and resolution, portable ledger merging and rejection, full question receipts, privacy-scoped answer excerpts and invalidation, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
 
 ## Research question
 

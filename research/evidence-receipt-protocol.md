@@ -1,21 +1,28 @@
-# Portable evidence question receipts
+# Portable evidence question receipts and answer excerpts
 
-The browser can export a receipt for the most recent question in **Evidence memory**. This is a replayable record of what the exact-name question code returned for a particular ledger snapshot. It works for a sourced answer or a refusal such as `conflict`, `ambiguous`, or `missing`.
+The browser offers two replayable exports in **Evidence memory**:
+
+| Export | Available for | Included records | What a replay checks |
+| --- | --- | --- | --- |
+| **Cited answer excerpt** (`aru-evidence-answer-excerpt`) | Known answers | Exactly the active assertions cited by that answer | The answer follows from those supplied sources. |
+| **Full question receipt** (`aru-evidence-question-receipt`) | Answers and refusals | The entire ledger snapshot, up to 100 records | The result follows from that supplied snapshot. |
+
+The excerpt limits disclosure of unrelated facts. Neither format proves that other ledger entries were not omitted before export or that a recorded assertion is true.
 
 1. Record facts, enter a question, and select **Ask with sources**.
-2. Read the result, then select **Download question receipt JSON**.
+2. Read the result. For a known answer, select **Download cited answer excerpt JSON**; to preserve a refusal or include the full ledger, select **Download full question receipt JSON**.
 3. From a local checkout, run:
 
    ```bash
    node tools/verify-evidence-receipt.cjs /path/to/aru-evidence-question-receipt.json
    ```
 
-For a no-private-data example, run `node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json`.
+For no-private-data examples, run `node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json` and `node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json`.
 
-The receipt contains the exact question, the answer kind and any value or source IDs, and a **full snapshot of up to 100 ledger records**. The verifier validates the records, runs the repository's actual `resolveEvidenceQuestion` and `evidenceAnswerSummary` functions against them, and rejects a mismatch. It also reports a SHA-256 hash of the local extracted question code. A changed value, conflicting record, question, or citation that changes the answer fails verification. The verifier rejects duplicate or malformed records and files over 1 MiB.
+Both files contain the exact question, answer kind, any value and source IDs, and their supplied records. The excerpt also declares `scope: "cited-assertions-only"`. The verifier validates records, runs the repository's actual `resolveEvidenceQuestion` and `evidenceAnswerSummary` functions against them, and rejects a mismatch. An excerpt must contain **all and only** its cited active assertions within the file. The verifier rejects duplicate or malformed records and files over 1 MiB, and reports a SHA-256 hash of the local extracted question code. The hash identifies code bytes, not the origin of either receipt.
 
-Changing the question clears the displayed answer and disables its receipt. Recording, importing, selecting, or deleting a ledger entry also invalidates the old answer and receipt. The app keeps the receipt in memory only until another question or edit; it does not add the receipt to local storage. Downloading is an explicit action.
+Changing the question clears the displayed answer and disables both exports. Recording, importing, selecting, or deleting a ledger entry also invalidates the old answer and exports. A refusal cannot produce a cited answer excerpt. The app keeps the snapshot in memory only until another question or edit; it does not add either file to local storage. Downloading is an explicit action.
 
-**Privacy:** The full snapshot may include sensitive facts unrelated to the question. Inspect the JSON before sharing it. The output is not suitable for public publication if your ledger contains private details. The receipt is a different format from an evidence ledger import and cannot be used as an import file.
+**Privacy:** An excerpt omits unrelated ledger facts but includes the question and cited values, which can still be sensitive. A full receipt may include sensitive facts unrelated to the question. Inspect either JSON before sharing it. Neither format is an evidence ledger import file.
 
-**What a pass means:** The answer matches the records **in the supplied file** under the checked-out code. It does not prove that the snapshot contains every record from the original browser, that the file was made by this app, that the author is who they claim, that its values are true, or that the model has general question-answering ability. A person can edit both records and answer and generate another internally consistent receipt. The SHA-256 identifies the verifier's local code; it is not an authenticity signature on the receipt.
+**What a pass means:** The answer matches the records **in the supplied file** under the checked-out code. For example, an excerpt citing `teal` can pass even if an omitted current assertion says `amber`; the full ledger would then refuse to choose one. This is an explicit counterexample in `tests/field.test.cjs`. A pass does not prove completeness, origin, authorship, factual truth, or general question-answering ability. A person can edit the supplied records and answer and create another internally consistent file.
