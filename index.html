@@ -399,6 +399,15 @@
     <button id="state-import-apply" type="button" disabled onclick="applyStateImport()">Replace with reviewed state</button>
   </details>
 
+  <details class="ledger" id="receipt-verifier">
+    <summary>Verify a shared answer receipt</summary>
+    <p>Choose a question receipt or cited answer excerpt JSON. This browser recalculates the answer from the records in that file. The file is read on this device; it is not imported into your ledger or uploaded by this app.</p>
+    <label for="receipt-file">Answer receipt JSON (up to 1 MiB)</label>
+    <input id="receipt-file" type="file" accept=".json,application/json" onchange="verifyEvidenceFile()">
+    <p id="receipt-verification" role="status" aria-live="polite">No receipt checked yet.</p>
+    <p>A pass checks consistency with supplied records only. It cannot authenticate their author, confirm the facts, or detect records omitted before the file was made.</p>
+  </details>
+
   <details class="ledger" id="ledger">
     <summary>Evidence memory · <span id="ledger-count">0 records</span></summary>
     <p>Record a fact under a name, then recall it with a source. Questions use two narrow templates and exact stored names; this ledger does not interpret the freeform conversation or verify assertions against the world.</p>
@@ -1227,6 +1236,82 @@ function downloadEvidenceReceipt() {
     model_revision: "aru-evidence-questions-1", question: current.question,
     records: JSON.parse(current.snapshot), answer: current.answer
   }, "aru-evidence-question-receipt.json");
+}
+
+function sameEvidenceAnswer(actual, computed) {
+  if (!actual || typeof actual !== "object" || Array.isArray(actual) ||
+      Object.keys(actual).length !== Object.keys(computed).length) return false;
+  return Object.keys(computed).every(key => {
+    if (!Object.prototype.hasOwnProperty.call(actual, key)) return false;
+    const expected = computed[key];
+    const supplied = actual[key];
+    return Array.isArray(expected)
+      ? Array.isArray(supplied) && supplied.length === expected.length &&
+        supplied.every((item, index) => item === expected[index])
+      : supplied === expected;
+  });
+}
+
+function verifyEvidenceBundle(receipt) {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new Error("Expected a receipt object.");
+  const excerpt = receipt.format === "aru-evidence-answer-excerpt";
+  const fields = ["format", "version", "model_revision", "question", "records", "answer",
+    ...(excerpt ? ["scope"] : [])];
+  if ((receipt.format !== "aru-evidence-question-receipt" && !excerpt) ||
+      receipt.version !== 1 || receipt.model_revision !== "aru-evidence-questions-1" ||
+      Object.keys(receipt).length !== fields.length ||
+      !fields.every(key => Object.prototype.hasOwnProperty.call(receipt, key)) ||
+      (excerpt && receipt.scope !== "cited-assertions-only")) {
+    throw new Error("Unsupported format, model revision, scope, or fields.");
+  }
+  if (typeof receipt.question !== "string" || receipt.question.length > 500 ||
+      !Array.isArray(receipt.records) || receipt.records.length > 100 ||
+      (excerpt && !receipt.records.length)) throw new Error("Invalid question or record count.");
+  const ids = new Set();
+  const claimFields = new Set(["id", "key", "value", "time", "status", "imported"]);
+  for (const record of receipt.records) {
+    if (!validFactClaim(record) || Object.keys(record).some(key => !claimFields.has(key)) ||
+        (record.imported !== undefined && typeof record.imported !== "boolean") || ids.has(record.id)) {
+      throw new Error("Invalid or duplicate source record.");
+    }
+    ids.add(record.id);
+  }
+  const answer = evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, receipt.records));
+  if (!sameEvidenceAnswer(receipt.answer, answer)) {
+    throw new Error("The recorded answer or citations disagree with the supplied records.");
+  }
+  if (excerpt && (answer.kind !== "known" ||
+      receipt.records.some(record => record.status !== "active" || !answer.sources.includes(record.id)) ||
+      receipt.records.length !== answer.sources.length)) {
+    throw new Error("An excerpt must contain exactly its cited active assertions.");
+  }
+  return {answer, recordCount: ids.size,
+    scope: excerpt ? "cited assertions only" : "full supplied snapshot"};
+}
+
+let receiptVerificationRequest = 0;
+async function verifyEvidenceFile() {
+  const request = ++receiptVerificationRequest;
+  const file = document.getElementById("receipt-file").files?.[0];
+  const output = document.getElementById("receipt-verification");
+  if (!file) { output.textContent = "Choose an answer receipt JSON file."; return; }
+  if (file.size > 1024 * 1024) { output.textContent = "FAIL: File exceeds the 1 MiB limit."; return; }
+  output.textContent = "Checking receipt on this device…";
+  try {
+    const raw = await file.text();
+    if (request !== receiptVerificationRequest) return;
+    if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error("File exceeds the 1 MiB limit.");
+    const receipt = JSON.parse(raw);
+    const result = verifyEvidenceBundle(receipt);
+    const answer = result.answer;
+    const sources = answer.sources?.length ? answer.sources.map(id => `#${id}`).join(", ") : "none";
+    const finding = answer.kind === "known" ? `Recorded answer: “${answer.value}”.` : `No answer (${answer.kind}).`;
+    output.textContent = `PASS: ${answer.kind}; ${result.recordCount} supplied records; source IDs: ${sources}; scope: ${result.scope}. Question: “${receipt.question}”. ${finding} Consistent with the supplied records, not independently verified as true.`;
+  } catch (error) {
+    if (request === receiptVerificationRequest) {
+      output.textContent = `FAIL: ${error instanceof SyntaxError ? "File is not valid JSON." : error.message || "Could not check the receipt."}`;
+    }
+  }
 }
 
 function describeFact(key) {
