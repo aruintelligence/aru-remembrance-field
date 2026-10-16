@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "model_revision": "aru-field-heuristics-3",
+  "scope": "synthetic full-sequence scripted score; not an authenticated record",
+  "start_mu": 0.64,
+  "start_at": 1700000000000,
+  "step_ms": 1000,
+  "inputs": [
+    "favorite color teal",
+    "My favorite color is not teal."
+  ],
+  "steps": [
+    {
+      "input": "favorite color teal",
+      "at": 1700000000000,
+      "actual": {
+        "before": 0.64,
+        "delta": -0.01376,
+        "after": 0.62624,
+        "terms": [
+          {
+            "label": "Matched word rules",
+            "value": 0
+          },
+          {
+            "label": "Length rule",
+            "value": 0
+          },
+          {
+            "label": "Intent rule",
+            "value": 0
+          },
+          {
+            "label": "Prior memory overlap",
+            "value": 0
+          },
+          {
+            "label": "Contradiction rule",
+            "value": 0
+          },
+          {
+            "label": "Direct negation rule",
+            "value": 0
+          },
+          {
+            "label": "Prior repetition rule",
+            "value": 0
+          },
+          {
+            "label": "Baseline drift",
+            "value": -0.01376
+          }
+        ],
+        "clamped": false
+      },
+      "control": {
+        "before": 0.64,
+        "delta": -0.01376,
+        "after": 0.62624,
+        "terms": [
+          {
+            "label": "Matched word rules",
+            "value": 0
+          },
+          {
+            "label": "Length rule",
+            "value": 0
+          },
+          {
+            "label": "Intent rule",
+            "value": 0
+          },
+          {
+            "label": "Prior memory overlap",
+            "value": 0
+          },
+          {
+            "label": "Contradiction rule",
+            "value": 0
+          },
+          {
+            "label": "Direct negation rule",
+            "value": 0
+          },
+          {
+            "label": "Prior repetition rule",
+            "value": 0
+          },
+          {
+            "label": "Baseline drift",
+            "value": -0.01376
+          }
+        ],
+        "clamped": false
+      },
+      "effect": 0
+    },
+    {
+      "input": "My favorite color is not teal.",
+      "at": 1700000001000,
+      "actual": {
+        "before": 0.62624,
+        "delta": -0.04363616,
+        "after": 0.58260384,
+        "terms": [
+          {
+            "label": "Matched word rules",
+            "value": 0
+          },
+          {
+            "label": "Length rule",
+            "value": 0
+          },
+          {
+            "label": "Intent rule",
+            "value": 0
+          },
+          {
+            "label": "Prior memory overlap",
+            "value": 0
+          },
+          {
+            "label": "Contradiction rule",
+            "value": 0
+          },
+          {
+            "label": "Direct negation rule",
+            "value": -0.03
+          },
+          {
+            "label": "Prior repetition rule",
+            "value": 0
+          },
+          {
+            "label": "Baseline drift",
+            "value": -0.01363616
+          }
+        ],
+        "clamped": false
+      },
+      "control": {
+        "before": 0.62624,
+        "delta": -0.01363616,
+        "after": 0.61260384,
+        "terms": [
+          {
+            "label": "Matched word rules",
+            "value": 0
+          },
+          {
+            "label": "Length rule",
+            "value": 0
+          },
+          {
+            "label": "Intent rule",
+            "value": 0
+          },
+          {
+            "label": "Prior memory overlap",
+            "value": 0
+          },
+          {
+            "label": "Contradiction rule",
+            "value": 0
+          },
+          {
+            "label": "Direct negation rule",
+            "value": 0
+          },
+          {
+            "label": "Prior repetition rule",
+            "value": 0
+          },
+          {
+            "label": "Baseline drift",
+            "value": -0.01363616
+          }
+        ],
+        "clamped": false
+      },
+      "effect": -0.030000000000000027
+    }
+  ],
+  "final": {
+    "with_history": 0.58260384,
+    "without_history": 0.61260384,
+    "difference": -0.030000000000000027
+  }
+}

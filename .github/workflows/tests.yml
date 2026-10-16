@@ -25,16 +25,25 @@ jobs:
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json
       - run: node tools/verify-proof.cjs research/example-proof.json
       - run: node tools/verify-proof.cjs research/example-proof-v2.json
+      - run: node tools/verify-proof.cjs research/example-proof-v3.json
       - run: node tools/verify-trajectory.cjs research/example-trajectory.json
       - run: node tools/verify-trajectory.cjs research/example-trajectory-v2.json
+      - run: node tools/verify-trajectory.cjs research/example-trajectory-v3.json
       - run: node tools/verify-memory-challenge.cjs research/example-memory-challenge.json
+      - run: node tools/verify-memory-challenge.cjs research/example-memory-challenge-v3.json
       - run: node tools/verify-blind-trial.cjs research/example-blind-trial.json
       - run: node tools/verify-blind-trial.cjs research/example-blind-trial-v2.json
+      - run: node tools/verify-blind-trial.cjs research/example-blind-trial-v3.json
       - run: node tools/analyze-blind-trials.cjs research/example-blind-trial.json
       - run: node tools/analyze-blind-trials.cjs --check-plan research/example-blind-trial-plan.json
       - run: node tools/analyze-blind-trials.cjs --plan research/example-blind-trial-plan.json research/example-blind-trial.json
       - run: node tools/analyze-blind-trials.cjs --check-plan research/example-blind-trial-plan-v2.json
       - run: node tools/analyze-blind-trials.cjs --plan research/example-blind-trial-plan-v2.json research/example-blind-trial-v2.json
+      - run: node tools/analyze-blind-trials.cjs --check-plan research/example-blind-trial-plan-v3.json
+      - run: node tools/analyze-blind-trials.cjs --plan research/example-blind-trial-plan-v3.json research/example-blind-trial-v3.json
       - run: |
           python3 tools/differential-field-v2.py --seed 20261015 --runs 2000 --json | tee /tmp/aru-score-differential.json
           diff -u research/example-score-differential-report.json /tmp/aru-score-differential.json
+      - run: |
+          python3 tools/differential-field-v3.py --seed 20261015 --runs 2000 --json | tee /tmp/aru-score-differential-v3.json
+          diff -u research/example-score-differential-report-v3.json /tmp/aru-score-differential-v3.json

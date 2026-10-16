@@ -6,9 +6,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {createHash} = require('node:crypto');
 
-const MODEL_REVISION = 'aru-field-heuristics-2';
+const MODEL_REVISION = 'aru-field-heuristics-3';
+const PREVIOUS_REVISION = 'aru-field-heuristics-2';
 const LEGACY_REVISION = 'aru-field-heuristics-1';
 const LEGACY_SHA256 = 'a36dd8b2f577f9c1010df1b79ad17861c2c421e6667b075841467743d2cd3039';
+const PREVIOUS_SHA256 = '0ac11a6362478c5fd25689bd7bfd23aa72304bce0b77140acf1a8c229972178f';
 
 function requireCondition(condition, label) {
   if (!condition) throw new Error(`Invalid proof: ${label}`);
@@ -19,7 +21,7 @@ function finite(value) { return typeof value === 'number' && Number.isFinite(val
 function checkShape(proof) {
   requireCondition(proof && typeof proof === 'object' && !Array.isArray(proof), 'object expected');
   requireCondition(proof.schema_version === 1, 'unsupported schema version');
-  requireCondition(proof.model_revision === MODEL_REVISION || proof.model_revision === LEGACY_REVISION,
+  requireCondition([MODEL_REVISION, PREVIOUS_REVISION, LEGACY_REVISION].includes(proof.model_revision),
     'unsupported model revision');
   requireCondition(typeof proof.input === 'string', 'input must be text');
   requireCondition(finite(proof.evaluated_at), 'timestamp must be finite');
@@ -36,12 +38,14 @@ function checkShape(proof) {
 }
 
 function loadEvaluator(revision = MODEL_REVISION) {
-  if (revision === LEGACY_REVISION) {
-    const legacy = fs.readFileSync(path.join(__dirname, 'field-model-v1.js'), 'utf8');
-    requireCondition(createHash('sha256').update(legacy).digest('hex') === LEGACY_SHA256,
-      'archived v1 model source changed');
+  if (revision === LEGACY_REVISION || revision === PREVIOUS_REVISION) {
+    const filename = revision === LEGACY_REVISION ? 'field-model-v1.js' : 'field-model-v2.js';
+    const expected = revision === LEGACY_REVISION ? LEGACY_SHA256 : PREVIOUS_SHA256;
+    const archived = fs.readFileSync(path.join(__dirname, filename), 'utf8');
+    requireCondition(createHash('sha256').update(archived).digest('hex') === expected,
+      'archived model source changed');
     const context = vm.createContext({});
-    vm.runInContext(legacy, context, {timeout: 1000});
+    vm.runInContext(archived, context, {timeout: 1000});
     return context;
   }
   requireCondition(revision === MODEL_REVISION, 'unsupported model revision');

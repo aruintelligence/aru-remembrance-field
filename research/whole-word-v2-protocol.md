@@ -1,5 +1,7 @@
 # Score rules v2: whole words and replayable counterexamples
 
+This page documents the archived v2 revision. [V3](direct-negation-v3-protocol.md) is the live score model.
+
 The field score is a scripted simulation. This revision corrects one mechanical error in its text matching: a word hidden inside a longer word no longer earns a bonus or triggers a contradiction. It does not infer meanings, truth, or consciousness.
 
 ## Reproduce the change
@@ -29,4 +31,4 @@ For the `nevermore` transition at μ = `0.64`, v1 ends at `0.59624` with the `al
 
 V2 applies Unicode NFKC normalization and lowercase conversion, then extracts contiguous Unicode letters, numbers, and combining marks as words. Its scoring keywords and contradiction pairs are still literal English words. Thus `ＣＡＦÉ river` has memory tokens `café` and `river`, but the model does not stem, translate, segment languages without spaces, or understand negation in context. A hyphen is a word boundary; an apostrophe also splits words. The `?` and fullwidth `？` mark a question. An intent phrase such as `i remember` still requires complete adjacent words.
 
-The live app reads saved memory text and rebuilds derived tokens and comparison text under v2 on reload. New proof and trajectory downloads declare `aru-field-heuristics-2`. Older downloads declare `aru-field-heuristics-1` and are replayed against [the frozen v1 source](../tools/field-model-v1.js), whose SHA-256 is `a36dd8b2f577f9c1010df1b79ad17861c2c421e6667b075841467743d2cd3039`. The verifier checks this digest before evaluating v1. It checks exact score consistency for either revision, not file authenticity or any claim of human benefit.
+The live app reads saved memory text and rebuilds derived tokens and comparison text on reload. V2 proof and trajectory downloads declare `aru-field-heuristics-2` and replay against [the frozen v2 source](../tools/field-model-v2.js), SHA-256 `0ac11a6362478c5fd25689bd7bfd23aa72304bce0b77140acf1a8c229972178f`. Older downloads declare `aru-field-heuristics-1` and replay against [the frozen v1 source](../tools/field-model-v1.js), SHA-256 `a36dd8b2f577f9c1010df1b79ad17861c2c421e6667b075841467743d2cd3039`. The verifier checks these digests before evaluating old receipts. New downloads declare v3. Exact score consistency does not establish file authenticity or human benefit.

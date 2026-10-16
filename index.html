@@ -370,7 +370,7 @@
 
   <details class="inspector" id="inspector">
     <summary>Inspect model state and last change</summary>
-    <p>Score rules v2 match whole Unicode words. The score is a scripted simulation, and earlier v1 receipts remain verifiable from this repository.</p>
+    <p>Score rules v3 match whole Unicode words and flag a direct not-word mismatch against earlier memory. The score is a scripted simulation; v1 and v2 receipts remain verifiable from this repository.</p>
     <p>μ is a scripted score, not a measure of a person or of consciousness. The breakdown uses prior memory and messages only; this input cannot match itself.</p>
     <p id="transition-summary">No input has changed the model yet.</p>
     <ol id="transition-terms"></ol>
@@ -412,10 +412,10 @@
         <button type="button" id="trajectory-download" onclick="downloadTrajectory()" disabled>Download trajectory proof JSON</button>
       </div>
       <div id="trajectory-result" role="status" aria-live="polite"></div>
-      <h3>Three-control memory challenge</h3>
-      <p>Run the same scripted model from a fresh start for repeated, unrelated, and contradictory phrases. These fixed controls probe positive, zero, and negative history effects. Your saved field stays untouched.</p>
+      <h3>Four-control memory challenge</h3>
+      <p>Run the same scripted model from a fresh start for repeated, unrelated, contradictory, and directly negated phrases. These fixed controls probe positive, zero, and negative history effects. Your saved field stays untouched.</p>
       <div class="inspector-actions">
-        <button type="button" onclick="runMemoryChallenge()">Run three controls</button>
+        <button type="button" onclick="runMemoryChallenge()">Run four controls</button>
         <button type="button" id="challenge-download" onclick="downloadMemoryChallenge()" disabled>Download challenge report JSON</button>
       </div>
       <div id="challenge-result" role="status" aria-live="polite"></div>
@@ -554,7 +554,7 @@ const STORAGE_KEYS = {
   claims: "aru_fact_claims",
   claimCounter: "aru_fact_counter"
 };
-const PROOF_MODEL_REVISION = "aru-field-heuristics-2";
+const PROOF_MODEL_REVISION = "aru-field-heuristics-3";
 const RESPONSE_MODEL_REVISION = "aru-response-2";
 let sessionOnly = false;
 
@@ -702,6 +702,7 @@ const MemoryEngine = {
   resonance(input, memory = Field.memory, at = now()) {
     const tokens = tokenize(input);
     return memory.slice(-22).reduce((acc, m) => {
+      if (directPolarityMismatch(input, m.text || "")) return acc;
       return acc + similarity(tokens, m.tokens || []) * (m.weight || 1) * ageFactor(m.time, at) * 0.05;
     }, 0);
   },
@@ -799,6 +800,7 @@ function evaluateCoherence(input, state, at) {
 
   addTerm("Prior memory overlap", MemoryEngine.resonance(input, state.memory, at));
   addTerm("Contradiction rule", -contradictionPenalty(input, state.memory));
+  addTerm("Direct negation rule", state.memory.slice(-10).some(m => directPolarityMismatch(input, m.text || "")) ? -0.03 : 0);
   addTerm("Prior repetition rule", -repetitionPenalty(input, state.messages));
   addTerm("Baseline drift", -(0.008 + before * 0.009));
 
@@ -879,7 +881,7 @@ function directlyNegatedWords(text) {
   return negated;
 }
 
-function possibleEchoConflict(input, stored) {
+function directPolarityMismatch(input, stored) {
   const current = new Set(tokenize(input));
   const prior = new Set(tokenize(stored));
   const currentNegated = directlyNegatedWords(input);
@@ -887,7 +889,11 @@ function possibleEchoConflict(input, stored) {
   for (const token of current) {
     if (prior.has(token) && currentNegated.has(token) !== priorNegated.has(token)) return true;
   }
-  return contradictionPenalty(input, [{text: stored}]) > 0;
+  return false;
+}
+
+function possibleEchoConflict(input, stored) {
+  return directPolarityMismatch(input, stored) || contradictionPenalty(input, [{text: stored}]) > 0;
 }
 
 function getResponse(input, autonomous = false, c = Field.coherence, memory = Field.memory, at = now()) {
@@ -1061,7 +1067,7 @@ function verifyScoreProof(proof) {
   const fail = message => { throw new Error(`Invalid proof: ${message}`); };
   const finite = value => typeof value === "number" && Number.isFinite(value);
   if (!proof || typeof proof !== "object" || Array.isArray(proof) || proof.schema_version !== 1) fail("unsupported schema.");
-  if (proof.model_revision !== PROOF_MODEL_REVISION) fail("only current v2 score proofs can be checked here; use the command-line verifier for v1.");
+  if (proof.model_revision !== PROOF_MODEL_REVISION) fail("Only current v3 score proofs can be checked here; use the command-line verifier for v1 and v2.");
   if (typeof proof.input !== "string" || !finite(proof.evaluated_at) ||
       !finite(proof.start_mu) || proof.start_mu < 0.35 || proof.start_mu > 0.995 ||
       !Array.isArray(proof.prior_memory) || proof.prior_memory.length > 22 ||
@@ -1736,7 +1742,7 @@ function validateBlindTrialPlan(plan) {
   const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value) &&
     Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
   if (!exact(plan, ["format", "version", "model_revision", "response_revision", "primary_outcome", "cases"]) ||
-      plan.format !== "aru-blind-trial-plan" || plan.version !== 2 ||
+      plan.format !== "aru-blind-trial-plan" || plan.version !== 3 ||
       plan.model_revision !== PROOF_MODEL_REVISION ||
       plan.response_revision !== RESPONSE_MODEL_REVISION ||
       plan.primary_outcome !== "history_win_fraction_all" ||
@@ -2049,7 +2055,8 @@ function downloadTrajectory() {
 const MEMORY_CHALLENGE_CASES = [
   {id: "repeated", label: "Repeated phrase", inputs: ["violet river", "violet river"], direction: "positive"},
   {id: "unrelated", label: "Unrelated phrases", inputs: ["amber comet", "violet river"], direction: "zero"},
-  {id: "contradiction", label: "Contradictory words", inputs: ["always", "never"], direction: "negative"}
+  {id: "contradiction", label: "Contradictory words", inputs: ["always", "never"], direction: "negative"},
+  {id: "direct-negation", label: "Direct negation", inputs: ["favorite color teal", "My favorite color is not teal."], direction: "negative"}
 ];
 let lastMemoryChallenge = null;
 
@@ -2074,7 +2081,7 @@ function runMemoryChallenge() {
     model_revision: PROOF_MODEL_REVISION, scenarios};
   const passed = scenarios.filter(row => challengeDirection(row.trajectory.final.difference) === row.expected_direction).length;
   const summary = document.createElement("p");
-  summary.textContent = `${passed}/3 controls show their expected direction under the current scripted rules. Each starts at μ = 0.6400 with a fixed one-second clock. This checks software behavior, not real-world memory or consciousness.`;
+  summary.textContent = `${passed}/${MEMORY_CHALLENGE_CASES.length} controls show their expected direction under the current scripted rules. Each starts at μ = 0.6400 with a fixed one-second clock. This checks software behavior, not real-world memory or consciousness.`;
   output.appendChild(summary);
   const scroll = document.createElement("div");
   scroll.className = "trajectory-scroll";
