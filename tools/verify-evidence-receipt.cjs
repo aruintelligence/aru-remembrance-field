@@ -9,6 +9,7 @@ const MAX_BYTES = 1024 * 1024;
 const MODEL_REVISION = "aru-evidence-questions-1";
 const BRIEF_REVISION = "aru-evidence-briefs-1";
 const CORRECTION_REVISION = "aru-evidence-corrections-1";
+const CHAIN_REVISION = "aru-evidence-correction-chain-1";
 const CLAIM_FIELDS = new Set(["id", "key", "value", "time", "status", "imported"]);
 
 function requireValid(condition, message) {
@@ -45,6 +46,32 @@ function verifyCorrectionReceipt(receipt, model) {
     records: computed.length, scope: "full-supplied-snapshots", model_sha256: model.hash};
 }
 
+function verifyCorrectionChain(receipt, model) {
+  const keys = ["format", "version", "model_revision", "receipts"];
+  requireValid(keys.every(key => Object.hasOwn(receipt, key)) &&
+    Object.keys(receipt).every(key => keys.includes(key)) &&
+    receipt.version === 1 && receipt.model_revision === CHAIN_REVISION &&
+    Array.isArray(receipt.receipts) && receipt.receipts.length >= 2 && receipt.receipts.length <= 8,
+    "unsupported correction-chain format, revision, fields, or step count (2–8)");
+  let previous = null;
+  const steps = [];
+  for (const item of receipt.receipts) {
+    requireValid(item && typeof item === "object" && !Array.isArray(item) &&
+      item.format === "aru-evidence-correction-receipt", "chain must contain only correction receipts");
+    verifyCorrectionReceipt(item, model);
+    if (previous) {
+      try { assert.deepStrictEqual(item.before_records, previous.after_records); }
+      catch (_) { requireValid(false, "correction chain has a missing, forked, duplicated, or reordered step"); }
+      requireValid(item.new_source_id === previous.new_source_id + 1,
+        "correction chain has a missing, forked, duplicated, or reordered step");
+    }
+    steps.push(item.new_source_id);
+    previous = item;
+  }
+  return {kind: "chain", steps, records: previous.after_records.length,
+    scope: "full-supplied-correction-sequence", model_sha256: model.hash};
+}
+
 function verifyBriefReceipt(receipt, model) {
   const keys = ["format", "version", "model_revision", "names", "records", "results"];
   requireValid(keys.every(key => Object.hasOwn(receipt, key)) &&
@@ -79,6 +106,7 @@ function verifyBriefReceipt(receipt, model) {
 
 function verifyEvidenceReceipt(receipt, model = loadModel()) {
   requireValid(receipt && typeof receipt === "object" && !Array.isArray(receipt), "object expected");
+  if (receipt.format === "aru-evidence-correction-chain") return verifyCorrectionChain(receipt, model);
   if (receipt.format === "aru-evidence-correction-receipt") return verifyCorrectionReceipt(receipt, model);
   if (receipt.format === "aru-evidence-brief-receipt") return verifyBriefReceipt(receipt, model);
   const excerpt = receipt.format === "aru-evidence-answer-excerpt";
@@ -136,7 +164,9 @@ if (require.main === module) {
     try { receipt = JSON.parse(readLimited(process.argv[2])); }
     catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid receipt: file is not valid JSON"); throw error; }
     const result = verifyEvidenceReceipt(receipt);
-    if (result.kind === "correction") {
+    if (result.kind === "chain") {
+      console.log(`PASS: ${result.steps.length} consecutive corrections; sources ${result.steps.map(id => `#${id}`).join(" → ")}; ${result.records} resulting records; scope ${result.scope}`);
+    } else if (result.kind === "correction") {
       console.log(`PASS: correction source #${result.new_source_id}; ${result.superseded} prior current source${result.superseded === 1 ? "" : "s"} superseded; ${result.records} resulting records; scope ${result.scope}`);
     } else if (result.kind === "brief") {
       console.log(`PASS: ${result.names} names; ${result.known} sourced answer${result.known === 1 ? "" : "s"}; ${result.names - result.known} refusal${result.names - result.known === 1 ? "" : "s"}; ${result.records} supplied records; scope ${result.scope}`);

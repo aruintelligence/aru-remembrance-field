@@ -25,6 +25,7 @@ jobs:
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-brief.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction.json
+      - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction-chain.json
       - run: node tools/verify-proof.cjs research/example-proof.json
       - run: node tools/verify-proof.cjs research/example-proof-v2.json
       - run: node tools/verify-proof.cjs research/example-proof-v3.json
