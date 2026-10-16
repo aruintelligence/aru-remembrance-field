@@ -464,8 +464,8 @@
 
   <details class="ledger" id="receipt-verifier">
     <summary>Verify a shared answer receipt</summary>
-    <p>Choose a question, brief, or correction receipt JSON. This browser recalculates the answer or ledger change from the records in that file. The file is read on this device and is not uploaded by this app.</p>
-    <label for="receipt-file">Answer receipt JSON (up to 1 MiB)</label>
+    <p>Choose a question, brief, correction, or correction-chain receipt JSON. This browser recalculates the answer or ledger change from the records in that file. The file is read on this device and is not uploaded by this app.</p>
+    <label for="receipt-file">Receipt JSON (up to 1 MiB)</label>
     <input id="receipt-file" type="file" accept=".json,application/json" onchange="verifyEvidenceFile()">
     <p id="receipt-verification" role="status" aria-live="polite">No receipt checked yet.</p>
     <div class="ledger-actions">
@@ -474,6 +474,17 @@
     </div>
     <div id="incoming-correction-preview" role="status" aria-live="polite"></div>
     <p>A correction can be applied only to the exact starting ledger with the same next source ID. Review its current sources and replacement first. Diverged browsers must be reconciled separately; this action never silently merges them.</p>
+    <section class="evidence-question">
+      <h2>Bundle consecutive corrections</h2>
+      <p>Select 2–8 correction receipts in any file order. This device checks each step and their exact continuity, then prepares the chain for review here. Download the bundle to carry it to another matching browser. Each step repeats the full ledger, including unrelated private facts.</p>
+      <label for="chain-files">Correction receipt JSON files (combined limit 1 MiB)</label>
+      <input id="chain-files" type="file" accept=".json,application/json" multiple onchange="invalidateBuiltChain()">
+      <div class="ledger-actions">
+        <button type="button" onclick="buildCorrectionChain()">Verify and bundle sequence</button>
+        <button type="button" id="chain-download" onclick="downloadCorrectionChain()" disabled>Download chain JSON</button>
+      </div>
+      <p id="chain-result" role="status" aria-live="polite"></p>
+    </section>
     <p>A pass checks consistency with supplied records only. It cannot authenticate their author, confirm the facts, or detect records omitted before the file was made.</p>
   </details>
 
@@ -1544,6 +1555,32 @@ function sameEvidenceAnswer(actual, computed) {
 
 function verifyEvidenceBundle(receipt) {
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new Error("Expected a receipt object.");
+  if (receipt.format === "aru-evidence-correction-chain") {
+    const fields = ["format", "version", "model_revision", "receipts"];
+    if (receipt.version !== 1 || receipt.model_revision !== "aru-evidence-correction-chain-1" ||
+        Object.keys(receipt).length !== fields.length ||
+        !fields.every(key => Object.prototype.hasOwnProperty.call(receipt, key)) ||
+        !Array.isArray(receipt.receipts) || receipt.receipts.length < 2 || receipt.receipts.length > 8) {
+      throw new Error("Unsupported correction-chain format, revision, fields, or step count (2–8).");
+    }
+    const steps = [];
+    let previous = null;
+    for (const item of receipt.receipts) {
+      if (!item || item.format !== "aru-evidence-correction-receipt") {
+        throw new Error("A chain must contain only correction receipts.");
+      }
+      const checked = verifyEvidenceBundle(item);
+      if (previous && (!sameFactLedger(previous.after_records, item.before_records) ||
+          item.new_source_id !== previous.new_source_id + 1)) {
+        throw new Error("Correction chain has a missing, forked, duplicated, or reordered step.");
+      }
+      steps.push({id: item.new_source_id, name: item.name, value: item.value,
+        superseded: checked.correction.superseded});
+      previous = item;
+    }
+    return {chain: {steps}, recordCount: previous.after_records.length,
+      scope: "full supplied correction sequence"};
+  }
   if (receipt.format === "aru-evidence-correction-receipt") {
     const fields = ["format", "version", "model_revision", "name", "value", "new_source_id",
       "applied_at", "before_records", "after_records"];
@@ -1642,6 +1679,8 @@ function verifyEvidenceBundle(receipt) {
 let receiptVerificationRequest = 0;
 let verifiedIncomingCorrection = null;
 let pendingIncomingCorrection = null;
+let chainBuildRequest = 0;
+let lastCorrectionChain = null;
 
 function invalidateIncomingCorrection(message = "The ledger changed. Choose the receipt again to review it against this browser.") {
   if (!verifiedIncomingCorrection && !pendingIncomingCorrection) return;
@@ -1658,7 +1697,7 @@ function sameFactLedger(actual, expected) {
     actual.every((record, index) => record && typeof record === "object" && !Array.isArray(record) &&
       Object.keys(record).length === Object.keys(expected[index]).length &&
       fields.every(field => Object.prototype.hasOwnProperty.call(record, field) ===
-        Object.prototype.hasOwnProperty.call(expected[index], field) && record[field] === expected[index][field]));
+        Object.prototype.hasOwnProperty.call(expected[index], field) && Object.is(record[field], expected[index][field])));
 }
 
 async function verifyEvidenceFile() {
@@ -1678,6 +1717,12 @@ async function verifyEvidenceFile() {
     if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error("File exceeds the 1 MiB limit.");
     const receipt = JSON.parse(raw);
     const result = verifyEvidenceBundle(receipt);
+    if (result.chain) {
+      verifiedIncomingCorrection = receipt;
+      document.getElementById("incoming-correction-preview-button").disabled = false;
+      output.textContent = `PASS: ${result.chain.steps.length} consecutive corrections; ${result.recordCount} resulting records. Consistent with supplied snapshots, not independently verified as complete, true, or authentic.`;
+      return;
+    }
     if (result.correction) {
       verifiedIncomingCorrection = receipt;
       document.getElementById("incoming-correction-preview-button").disabled = false;
@@ -1700,15 +1745,92 @@ async function verifyEvidenceFile() {
   }
 }
 
+function invalidateBuiltChain() {
+  ++chainBuildRequest;
+  ++receiptVerificationRequest;
+  lastCorrectionChain = null;
+  document.getElementById("chain-download").disabled = true;
+  document.getElementById("chain-result").textContent = "Selection changed. Verify the new sequence before downloading or applying it.";
+  document.getElementById("receipt-verification").textContent = "Selection changed. No correction sequence is ready to apply.";
+  invalidateIncomingCorrection("Selection changed. Verify the new sequence before reviewing it.");
+}
+
+async function buildCorrectionChain() {
+  const request = ++receiptVerificationRequest;
+  const buildRequest = ++chainBuildRequest;
+  lastCorrectionChain = null;
+  document.getElementById("chain-download").disabled = true;
+  invalidateIncomingCorrection("Checking the selected correction sequence…");
+  document.getElementById("receipt-verification").textContent = "Checking correction sequence on this device…";
+  const output = document.getElementById("chain-result");
+  const files = [...(document.getElementById("chain-files").files || [])];
+  if (files.length < 2 || files.length > 8) {
+    output.textContent = "Select 2–8 correction receipt files.";
+    document.getElementById("receipt-verification").textContent = "No correction sequence is ready to apply.";
+    return;
+  }
+  if (files.some(file => file.size > 1024 * 1024) ||
+      files.reduce((total, file) => total + file.size, 0) > 1024 * 1024) {
+    output.textContent = "The combined correction files exceed the 1 MiB limit.";
+    document.getElementById("receipt-verification").textContent = "No correction sequence is ready to apply.";
+    return;
+  }
+  output.textContent = "Checking every correction and its links on this device…";
+  try {
+    const receipts = [];
+    let bytes = 0;
+    for (const file of files) {
+      const raw = await file.text();
+      if (request !== receiptVerificationRequest || buildRequest !== chainBuildRequest) return;
+      bytes += new TextEncoder().encode(raw).length;
+      if (bytes > 1024 * 1024) throw new Error("The combined correction files exceed the 1 MiB limit.");
+      receipts.push(JSON.parse(raw));
+    }
+    receipts.sort((a, b) => a.new_source_id - b.new_source_id);
+    const chain = {format: "aru-evidence-correction-chain", version: 1,
+      model_revision: "aru-evidence-correction-chain-1", receipts};
+    if (new TextEncoder().encode(JSON.stringify(chain, null, 2)).length > 1024 * 1024) {
+      throw new Error("The resulting chain exceeds the 1 MiB limit.");
+    }
+    const checked = verifyEvidenceBundle(chain);
+    if (request !== receiptVerificationRequest || buildRequest !== chainBuildRequest) return;
+    lastCorrectionChain = chain;
+    verifiedIncomingCorrection = chain;
+    document.getElementById("chain-download").disabled = false;
+    document.getElementById("incoming-correction-preview-button").disabled = false;
+    document.getElementById("receipt-verification").textContent = `PASS: ${checked.chain.steps.length} consecutive corrections; ${checked.recordCount} resulting records. Review before applying to a matching ledger.`;
+    output.textContent = `Verified ${checked.chain.steps.length} consecutive corrections (sources ${checked.chain.steps.map(step => `#${step.id}`).join(" → ")}). Download the chain JSON or preview applying it here.`;
+  } catch (error) {
+    if (request === receiptVerificationRequest && buildRequest === chainBuildRequest) {
+      output.textContent = `FAIL: ${error instanceof SyntaxError ? "A selected file is not valid JSON." : error.message || "Could not check the sequence."}`;
+      document.getElementById("receipt-verification").textContent = "No correction sequence is ready to apply.";
+    }
+  }
+}
+
+function downloadCorrectionChain() {
+  if (!lastCorrectionChain) return;
+  try {
+    verifyEvidenceBundle(lastCorrectionChain);
+    if (new TextEncoder().encode(JSON.stringify(lastCorrectionChain, null, 2)).length > 1024 * 1024) {
+      throw new Error("The chain exceeds the 1 MiB limit.");
+    }
+  }
+  catch (_) { invalidateBuiltChain(); return; }
+  downloadJSON(lastCorrectionChain, "aru-evidence-correction-chain.json");
+}
+
 function previewIncomingCorrection() {
   pendingIncomingCorrection = null;
   document.getElementById("incoming-correction-apply").disabled = true;
   const output = document.getElementById("incoming-correction-preview");
-  const receipt = verifiedIncomingCorrection;
-  if (!receipt) { output.textContent = "Verify a correction receipt first."; return; }
+  const bundle = verifiedIncomingCorrection;
+  if (!bundle) { output.textContent = "Verify a correction receipt or chain first."; return; }
   try {
     if (Field.busy) throw new Error("Wait for the simulation to finish before reviewing a correction.");
-    verifyEvidenceBundle(receipt);
+    verifyEvidenceBundle(bundle);
+    const receipts = bundle.format === "aru-evidence-correction-chain" ? bundle.receipts : [bundle];
+    const receipt = receipts[0];
     if (!sameFactLedger(Field.claims, receipt.before_records)) {
       throw new Error("This browser's ledger differs from the receipt's starting snapshot. Nothing was changed.");
     }
@@ -1717,9 +1839,26 @@ function previewIncomingCorrection() {
     if (next.id !== receipt.new_source_id) {
       throw new Error("This browser's next source ID differs from the receipt. Nothing was changed.");
     }
+    output.replaceChildren();
+    if (receipts.length > 1) {
+      const summary = document.createElement("p");
+      summary.textContent = `Review ${receipts.length} consecutive corrections, from source #${receipt.new_source_id} to #${receipts[receipts.length - 1].new_source_id}. The starting ledger has ${Field.claims.length} records; the resulting ledger will have ${receipts[receipts.length - 1].after_records.length}.`;
+      output.appendChild(summary);
+      receipts.forEach((step, index) => {
+        const active = step.before_records.filter(record =>
+          normalizeFactKey(record.key) === normalizeFactKey(step.name) && record.status === "active");
+        const row = document.createElement("div");
+        row.className = "ledger-entry";
+        row.textContent = `Step ${index + 1}: “${step.name}” · ${active.map(record => `#${record.id} = ${record.value}`).join(" · ")} → #${step.new_source_id} = ${step.value}`;
+        output.appendChild(row);
+      });
+      pendingIncomingCorrection = {receipt: bundle, request: receiptVerificationRequest,
+        baseline: JSON.stringify([Field.claims, Field.claimCounter])};
+      document.getElementById("incoming-correction-apply").disabled = false;
+      return;
+    }
     const active = Field.claims.filter(record =>
       normalizeFactKey(record.key) === normalizeFactKey(receipt.name) && record.status === "active");
-    output.replaceChildren();
     const summary = document.createElement("p");
     summary.textContent = `Review the incoming correction for “${receipt.name}”. ${active.length} current source${active.length === 1 ? "" : "s"} will be superseded; source #${receipt.new_source_id} will become current with value “${receipt.value}”. The other ${Field.claims.length - active.length} record${Field.claims.length - active.length === 1 ? "" : "s"} will be preserved.`;
     output.appendChild(summary);
@@ -1729,7 +1868,7 @@ function previewIncomingCorrection() {
       row.textContent = `Current source #${record.id}: ${record.value}${record.imported ? " (imported)" : ""}`;
       output.appendChild(row);
     }
-    pendingIncomingCorrection = {receipt, request: receiptVerificationRequest,
+    pendingIncomingCorrection = {receipt: bundle, request: receiptVerificationRequest,
       baseline: JSON.stringify([Field.claims, Field.claimCounter])};
     document.getElementById("incoming-correction-apply").disabled = false;
   } catch (error) {
@@ -1767,31 +1906,39 @@ function applyIncomingCorrection() {
   const output = document.getElementById("incoming-correction-preview");
   try {
     if (Field.busy) throw new Error("Wait for the simulation to finish before applying a correction.");
+    const receipts = plan.receipt.format === "aru-evidence-correction-chain"
+      ? plan.receipt.receipts : [plan.receipt];
+    const first = receipts[0];
+    const last = receipts[receipts.length - 1];
     if (plan.request !== receiptVerificationRequest ||
         plan.baseline !== JSON.stringify([Field.claims, Field.claimCounter]) ||
-        !sameFactLedger(Field.claims, plan.receipt.before_records)) {
+        !sameFactLedger(Field.claims, first.before_records)) {
       throw new Error("The local ledger changed after preview. Verify and review the receipt again.");
     }
     verifyEvidenceBundle(plan.receipt);
-    const next = prepareFact(plan.receipt.name, plan.receipt.value);
-    if (next.error || next.id !== plan.receipt.new_source_id) {
+    const next = prepareFact(first.name, first.value);
+    if (next.error || next.id !== first.new_source_id) {
       throw new Error("The next source ID changed after preview. Verify and review the receipt again.");
     }
-    const after = computeEvidenceCorrection(plan.receipt.name, plan.receipt.value, Field.claims,
-      plan.receipt.new_source_id, plan.receipt.applied_at);
-    if (!sameFactLedger(after, plan.receipt.after_records)) {
-      throw new Error("The resulting ledger differs from the verified receipt. Nothing was changed.");
+    let after = Field.claims;
+    for (const step of receipts) {
+      after = computeEvidenceCorrection(step.name, step.value, after,
+        step.new_source_id, step.applied_at);
+      if (!sameFactLedger(after, step.after_records)) {
+        throw new Error("A resulting ledger differs from the verified receipt. Nothing was changed.");
+      }
     }
-    persistIncomingCorrection(after, plan.receipt.new_source_id + 1);
+    persistIncomingCorrection(after, last.new_source_id + 1);
     invalidateFactImport();
     Field.claims = after;
-    Field.claimCounter = plan.receipt.new_source_id + 1;
+    Field.claimCounter = last.new_source_id + 1;
     invalidateEvidenceAnswer();
     renderLedger();
-    showFactResult(plan.receipt.name, `Applied reviewed receipt for source #${plan.receipt.new_source_id}. `);
+    showFactResult(last.name, `Applied reviewed receipt for source #${last.new_source_id}. `);
     const storage = sessionOnly ? "Session-only mode: the change disappears when you leave."
       : Field.storageAvailable ? "Saved in this browser." : "Browser storage is unavailable; this change lasts only for this session.";
-    output.textContent = `Applied source #${plan.receipt.new_source_id}; ${storage}`;
+    output.textContent = receipts.length === 1 ? `Applied source #${last.new_source_id}; ${storage}`
+      : `Applied ${receipts.length} reviewed corrections through source #${last.new_source_id}; ${storage}`;
   } catch (error) {
     pendingIncomingCorrection = null;
     document.getElementById("incoming-correction-apply").disabled = true;

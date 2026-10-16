@@ -1002,6 +1002,154 @@ test('incoming correction rolls back a failed persistent write and leaves the le
   assert.equal(app.field.claimCounter, 5);
 });
 
+async function chooseChainFiles(app, receipts) {
+  const input = app.context.document.getElementById('chain-files');
+  input.files = receipts.map(receipt => {
+    const raw = JSON.stringify(receipt);
+    return {size: Buffer.byteLength(raw), text: async () => raw};
+  });
+  await vm.runInContext('buildCorrectionChain()', app.context);
+  return app.elements.get('chain-result').textContent;
+}
+
+test('a reversed file selection builds a contiguous two-step chain and applies it atomically', async () => {
+  const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
+  assert.deepEqual(verifyEvidenceReceipt(chain).steps, [5, 6]);
+  const prior = {aru_fact_claims: JSON.stringify(chain.receipts[0].before_records), aru_fact_counter: '5'};
+  const builder = boot(prior);
+  const originalStorage = JSON.stringify([...builder.saved]);
+  assert.match(await chooseChainFiles(builder, [...chain.receipts].reverse()), /Verified 2 consecutive corrections.*#5 → #6/);
+  assert.equal(JSON.stringify([...builder.saved]), originalStorage);
+  assert.equal(builder.elements.get('chain-download').disabled, false);
+  vm.runInContext('downloadCorrectionChain()', builder.context);
+  const portable = JSON.parse(await builder.exports[0].text());
+  assert.deepEqual(portable, chain);
+  const target = boot(prior);
+  assert.match(await chooseReceiptFile(target, JSON.stringify(portable)), /PASS: 2 consecutive corrections; 6 resulting records/);
+  assert.equal(target.elements.get('incoming-correction-apply').disabled, true);
+  vm.runInContext('previewIncomingCorrection()', target.context);
+  const preview = target.elements.get('incoming-correction-preview');
+  assert.match(preview.children[0].textContent, /2 consecutive corrections.*source #5 to #6/);
+  assert.match(preview.children[1].textContent, /Step 1.*#1 = teal.*#3 = purple.*#5 = amber/);
+  assert.match(preview.children[2].textContent, /Step 2.*#2 = private example.*#6 = shared example/);
+  assert.equal(preview.children[1].innerHTML, '');
+  assert.equal(JSON.stringify([...target.saved]), originalStorage);
+  vm.runInContext('applyIncomingCorrection()', target.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(target.field.claims)), chain.receipts[1].after_records);
+  assert.equal(target.field.claimCounter, 7);
+  assert.equal(target.field.coherence, 0.64);
+  assert.equal(target.field.messages.length, 0);
+  assert.match(preview.textContent, /Applied 2 reviewed corrections through source #6.*Saved/);
+  const reopened = boot(Object.fromEntries(target.saved));
+  assert.equal(reopened.field.claims[4].value, 'amber');
+  assert.equal(reopened.field.claims[5].value, 'shared example');
+  assert.equal(reopened.field.claims[1].status, 'superseded');
+});
+
+test('chain replay detects missing, forked, reordered, duplicated, and altered steps', async () => {
+  const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
+  const model = require('../tools/benchmark-evidence.cjs').loadModel();
+  const fork = structuredClone(chain);
+  fork.receipts[1].before_records[1].value = 'changed between steps';
+  fork.receipts[1].after_records = model.correct(fork.receipts[1].name, fork.receipts[1].value,
+    fork.receipts[1].before_records, fork.receipts[1].new_source_id, fork.receipts[1].applied_at);
+  assert.throws(() => verifyEvidenceReceipt(fork), /missing, forked, duplicated, or reordered/);
+  const reordered = {...chain, receipts: [...chain.receipts].reverse()};
+  assert.throws(() => verifyEvidenceReceipt(reordered), /missing, forked, duplicated, or reordered/);
+  const gap = structuredClone(chain);
+  gap.receipts[1].new_source_id = 7;
+  gap.receipts[1].after_records = model.correct(gap.receipts[1].name, gap.receipts[1].value,
+    gap.receipts[1].before_records, 7, gap.receipts[1].applied_at);
+  assert.throws(() => verifyEvidenceReceipt(gap), /missing, forked, duplicated, or reordered/);
+  const duplicate = {...chain, receipts: [chain.receipts[0], chain.receipts[0]]};
+  assert.throws(() => verifyEvidenceReceipt(duplicate), /missing, forked, duplicated, or reordered/);
+  const tampered = structuredClone(chain);
+  tampered.receipts[1].after_records[1].status = 'active';
+  assert.throws(() => verifyEvidenceReceipt(tampered), /corrected ledger does not match/);
+  assert.throws(() => verifyEvidenceReceipt({...chain, receipts: [chain.receipts[0]]}), /step count/);
+  assert.throws(() => verifyEvidenceReceipt({...chain, receipts: Array(9).fill(chain.receipts[0])}), /step count/);
+  const app = boot();
+  assert.match(await chooseReceiptFile(app, JSON.stringify(fork)), /FAIL: Correction chain has a missing/);
+  assert.equal(app.elements.get('incoming-correction-preview-button').disabled, true);
+  assert.match(await chooseChainFiles(app, [chain.receipts[0], fork.receipts[1]]), /FAIL: Correction chain has a missing/);
+  assert.equal(app.elements.get('chain-download').disabled, true);
+  assert.equal(app.field.claims.length, 0);
+});
+
+test('chain application rejects a changed ledger and rolls back a failed two-key write', async () => {
+  const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
+  const saved = {aru_fact_claims: JSON.stringify(chain.receipts[0].before_records), aru_fact_counter: '5'};
+  const diverged = boot(saved);
+  await chooseReceiptFile(diverged, JSON.stringify(chain));
+  diverged.field.claims[1].value = 'different';
+  vm.runInContext('previewIncomingCorrection()', diverged.context);
+  assert.match(diverged.elements.get('incoming-correction-preview').textContent, /differs from the receipt/);
+  assert.equal(diverged.elements.get('incoming-correction-apply').disabled, true);
+  const changed = boot(saved);
+  await chooseReceiptFile(changed, JSON.stringify(chain));
+  vm.runInContext('previewIncomingCorrection()', changed.context);
+  changed.fact('new name', 'extra');
+  assert.equal(changed.elements.get('incoming-correction-apply').disabled, true);
+  vm.runInContext('applyIncomingCorrection()', changed.context);
+  assert.equal(changed.field.claims.length, 5);
+  const app = boot(saved);
+  await chooseReceiptFile(app, JSON.stringify(chain));
+  vm.runInContext('previewIncomingCorrection()', app.context);
+  const oldLedger = JSON.stringify(app.field.claims);
+  const oldStorage = JSON.stringify([...app.saved]);
+  const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
+  let fail = true;
+  app.context.localStorage.setItem = (key, value) => {
+    if (key === 'aru_fact_counter' && fail) { fail = false; throw new Error('quota'); }
+    setItem(key, value);
+  };
+  vm.runInContext('applyIncomingCorrection()', app.context);
+  assert.match(app.elements.get('incoming-correction-preview').textContent, /Browser storage rejected/);
+  assert.equal(JSON.stringify(app.field.claims), oldLedger);
+  assert.equal(JSON.stringify([...app.saved]), oldStorage);
+});
+
+test('a chain can be applied in session-only mode without persisting any step', async () => {
+  const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
+  const app = boot({aru_fact_claims: JSON.stringify(chain.receipts[0].before_records), aru_fact_counter: '5'});
+  const saved = JSON.stringify([...app.saved]);
+  vm.runInContext('toggleSessionOnly()', app.context);
+  await chooseReceiptFile(app, JSON.stringify(chain));
+  vm.runInContext('previewIncomingCorrection(); applyIncomingCorrection()', app.context);
+  assert.equal(app.field.claims.length, 6);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+  assert.match(app.elements.get('incoming-correction-preview').textContent, /Session-only mode/);
+  assert.equal(boot(Object.fromEntries(app.saved)).field.claims.length, 4);
+});
+
+test('changing chain files cancels an older read and invalidates an earlier review', async () => {
+  const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
+  const app = boot({aru_fact_claims: JSON.stringify(chain.receipts[0].before_records), aru_fact_counter: '5'});
+  await chooseChainFiles(app, chain.receipts);
+  vm.runInContext('previewIncomingCorrection()', app.context);
+  assert.equal(app.elements.get('incoming-correction-apply').disabled, false);
+  vm.runInContext('invalidateBuiltChain(); applyIncomingCorrection()', app.context);
+  assert.equal(app.elements.get('incoming-correction-apply').disabled, true);
+  assert.equal(app.elements.get('chain-download').disabled, true);
+  assert.equal(app.field.claims.length, 4);
+  const input = app.context.document.getElementById('chain-files');
+  let finishFirst;
+  input.files = [
+    {size: 100, text: () => new Promise(resolve => { finishFirst = resolve; })},
+    {size: 100, text: async () => JSON.stringify(chain.receipts[1])}
+  ];
+  const older = vm.runInContext('buildCorrectionChain()', app.context);
+  await chooseReceiptFile(app, JSON.stringify(chain.receipts[0]));
+  finishFirst(JSON.stringify(chain.receipts[0]));
+  await older;
+  assert.match(app.elements.get('receipt-verification').textContent, /PASS: correction source #5/);
+  assert.equal(app.elements.get('chain-download').disabled, true);
+  assert.equal(vm.runInContext('verifiedIncomingCorrection.format', app.context), 'aru-evidence-correction-receipt');
+  input.files = [{size: 1024 * 1024 + 1, text: async () => ''}, {size: 1, text: async () => ''}];
+  assert.match(await vm.runInContext('buildCorrectionChain()', app.context).then(() => app.elements.get('chain-result').textContent), /combined correction files exceed/);
+  assert.equal(app.elements.get('incoming-correction-preview-button').disabled, true);
+});
+
 test('evidence brief keeps sourced answers beside distinct refusals and exports a replayable snapshot', async () => {
   const app = boot();
   app.fact('favorite color', '<img src=x onerror=alert(1)>');

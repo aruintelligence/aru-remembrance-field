@@ -24,6 +24,8 @@ The [synthetic receipt](example-evidence-correction.json) starts with two confli
 
 This is a guarded transfer to a matching copy, not a merge or network synchronization. If B added, deleted, imported, or changed an entry, it must be reconciled by a separate explicit choice. Reapplying an already applied receipt fails because the starting ledger no longer matches. The verifier can still inspect any well-formed synthetic receipt without applying it. The public fixture intentionally includes raw noncanonical spacing and omitted optional `imported` fields, so it is a replay example, not a transferable export from a browser's normalized stored ledger. Generate a receipt in the app for a transfer exercise.
 
+For 2–8 consecutive browser-generated corrections, the [correction-chain protocol](evidence-correction-chain-protocol.md) describes how to bundle, replay, review, and apply the whole sequence to a matching starting ledger in one operation. It rejects a broken link or diverged receiving copy rather than applying a partial sequence.
+
 A separately written Python oracle checks the correction transition against the extracted browser JavaScript on 6 fixed and 2,000 seeded generated ledgers. These vary conflicts, imported sources, Unicode compatibility names, historical entries, unrelated records, value changes, and source ordering. A deliberate status mutation checks that the comparator detects disagreement. The [committed report](example-correction-differential-report.json) records the seed, case count, result, and both local source hashes; CI regenerates it.
 
 ## Limits
