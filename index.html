@@ -464,10 +464,16 @@
 
   <details class="ledger" id="receipt-verifier">
     <summary>Verify a shared answer receipt</summary>
-    <p>Choose a question, brief, or correction receipt JSON. This browser recalculates the answer or ledger change from the records in that file. The file is read on this device; it is not imported into your ledger or uploaded by this app.</p>
+    <p>Choose a question, brief, or correction receipt JSON. This browser recalculates the answer or ledger change from the records in that file. The file is read on this device and is not uploaded by this app.</p>
     <label for="receipt-file">Answer receipt JSON (up to 1 MiB)</label>
     <input id="receipt-file" type="file" accept=".json,application/json" onchange="verifyEvidenceFile()">
     <p id="receipt-verification" role="status" aria-live="polite">No receipt checked yet.</p>
+    <div class="ledger-actions">
+      <button type="button" id="incoming-correction-preview-button" onclick="previewIncomingCorrection()" disabled>Preview applying correction here</button>
+      <button type="button" id="incoming-correction-apply" onclick="applyIncomingCorrection()" disabled>Apply reviewed receipt here</button>
+    </div>
+    <div id="incoming-correction-preview" role="status" aria-live="polite"></div>
+    <p>A correction can be applied only to the exact starting ledger with the same next source ID. Review its current sources and replacement first. Diverged browsers must be reconciled separately; this action never silently merges them.</p>
     <p>A pass checks consistency with supplied records only. It cannot authenticate their author, confirm the facts, or detect records omitted before the file was made.</p>
   </details>
 
@@ -1471,6 +1477,7 @@ function reviewComposerEvidence() {
 function invalidateEvidenceAnswer() {
   clearComposerEvidence();
   lastEvidenceAnswer = null;
+  invalidateIncomingCorrection();
   invalidateEvidenceBrief("The ledger changed. Build the brief again for current sources.");
   invalidateFactCorrection("The ledger changed. Preview the correction again.");
   document.getElementById("evidence-receipt-download").disabled = true;
@@ -1633,8 +1640,33 @@ function verifyEvidenceBundle(receipt) {
 }
 
 let receiptVerificationRequest = 0;
+let verifiedIncomingCorrection = null;
+let pendingIncomingCorrection = null;
+
+function invalidateIncomingCorrection(message = "The ledger changed. Choose the receipt again to review it against this browser.") {
+  if (!verifiedIncomingCorrection && !pendingIncomingCorrection) return;
+  verifiedIncomingCorrection = null;
+  pendingIncomingCorrection = null;
+  document.getElementById("incoming-correction-preview-button").disabled = true;
+  document.getElementById("incoming-correction-apply").disabled = true;
+  document.getElementById("incoming-correction-preview").textContent = message;
+}
+
+function sameFactLedger(actual, expected) {
+  const fields = ["id", "key", "value", "time", "status", "imported"];
+  return Array.isArray(actual) && Array.isArray(expected) && actual.length === expected.length &&
+    actual.every((record, index) => record && typeof record === "object" && !Array.isArray(record) &&
+      Object.keys(record).length === Object.keys(expected[index]).length &&
+      fields.every(field => Object.prototype.hasOwnProperty.call(record, field) ===
+        Object.prototype.hasOwnProperty.call(expected[index], field) && record[field] === expected[index][field]));
+}
+
 async function verifyEvidenceFile() {
   const request = ++receiptVerificationRequest;
+  invalidateIncomingCorrection("Choose a verified correction receipt to preview its local application.");
+  document.getElementById("incoming-correction-preview-button").disabled = true;
+  document.getElementById("incoming-correction-apply").disabled = true;
+  document.getElementById("incoming-correction-preview").replaceChildren();
   const file = document.getElementById("receipt-file").files?.[0];
   const output = document.getElementById("receipt-verification");
   if (!file) { output.textContent = "Choose an answer receipt JSON file."; return; }
@@ -1647,6 +1679,8 @@ async function verifyEvidenceFile() {
     const receipt = JSON.parse(raw);
     const result = verifyEvidenceBundle(receipt);
     if (result.correction) {
+      verifiedIncomingCorrection = receipt;
+      document.getElementById("incoming-correction-preview-button").disabled = false;
       output.textContent = `PASS: correction source #${result.correction.id}; ${result.correction.superseded} prior current source${result.correction.superseded === 1 ? "" : "s"} superseded; ${result.recordCount} resulting records. Consistent with supplied before/after snapshots, not independently verified as true or authentic.`;
       return;
     }
@@ -1663,6 +1697,105 @@ async function verifyEvidenceFile() {
     if (request === receiptVerificationRequest) {
       output.textContent = `FAIL: ${error instanceof SyntaxError ? "File is not valid JSON." : error.message || "Could not check the receipt."}`;
     }
+  }
+}
+
+function previewIncomingCorrection() {
+  pendingIncomingCorrection = null;
+  document.getElementById("incoming-correction-apply").disabled = true;
+  const output = document.getElementById("incoming-correction-preview");
+  const receipt = verifiedIncomingCorrection;
+  if (!receipt) { output.textContent = "Verify a correction receipt first."; return; }
+  try {
+    if (Field.busy) throw new Error("Wait for the simulation to finish before reviewing a correction.");
+    verifyEvidenceBundle(receipt);
+    if (!sameFactLedger(Field.claims, receipt.before_records)) {
+      throw new Error("This browser's ledger differs from the receipt's starting snapshot. Nothing was changed.");
+    }
+    const next = prepareFact(receipt.name, receipt.value);
+    if (next.error) throw new Error(next.error);
+    if (next.id !== receipt.new_source_id) {
+      throw new Error("This browser's next source ID differs from the receipt. Nothing was changed.");
+    }
+    const active = Field.claims.filter(record =>
+      normalizeFactKey(record.key) === normalizeFactKey(receipt.name) && record.status === "active");
+    output.replaceChildren();
+    const summary = document.createElement("p");
+    summary.textContent = `Review the incoming correction for “${receipt.name}”. ${active.length} current source${active.length === 1 ? "" : "s"} will be superseded; source #${receipt.new_source_id} will become current with value “${receipt.value}”. The other ${Field.claims.length - active.length} record${Field.claims.length - active.length === 1 ? "" : "s"} will be preserved.`;
+    output.appendChild(summary);
+    for (const record of active) {
+      const row = document.createElement("div");
+      row.className = "ledger-entry";
+      row.textContent = `Current source #${record.id}: ${record.value}${record.imported ? " (imported)" : ""}`;
+      output.appendChild(row);
+    }
+    pendingIncomingCorrection = {receipt, request: receiptVerificationRequest,
+      baseline: JSON.stringify([Field.claims, Field.claimCounter])};
+    document.getElementById("incoming-correction-apply").disabled = false;
+  } catch (error) {
+    output.textContent = error.message || "The receipt cannot be applied here.";
+  }
+}
+
+function persistIncomingCorrection(after, nextId) {
+  if (sessionOnly) return;
+  const keys = [STORAGE_KEYS.claims, STORAGE_KEYS.claimCounter];
+  let previous;
+  try {
+    previous = keys.map(key => localStorage.getItem(key));
+    localStorage.setItem(keys[0], JSON.stringify(after));
+    localStorage.setItem(keys[1], JSON.stringify(nextId));
+    Field.storageAvailable = true;
+  } catch (_) {
+    if (previous) {
+      try {
+        keys.forEach((key, index) => previous[index] === null
+          ? localStorage.removeItem(key) : localStorage.setItem(key, previous[index]));
+      } catch (_) {
+        Field.storageAvailable = false;
+        throw new Error("Browser storage failed and could not be rolled back. Inspect saved state before retrying.");
+      }
+    }
+    Field.storageAvailable = false;
+    throw new Error("Browser storage rejected the correction. No in-memory change was applied; try Session-only mode or free storage space.");
+  }
+}
+
+function applyIncomingCorrection() {
+  const plan = pendingIncomingCorrection;
+  if (!plan) return;
+  const output = document.getElementById("incoming-correction-preview");
+  try {
+    if (Field.busy) throw new Error("Wait for the simulation to finish before applying a correction.");
+    if (plan.request !== receiptVerificationRequest ||
+        plan.baseline !== JSON.stringify([Field.claims, Field.claimCounter]) ||
+        !sameFactLedger(Field.claims, plan.receipt.before_records)) {
+      throw new Error("The local ledger changed after preview. Verify and review the receipt again.");
+    }
+    verifyEvidenceBundle(plan.receipt);
+    const next = prepareFact(plan.receipt.name, plan.receipt.value);
+    if (next.error || next.id !== plan.receipt.new_source_id) {
+      throw new Error("The next source ID changed after preview. Verify and review the receipt again.");
+    }
+    const after = computeEvidenceCorrection(plan.receipt.name, plan.receipt.value, Field.claims,
+      plan.receipt.new_source_id, plan.receipt.applied_at);
+    if (!sameFactLedger(after, plan.receipt.after_records)) {
+      throw new Error("The resulting ledger differs from the verified receipt. Nothing was changed.");
+    }
+    persistIncomingCorrection(after, plan.receipt.new_source_id + 1);
+    invalidateFactImport();
+    Field.claims = after;
+    Field.claimCounter = plan.receipt.new_source_id + 1;
+    invalidateEvidenceAnswer();
+    renderLedger();
+    showFactResult(plan.receipt.name, `Applied reviewed receipt for source #${plan.receipt.new_source_id}. `);
+    const storage = sessionOnly ? "Session-only mode: the change disappears when you leave."
+      : Field.storageAvailable ? "Saved in this browser." : "Browser storage is unavailable; this change lasts only for this session.";
+    output.textContent = `Applied source #${plan.receipt.new_source_id}; ${storage}`;
+  } catch (error) {
+    pendingIncomingCorrection = null;
+    document.getElementById("incoming-correction-apply").disabled = true;
+    output.textContent = error.message || "The receipt cannot be applied here.";
   }
 }
 

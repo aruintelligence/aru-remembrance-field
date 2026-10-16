@@ -25,6 +25,8 @@ The same browser panel and CLI also replay `aru-evidence-brief-receipt` files wi
 
 The [reviewed correction receipt](evidence-correction-protocol.md) supplies complete before and after ledgers. The verifier recomputes which same-name sources become superseded and checks that the new source is the only current one for that name. It can verify a recorded transition, but cannot establish that the prior ledger was complete or authentic.
 
+For a correction receipt, the browser also offers a separate **Preview applying correction here** action after verification. It permits **Apply reviewed receipt here** only when the local ordered ledger matches the receipt's complete starting snapshot and the browser would allocate its proposed source ID next. This is an explicit local write after review, not part of verification; diverged copies are refused. The CLI remains read-only.
+
 Changing the question clears the displayed answer and disables both exports. Recording, importing, selecting, or deleting a ledger entry also invalidates the old answer and exports. A refusal cannot produce a cited answer excerpt. The app keeps the snapshot in memory only until another question or edit; it does not add either file to local storage. Downloading is an explicit action.
 
 **Privacy:** An excerpt omits unrelated ledger facts but includes the question and cited values, which can still be sensitive. A full receipt may include sensitive facts unrelated to the question. Inspect either JSON before sharing it. Neither format is an evidence ledger import file.
