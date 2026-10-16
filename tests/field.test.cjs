@@ -880,6 +880,128 @@ test('correction receipts reject tampering and show the completeness limit', asy
     'a consistent receipt does not establish that all prior records were supplied');
 });
 
+function applicableCorrectionFixture() {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction.json'), 'utf8'));
+  // The public synthetic receipt deliberately contains raw keys and omitted optional fields;
+  // a transferable receipt has the canonical records exported by an actual browser.
+  fixture.before_records = fixture.before_records.map(record => ({...record,
+    key: record.key.trim().replace(/\s+/g, ' '), imported: record.imported === true}));
+  fixture.after_records = require('../tools/benchmark-evidence.cjs').loadModel().correct(
+    fixture.name, fixture.value, fixture.before_records, fixture.new_source_id, fixture.applied_at);
+  return fixture;
+}
+
+test('a second browser can review and apply a correction only to the matching prior ledger', async () => {
+  const origin = boot();
+  origin.fact('favorite color', 'teal');
+  origin.fact('FAVORITE  COLOR', 'purple');
+  origin.fact('unrelated note', 'keep private');
+  const before = Object.fromEntries(origin.saved);
+  origin.elements.get('fact-key').value = 'favorite color';
+  origin.elements.get('fact-value').value = 'amber';
+  vm.runInContext('previewFactCorrection(); applyFactCorrection(); downloadFactCorrection()', origin.context);
+  const receipt = JSON.parse(await origin.exports[0].text());
+  const copy = boot(before);
+  const originalStorage = JSON.stringify([...copy.saved]);
+  assert.match(await chooseReceiptFile(copy, JSON.stringify(receipt)), /PASS: correction source #4/);
+  assert.equal(copy.elements.get('incoming-correction-preview-button').disabled, false);
+  assert.equal(copy.elements.get('incoming-correction-apply').disabled, true);
+  vm.runInContext('previewIncomingCorrection()', copy.context);
+  const preview = copy.elements.get('incoming-correction-preview');
+  assert.match(preview.children[0].textContent, /source #4.*amber.*other 1 record/);
+  assert.equal(preview.children.length, 3);
+  assert.match(preview.children[1].textContent, /Current source #1: teal/);
+  assert.match(preview.children[2].textContent, /Current source #2: purple/);
+  assert.equal(preview.children[0].innerHTML, '');
+  assert.equal(JSON.stringify([...copy.saved]), originalStorage, 'review does not write');
+  assert.equal(copy.elements.get('incoming-correction-apply').disabled, false);
+  vm.runInContext('applyIncomingCorrection()', copy.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(copy.field.claims)), receipt.after_records);
+  assert.equal(copy.field.claimCounter, 5);
+  assert.equal(copy.field.claims[2].value, 'keep private');
+  assert.equal(copy.field.coherence, 0.64);
+  assert.equal(copy.field.messages.length, 0);
+  assert.match(copy.elements.get('incoming-correction-preview').textContent, /Applied source #4.*Saved/);
+  assert.equal(copy.elements.get('incoming-correction-apply').disabled, true);
+  const reopened = boot(Object.fromEntries(copy.saved));
+  reopened.context.document.getElementById('fact-key').value = 'favorite color';
+  vm.runInContext('recallFact()', reopened.context);
+  assert.match(reopened.elements.get('ledger-result').textContent, /amber.*Source #4/);
+  assert.equal(reopened.field.claims.length, 4);
+});
+
+test('incoming correction refuses divergence, stale previews, another format, and altered receipts', async () => {
+  const fixture = applicableCorrectionFixture();
+  const saved = {aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'};
+  const copy = boot(saved);
+  assert.match(await chooseReceiptFile(copy, JSON.stringify(fixture)), /PASS: correction source #5/);
+  vm.runInContext('previewIncomingCorrection()', copy.context);
+  const original = JSON.stringify(copy.field.claims);
+  copy.field.claims[0].value = 'local edit';
+  vm.runInContext('applyIncomingCorrection()', copy.context);
+  assert.match(copy.elements.get('incoming-correction-preview').textContent, /changed after preview/);
+  assert.equal(copy.elements.get('incoming-correction-apply').disabled, true);
+  assert.notEqual(JSON.stringify(copy.field.claims), original);
+  assert.equal(copy.field.claims.length, 4, 'no new record was added');
+  vm.runInContext('previewIncomingCorrection()', copy.context);
+  assert.match(copy.elements.get('incoming-correction-preview').textContent, /differs from the receipt/);
+  const wrongCounter = boot({...saved, aru_fact_counter: '6'});
+  await chooseReceiptFile(wrongCounter, JSON.stringify(fixture));
+  vm.runInContext('previewIncomingCorrection()', wrongCounter.context);
+  assert.match(wrongCounter.elements.get('incoming-correction-preview').textContent, /next source ID differs/);
+  assert.equal(wrongCounter.elements.get('incoming-correction-apply').disabled, true);
+  const changed = boot(saved);
+  await chooseReceiptFile(changed, JSON.stringify(fixture));
+  vm.runInContext('previewIncomingCorrection()', changed.context);
+  changed.fact('another name', 'another value');
+  assert.equal(changed.elements.get('incoming-correction-apply').disabled, true);
+  assert.equal(vm.runInContext('pendingIncomingCorrection', changed.context), null);
+  vm.runInContext('applyIncomingCorrection()', changed.context);
+  assert.equal(changed.field.claims.length, 5);
+  const broken = structuredClone(fixture);
+  broken.after_records[0].status = 'active';
+  assert.match(await chooseReceiptFile(changed, JSON.stringify(broken)), /FAIL:/);
+  assert.equal(changed.elements.get('incoming-correction-preview-button').disabled, true);
+  const question = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-receipt.json'), 'utf8');
+  assert.match(await chooseReceiptFile(changed, question), /PASS: known/);
+  assert.equal(changed.elements.get('incoming-correction-preview-button').disabled, true);
+});
+
+test('reviewed incoming correction in session-only mode never writes browser storage', async () => {
+  const fixture = applicableCorrectionFixture();
+  const app = boot({aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'});
+  const saved = JSON.stringify([...app.saved]);
+  vm.runInContext('toggleSessionOnly()', app.context);
+  await chooseReceiptFile(app, JSON.stringify(fixture));
+  vm.runInContext('previewIncomingCorrection(); applyIncomingCorrection()', app.context);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+  assert.equal(app.field.claims.length, 5);
+  assert.match(app.elements.get('incoming-correction-preview').textContent, /Session-only mode/);
+  const reopened = boot(Object.fromEntries(app.saved));
+  assert.equal(reopened.field.claims.length, 4);
+});
+
+test('incoming correction rolls back a failed persistent write and leaves the ledger intact', async () => {
+  const fixture = applicableCorrectionFixture();
+  const app = boot({aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'});
+  await chooseReceiptFile(app, JSON.stringify(fixture));
+  vm.runInContext('previewIncomingCorrection()', app.context);
+  const priorStorage = JSON.stringify([...app.saved]);
+  const priorLedger = JSON.stringify(app.field.claims);
+  const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
+  let failOnce = true;
+  app.context.localStorage.setItem = (key, value) => {
+    if (key === 'aru_fact_counter' && failOnce) { failOnce = false; throw new Error('quota'); }
+    setItem(key, value);
+  };
+  vm.runInContext('applyIncomingCorrection()', app.context);
+  assert.match(app.elements.get('incoming-correction-preview').textContent, /Browser storage rejected/);
+  assert.equal(app.elements.get('incoming-correction-apply').disabled, true);
+  assert.equal(JSON.stringify(app.field.claims), priorLedger);
+  assert.equal(JSON.stringify([...app.saved]), priorStorage);
+  assert.equal(app.field.claimCounter, 5);
+});
+
 test('evidence brief keeps sourced answers beside distinct refusals and exports a replayable snapshot', async () => {
   const app = boot();
   app.fact('favorite color', '<img src=x onerror=alert(1)>');
@@ -1354,13 +1476,16 @@ test('browser verifier refuses altered citations, duplicate or extra excerpt sou
 test('a slower receipt file cannot replace the result of a newer selection', async () => {
   const app = boot();
   const input = app.context.document.getElementById('receipt-file');
+  const correction = JSON.stringify(applicableCorrectionFixture());
   let finishFirst;
-  input.files = [{size: 2, text: () => new Promise(resolve => { finishFirst = resolve; })}];
+  input.files = [{size: Buffer.byteLength(correction), text: () => new Promise(resolve => { finishFirst = resolve; })}];
   const first = vm.runInContext('verifyEvidenceFile()', app.context);
   assert.match(await chooseReceiptFile(app, '{}'), /FAIL: Unsupported format/);
-  finishFirst('{}');
+  finishFirst(correction);
   await first;
   assert.match(app.elements.get('receipt-verification').textContent, /FAIL: Unsupported format/);
+  assert.equal(app.elements.get('incoming-correction-preview-button').disabled, true);
+  assert.equal(vm.runInContext('verifiedIncomingCorrection', app.context), null);
 });
 
 test('question matching abstains on unsupported grammar and ambiguous stored names', () => {
