@@ -47,6 +47,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - An optional reference-ledger comparison that detects omitted conflicts in an excerpt when the checker already holds the relevant sources
 - A one-click synthetic trust lab that contrasts internal replay, reference comparison, and earlier checkpoint matching across five controls
 - A bounded, local batch audit for up to 20 shared answer receipts against one saved reference and optional prior checkpoint, with per-file results and repeated-text flags
+- A browser download of the batch's file hashes and verdicts that can be replayed with the command-line auditor
 - A command-line batch audit report that binds the ordered files and verifier bytes with SHA-256 and can be recomputed against the originals
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
@@ -179,7 +180,15 @@ The included synthetic challenge checks 12 answer and refusal cases; each report
 
 To inspect a shared answer without installing Node.js, open **Verify a shared answer receipt** in the live app and choose a full question receipt or cited answer excerpt JSON. The browser validates record shape, unique source IDs, format, scope, answer, and citations, then recomputes the answer from the file's supplied records. After a pass, **Compare with this browser's ledger** optionally checks the result against records already held here. **Compare with a saved reference** accepts an independently kept ledger file and optional prior checkpoint on any browser, without adding those records to local memory. For an excerpt each comparison checks the answer, source list, and exact cited records while keeping unrelated reference entries out of the result; for a full question or brief receipt it requires the entire ordered ledger to match. Verification and comparison do not import records, change your state, or upload the files. A correction receipt offers a separate reviewed apply action only for a matching local ledger. The [command-line verifier](tools/verify-evidence-receipt.cjs) accepts the same reference and optional checkpoint. A reference can expose omissions relative to that copy; a checkpoint can detect a changed reference if it was preserved separately. Neither proves factual truth, origin, or the completeness of the original reference.
 
-To review several shared answers, select the saved reference and optional prior checkpoint in that same panel, then choose **Answer receipt JSON files** and **Audit selected receipts**. The browser checks each selected question, excerpt, or brief independently against the one reference and reports `MATCH`, `DIFFER`, or `FAIL` per file. It flags exact repeats of decoded file text; a repeated file is not independent evidence. The checkpoint must match the reference before any receipts are audited. The audit is local, read-only, and limited to 20 receipts, 1 MiB each, and 4 MiB combined. See the [batch audit protocol](research/evidence-batch-audit-protocol.md) for interpretation and limits.
+To review several shared answers, select the saved reference and optional prior checkpoint in that same panel, then choose **Answer receipt JSON files** and **Audit selected receipts**. The browser checks each selected question, excerpt, or brief independently against the one reference and reports `MATCH`, `DIFFER`, or `FAIL` per file. It flags exact byte repeats; a repeated file is not independent evidence. The checkpoint must match the reference before any receipts are audited. The audit is local, read-only, and limited to 20 receipts, 1 MiB each, and 4 MiB combined. See the [batch audit protocol](research/evidence-batch-audit-protocol.md) for interpretation and limits.
+
+After a bounded audit, **Download audit capture** saves the selected files' SHA-256 hashes, ordered verdicts, duplicate indices, and totals without their names or fact values. Retain the original files in selection order, then replay the browser capture with the [command-line batch auditor](tools/audit-evidence-batch.cjs):
+
+```bash
+node tools/audit-evidence-batch.cjs reference.json answer-1.json answer-2.json --checkpoint earlier-checkpoint.json --check-capture aru-evidence-browser-batch-capture.json
+```
+
+The capture download requires secure browser hashing and readable UTF-8 files within the limits. A reported `FAIL` for an oversized or unreadable file remains visible, but that batch has no downloadable capture. A successful replay checks the files and outcomes; review the counts because it can faithfully reproduce a failure. The capture is not signed, timestamped, or proof of factual truth.
 
 To preserve a batch result for reproduction, run the [command-line batch auditor](tools/audit-evidence-batch.cjs) with the same ordered files and save its JSON report:
 

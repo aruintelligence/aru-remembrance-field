@@ -75,7 +75,8 @@ function boot(values = {}, options = {}) {
     removeItem(key) { saved.delete(key); }
   };
   const context = vm.createContext({
-    document, window, localStorage, console, Blob, TextEncoder, crypto: options.crypto || webcrypto,
+    document, window, localStorage, console, Blob, TextEncoder, TextDecoder,
+    crypto: options.crypto || webcrypto,
     URL: {
       createObjectURL(blob) { exports.push(blob); return 'blob:test-export'; },
       revokeObjectURL() {}
@@ -2021,7 +2022,11 @@ async function compareSavedReferenceFiles(app, reference, checkpoint = null) {
 }
 
 function auditFile(text, name = 'receipt.json', size = Buffer.byteLength(text)) {
-  return {name, size, text: async () => text};
+  return {name, size, text: async () => text,
+    arrayBuffer: async () => {
+      const bytes = Buffer.from(text);
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    }};
 }
 
 async function auditSavedReceipts(app, reference, receipts, checkpoint = null) {
@@ -2060,13 +2065,13 @@ test('batch audit checks each receipt against one saved reference and flags repe
     auditFile('{', 'broken.json'),
     auditFile(excerpt, 'same-again.json')
   ], checkpoint);
-  assert.match(output.children[0].textContent, /6 selected: 4 MATCH, 1 DIFFER, 1 FAIL; 1 identical-text repeat.*Checkpoint agrees/);
+  assert.match(output.children[0].textContent, /6 selected: 4 MATCH, 1 DIFFER, 1 FAIL; 1 identical-byte repeat.*Checkpoint agrees/);
   const rows = output.children[1].children[0].children[1].children;
   assert.deepEqual(rows.map(row => row.children[2].textContent),
     ['MATCH', 'MATCH', 'MATCH', 'DIFFER', 'FAIL', 'MATCH']);
   assert.match(rows[3].children[3].textContent, /different answer or citations/);
   assert.match(rows[4].children[3].textContent, /not valid JSON/);
-  assert.match(rows[5].children[3].textContent, /Identical text to #1; not an independent file/);
+  assert.match(rows[5].children[3].textContent, /Identical bytes to #1; not an independent file/);
   assert.equal(rows[0].children[1].textContent, '<img src=x onerror=alert(1)>.json');
   assert.equal(rows[0].children[1].innerHTML, '', 'untrusted filename is assigned as text');
   assert.equal(JSON.stringify([...app.saved]), saved);
@@ -2081,7 +2086,7 @@ test('batch audit rejects a changed checkpoint before checking any receipt', asy
   const excerpt = fixture('example-evidence-excerpt.json');
   const checkpoint = JSON.parse(fixture('example-evidence-ledger-checkpoint.json'));
   const app = boot();
-  const unread = {name: 'unread.json', size: 1, text: async () => {
+  const unread = {name: 'unread.json', size: 1, arrayBuffer: async () => {
     throw new Error('Receipt should not be opened');
   }};
   const output = await auditSavedReceipts(app, reference, [unread],
@@ -2140,8 +2145,8 @@ test('a slow batch audit cannot publish stale results after file selection chang
   const input = app.context.document.getElementById('audit-receipts');
   app.context.document.getElementById('reference-file').files = [auditFile(reference)];
   app.context.document.getElementById('checkpoint-file').files = [];
-  input.files = [{name: 'slow.json', size: Buffer.byteLength(excerpt), text: async () => {
-    await waiting; return excerpt;
+  input.files = [{name: 'slow.json', size: Buffer.byteLength(excerpt), arrayBuffer: async () => {
+    await waiting; return auditFile(excerpt).arrayBuffer();
   }}];
   const checking = vm.runInContext('runEvidenceBatchAudit()', app.context);
   await new Promise(resolve => setImmediate(resolve));
@@ -2155,6 +2160,110 @@ test('a slow batch audit cannot publish stale results after file selection chang
   assert.match(app.elements.get('audit-result').children[0].textContent, /1 MATCH/);
   vm.runInContext('invalidateReferenceComparison()', app.context);
   assert.match(app.elements.get('audit-result').textContent, /Reference or checkpoint selection changed/);
+});
+
+test('browser capture is byte-bound and the CLI reproduces mixed outcomes without private values', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const reference = fixture('example-evidence-reference-baseline.json');
+  const checkpoint = fixture('example-evidence-ledger-checkpoint.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const altered = JSON.parse(excerpt);
+  altered.records[0] = {...altered.records[0], value: 'amber'};
+  altered.answer = {...altered.answer, value: 'amber'};
+  const receiptTexts = [excerpt, JSON.stringify(altered), '{', excerpt];
+  const app = boot();
+  app.fact('private note', 'never expose this');
+  const before = JSON.stringify([...app.saved]);
+  await auditSavedReceipts(app, reference, receiptTexts.map((text, index) =>
+    auditFile(text, `receipt-${index + 1}.json`)), checkpoint);
+  assert.equal(app.elements.get('audit-capture-download').disabled, false);
+  assert.match(app.elements.get('audit-capture-status').textContent, /Capture ready/);
+  vm.runInContext('downloadEvidenceBatchCapture()', app.context);
+  const capture = JSON.parse(await app.exports[0].text());
+  assert.equal(capture.format, 'aru-evidence-browser-batch-capture');
+  assert.deepEqual(capture.receipts.map(row => [row.verdict, row.duplicate_of]),
+    [['MATCH', null], ['DIFFER', null], ['FAIL', null], ['MATCH', 1]]);
+  assert.deepEqual(capture.totals, {match: 2, differ: 1, fail: 1, identical_copies: 1});
+  assert.equal(JSON.stringify([...app.saved]), before);
+  assert.doesNotMatch(JSON.stringify(capture), /private note|never expose|favorite color|teal|receipt-1/);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aru-browser-capture-'));
+  try {
+    const write = (name, text) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, text);
+      return file;
+    };
+    const refFile = write('reference.json', reference);
+    const checkpointFile = write('checkpoint.json', checkpoint);
+    const receiptFiles = receiptTexts.map((text, index) => write(`receipt-${index}.json`, text));
+    const captureFile = write('capture.json', JSON.stringify(capture));
+    const cli = path.join(__dirname, '..', 'tools', 'audit-evidence-batch.cjs');
+    const args = [cli, refFile, ...receiptFiles, '--checkpoint', checkpointFile,
+      '--check-capture', captureFile];
+    const pass = spawnSync(process.execPath, args, {encoding: 'utf8'});
+    assert.equal(pass.status, 0, pass.stderr);
+    assert.match(pass.stdout, /CAPTURE MATCH/);
+    fs.appendFileSync(receiptFiles[0], '\n');
+    const changed = spawnSync(process.execPath, args, {encoding: 'utf8'});
+    assert.equal(changed.status, 1);
+    assert.match(changed.stderr, /Browser capture differs/);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+
+  app.context.document.getElementById('audit-receipts').files = [auditFile(excerpt)];
+  vm.runInContext('downloadEvidenceBatchCapture()', app.context);
+  assert.equal(app.exports.length, 1, 'a changed selection cannot download the older capture');
+  assert.equal(app.elements.get('audit-capture-download').disabled, true);
+});
+
+test('capture requires readable UTF-8 files and secure hashing while audit remains read-only', async () => {
+  const reference = fs.readFileSync(path.join(__dirname, '..', 'research',
+    'example-evidence-reference-baseline.json'), 'utf8');
+  const excerpt = fs.readFileSync(path.join(__dirname, '..', 'research',
+    'example-evidence-excerpt.json'), 'utf8');
+  const noHash = boot({}, {crypto: {}});
+  await auditSavedReceipts(noHash, reference, [auditFile(excerpt)]);
+  assert.match(noHash.elements.get('audit-result').children[0].textContent, /1 MATCH/);
+  assert.equal(noHash.elements.get('audit-capture-download').disabled, true);
+  assert.match(noHash.elements.get('audit-capture-status').textContent, /secure browser hashing is required/);
+
+  const invalid = boot();
+  const file = {name: 'invalid.json', size: 2,
+    arrayBuffer: async () => Uint8Array.from([0xff, 0xfe]).buffer};
+  await auditSavedReceipts(invalid, reference, [file]);
+  assert.match(invalid.elements.get('audit-result').children[0].textContent, /1 FAIL/);
+  assert.match(invalid.elements.get('audit-result').children[1].children[0].children[1].children[0].children[3].textContent,
+    /not valid UTF-8/);
+  assert.equal(invalid.elements.get('audit-capture-download').disabled, true);
+  assert.match(invalid.elements.get('audit-capture-status').textContent, /every selected file must be readable/);
+});
+
+test('a selection changed during browser capture hashing cannot enable a stale download', async () => {
+  const reference = fs.readFileSync(path.join(__dirname, '..', 'research',
+    'example-evidence-reference-baseline.json'), 'utf8');
+  const excerpt = fs.readFileSync(path.join(__dirname, '..', 'research',
+    'example-evidence-excerpt.json'), 'utf8');
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const crypto = {subtle: {digest: async (...args) => {
+    await waiting;
+    return webcrypto.subtle.digest(...args);
+  }}};
+  const app = boot({}, {crypto});
+  const document = app.context.document;
+  document.getElementById('reference-file').files = [auditFile(reference)];
+  document.getElementById('checkpoint-file').files = [];
+  document.getElementById('audit-receipts').files = [auditFile(excerpt)];
+  const checking = vm.runInContext('runEvidenceBatchAudit()', app.context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(app.elements.get('audit-result').children[0].textContent, /1 MATCH/);
+  document.getElementById('audit-receipts').files = [auditFile(excerpt, 'new.json')];
+  vm.runInContext('invalidateEvidenceBatchAudit()', app.context);
+  release();
+  await checking;
+  assert.equal(app.elements.get('audit-capture-download').disabled, true);
+  assert.equal(app.exports.length, 0);
+  assert.match(app.elements.get('audit-result').textContent, /Receipt selection changed/);
 });
 
 test('a reference ledger detects an omitted conflict that a self-consistent excerpt cannot', async () => {

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
-const {auditEvidenceBatch} = require('../tools/audit-evidence-batch.cjs');
+const {auditEvidenceBatch, browserCaptureFromReport} = require('../tools/audit-evidence-batch.cjs');
 
 const root = path.join(__dirname, '..');
 const cli = path.join(root, 'tools', 'audit-evidence-batch.cjs');
@@ -123,6 +123,28 @@ test('CLI reports differences with nonzero status but can reproduce that exact r
     [cli, baseline, excerpt, invalid, '--check-report', recorded], {encoding: 'utf8'});
   assert.equal(reproduced.status, 0, reproduced.stderr);
   assert.match(reproduced.stdout, /1 FAIL.*REPORT MATCH/s);
+}));
+
+test('CLI replays a minimal browser capture and rejects added fields or altered verdicts', () => temporary(save => {
+  const report = auditEvidenceBatch(baseline, [excerpt, full], {checkpointFile: checkpoint});
+  const capture = browserCaptureFromReport(report);
+  assert.deepEqual(Object.keys(capture), ['format', 'version', 'reference_sha256',
+    'checkpoint_sha256', 'receipts', 'totals']);
+  assert.equal(capture.receipts[0].sha256, digest(fs.readFileSync(excerpt)));
+  const file = save('capture.json', JSON.stringify(capture));
+  const args = [cli, baseline, excerpt, full, '--checkpoint', checkpoint, '--check-capture', file];
+  const pass = spawnSync(process.execPath, args, {encoding: 'utf8'});
+  assert.equal(pass.status, 0, pass.stderr);
+  assert.match(pass.stdout, /CAPTURE MATCH/);
+  const added = save('added.json', JSON.stringify({...capture, private_field: 'no'}));
+  const extra = spawnSync(process.execPath, [...args.slice(0, -1), added], {encoding: 'utf8'});
+  assert.equal(extra.status, 1);
+  assert.match(extra.stderr, /Browser capture differs/);
+  const altered = save('altered.json', JSON.stringify({...capture,
+    receipts: [{...capture.receipts[0], verdict: 'DIFFER'}, capture.receipts[1]]}));
+  const fail = spawnSync(process.execPath, [...args.slice(0, -1), altered], {encoding: 'utf8'});
+  assert.equal(fail.status, 1);
+  assert.match(fail.stderr, /Browser capture differs/);
 }));
 
 test('bounds, invalid UTF-8, and unknown options fail or classify without partial acceptance', () => temporary(save => {
