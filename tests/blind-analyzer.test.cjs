@@ -14,6 +14,8 @@ const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research'
 const planFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8'));
 const modernFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-v2.json'), 'utf8'));
 const modernPlanFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v2.json'), 'utf8'));
+const currentFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-v3.json'), 'utf8'));
+const currentPlanFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v3.json'), 'utf8'));
 const cli = path.join(__dirname, '..', 'tools', 'analyze-blind-trials.cjs');
 
 function inTempDir(run) {
@@ -32,7 +34,7 @@ function modernTrial(context, prompt, choice) {
   report.context = context;
   report.prompt = prompt;
   report.choice = choice;
-  const model = loadEvaluator();
+  const model = loadEvaluator(report.model_revision);
   model.inputs = context;
   model.finalPrompt = prompt;
   report.conditions = JSON.parse(JSON.stringify(vm.runInContext(`(() => {
@@ -172,7 +174,7 @@ test('a fixed plan checks every case count and preserves its exact-file fingerpr
     assert.match(formatText(result), /synthetic-example: 1\/1; history 0, control 0, tie 1/);
     const check = spawnSync(process.execPath, [cli, '--check-plan', planFile], {encoding: 'utf8'});
     assert.equal(check.status, 0, check.stderr);
-    assert.match(check.stdout, new RegExp(`Valid aru-response-1 plan: 1 case, 1 expected rating\\. Plan SHA-256: ${result.plan.sha256}`));
+    assert.match(check.stdout, new RegExp(`Valid aru-field-heuristics-2 / aru-response-1 plan: 1 case, 1 expected rating\\. Plan SHA-256: ${result.plan.sha256}`));
     const command = spawnSync(process.execPath, [cli, '--json', '--plan', planFile, rated], {encoding: 'utf8'});
     assert.equal(command.status, 0, command.stderr);
     assert.deepEqual(JSON.parse(command.stdout), result);
@@ -244,13 +246,37 @@ test('response revisions are pinned by plans and cannot be combined into one bat
     assert.equal(loadTrialPlan(currentPlan).responseRevision, 'aru-response-2');
     const checked = spawnSync(process.execPath, [cli, '--check-plan', currentPlan], {encoding: 'utf8'});
     assert.equal(checked.status, 0, checked.stderr);
-    assert.match(checked.stdout, /Valid aru-response-2 plan/);
+    assert.match(checked.stdout, /Valid aru-field-heuristics-2 \/ aru-response-2 plan/);
     assert.throws(() => analyzeTrialFiles([old, current]), /mixed response revisions in one batch/);
     assert.throws(() => analyzeTrialFiles([current], {planFile: oldPlan}), /does not match trial plan/);
     assert.throws(() => analyzeTrialFiles([old], {planFile: currentPlan}), /does not match trial plan/);
     const badRevision = structuredClone(modernPlanFixture);
     badRevision.response_revision = 'aru-response-9';
     assert.throws(() => loadTrialPlan(write('bad-plan.json', badRevision)), /unsupported format/);
+  });
+});
+
+test('v3 reverses the negation probe while preserving replay of the v2 trial', () => {
+  inTempDir(({write}) => {
+    const before = write('v2.json', modernFixture);
+    const after = write('v3.json', currentFixture);
+    const oldPlan = write('v2-plan.json', modernPlanFixture);
+    const plan = write('v3-plan.json', currentPlanFixture);
+    assert.equal(analyzeTrialFiles([before], {planFile: oldPlan}).diagnostics.score_higher_with_history.trials, 1);
+    const result = analyzeTrialFiles([after], {planFile: plan});
+    assert.equal(result.model_revision, 'aru-field-heuristics-3');
+    assert.equal(result.response_revision, 'aru-response-2');
+    assert.equal(result.diagnostics.score_higher_without_history.trials, 1);
+    assert.equal(result.plan.coverage[0].score_direction, 'score_higher_without_history');
+    const check = spawnSync(process.execPath, [cli, '--check-plan', plan], {encoding: 'utf8'});
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, /Valid aru-field-heuristics-3 \/ aru-response-2 plan/);
+    assert.throws(() => analyzeTrialFiles([before, after]), /mixed score model revisions/);
+    assert.throws(() => analyzeTrialFiles([after], {planFile: oldPlan}), /model revision .* does not match trial plan/);
+    assert.throws(() => analyzeTrialFiles([before], {planFile: plan}), /model revision .* does not match trial plan/);
+    const mislabeled = structuredClone(currentFixture);
+    mislabeled.model_revision = 'aru-field-heuristics-2';
+    assert.throws(() => analyzeTrialFiles([write('mislabeled.json', mislabeled)]), /does not match the model/);
   });
 });
 

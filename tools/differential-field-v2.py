@@ -233,14 +233,12 @@ def run(seed, runs):
                                              "python": expected, "javascript": result},
                                             ensure_ascii=False, indent=2))
 
-    html = (ROOT / "index.html").read_text(encoding="utf-8")
-    start = html.index("function textWords(")
-    end = html.index("/* ==================== PLASMA FIELD SIMULATION", start)
+    archived = (ROOT / "tools" / "field-model-v2.js").read_bytes()
     return {"format": "aru-score-differential-report", "model_revision": "aru-field-heuristics-2",
             "seed": seed, "fixed_cases": len(fixed_cases()), "generated_cases": runs,
             "checked": len(cases), "mutation_probe": "detected", "absolute_tolerance": TOLERANCE,
             "result": "pass",
-            "javascript_source_sha256": hashlib.sha256(html[start:end].encode()).hexdigest(),
+            "javascript_source_sha256": hashlib.sha256(archived).hexdigest(),
             "python_reference_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
 
 

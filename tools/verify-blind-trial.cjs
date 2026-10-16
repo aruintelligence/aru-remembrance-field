@@ -16,7 +16,8 @@ function verifyBlindTrial(report) {
   requireCondition(report && typeof report === 'object' && !Array.isArray(report) &&
     Object.keys(report).length === keys.length && keys.every(key => Object.hasOwn(report, key)) &&
     report.format === 'aru-blind-response-trial' && report.version === 1 &&
-    report.model_revision === 'aru-field-heuristics-2' &&
+    (report.model_revision === 'aru-field-heuristics-2' ||
+      (versioned && report.model_revision === 'aru-field-heuristics-3')) &&
     (!versioned || report.response_revision === 'aru-response-2'), 'unsupported blind trial');
   requireCondition(Array.isArray(report.context) && report.context.length >= 1 && report.context.length <= 8 &&
     report.context.every(line => typeof line === 'string' && line.trim() === line && line.length >= 1 &&
@@ -35,7 +36,7 @@ function verifyBlindTrial(report) {
     ['with_history', 'without_history'].every(key => Object.hasOwn(report.conditions, key)),
     'missing conditions');
 
-  const context = loadEvaluator('aru-field-heuristics-2');
+  const context = loadEvaluator(report.model_revision);
   if (!versioned) {
     const archived = fs.readFileSync(path.join(__dirname, 'response-model-v1.js'), 'utf8');
     requireCondition(createHash('sha256').update(archived).digest('hex') === LEGACY_RESPONSE_SHA256,
@@ -75,7 +76,8 @@ function verifyBlindTrial(report) {
       `${key} response does not match the model`);
   }
   const preferred = report.choice === 'tie' ? 'tie' : report.assignment[report.choice];
-  return {preferred, responseRevision: context.responseRevision, withHistory: computed.with_history.score.after,
+  return {preferred, modelRevision: report.model_revision, responseRevision: context.responseRevision,
+    withHistory: computed.with_history.score.after,
     withoutHistory: computed.without_history.score.after};
 }
 

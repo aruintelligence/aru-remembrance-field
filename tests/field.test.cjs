@@ -249,7 +249,7 @@ test('portable proof replays the exact prior state and detects changed receipts 
   app.input('violet river');
   vm.runInContext('downloadProof()', app.context);
   const proof = JSON.parse(await app.exports[0].text());
-  assert.equal(proof.model_revision, 'aru-field-heuristics-2');
+  assert.equal(proof.model_revision, 'aru-field-heuristics-3');
   assert.equal(proof.prior_memory.length, 1);
   assert.equal(proof.prior_user_messages.length, 1);
   assert.equal(proof.prior_user_messages[0].text, 'violet river');
@@ -276,13 +276,13 @@ async function chooseScoreProofFile(app, text, size = Buffer.byteLength(text)) {
   return app.elements.get('score-proof-verification').textContent;
 }
 
-test('browser replays a shared v2 proof and a fresh positive history effect without changing local state', async () => {
+test('browser replays a shared v3 correction proof and a fresh positive history effect without changing local state', async () => {
   const visitor = boot({unrelated_key: 'keep'});
   visitor.fact('private fact', 'do not overwrite');
   const before = JSON.stringify([...visitor.saved]);
-  const fixture = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof-v2.json'), 'utf8');
-  assert.match(await chooseScoreProofFile(visitor, fixture), /PASS: input “nevermore”.*With history μ 0.62624; no-history control μ 0.62624; immediate effect \+0.00000/);
-  assert.equal(verifyProof(JSON.parse(fixture)).effect, 0);
+  const fixture = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof-v3.json'), 'utf8');
+  assert.match(await chooseScoreProofFile(visitor, fixture), /PASS: input “My favorite color is not teal\.”.*With history μ 0.59624; no-history control μ 0.62624; immediate effect -0.03000/);
+  assert.ok(Math.abs(verifyProof(JSON.parse(fixture)).effect + 0.03) < 1e-12);
   const origin = boot();
   origin.input('violet river');
   origin.input('violet river');
@@ -299,7 +299,7 @@ test('browser replays a shared v2 proof and a fresh positive history effect with
 
 test('browser score verifier rejects changed terms, control, effect, unsupported revision, and malformed files', async () => {
   const app = boot();
-  const proof = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof-v2.json'), 'utf8'));
+  const proof = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof-v3.json'), 'utf8'));
   const term = structuredClone(proof);
   term.result.actual.terms[0].value += 0.01;
   assert.match(await chooseScoreProofFile(app, JSON.stringify(term)), /FAIL: Invalid proof: actual term 1/);
@@ -311,7 +311,10 @@ test('browser score verifier rejects changed terms, control, effect, unsupported
   assert.match(await chooseScoreProofFile(app, JSON.stringify(effect)), /FAIL: Invalid proof: history effect/);
   const legacy = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof.json'), 'utf8');
   assert.ok(verifyProof(JSON.parse(legacy)).effect > 0);
-  assert.match(await chooseScoreProofFile(app, legacy), /FAIL: Invalid proof: only current v2/);
+  assert.match(await chooseScoreProofFile(app, legacy), /FAIL: Invalid proof: only current v3/i);
+  const archived = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-proof-v2.json'), 'utf8');
+  assert.equal(verifyProof(JSON.parse(archived)).effect, 0);
+  assert.match(await chooseScoreProofFile(app, archived), /FAIL: Invalid proof: only current v3/i);
   assert.match(await chooseScoreProofFile(app, '{oops'), /FAIL: File is not valid JSON/);
   assert.match(await chooseScoreProofFile(app, '{}', 16 * 1024 * 1024 + 1), /FAIL: Proof exceeds the 16 MiB limit/);
   assert.equal(app.saved.size, 0);
@@ -381,12 +384,14 @@ test('every scored keyword requires its own word boundary', () => {
   }
 });
 
-test('v1 and v2 archived score receipts and trajectories verify under their own revisions', () => {
+test('v1, v2, and v3 score receipts and trajectories verify under their own revisions', () => {
   const read = file => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', file), 'utf8'));
   assert.ok(verifyProof(read('example-proof.json')).effect > 0);
   assert.equal(verifyProof(read('example-proof-v2.json')).effect, 0);
+  assert.ok(Math.abs(verifyProof(read('example-proof-v3.json')).effect + 0.03) < 1e-12);
   assert.equal(verifyTrajectory(read('example-trajectory.json')).steps, 5);
   assert.equal(verifyTrajectory(read('example-trajectory-v2.json')).steps, 3);
+  assert.equal(verifyTrajectory(read('example-trajectory-v3.json')).steps, 2);
   const wrongRevision = read('example-proof-v2.json');
   wrongRevision.model_revision = 'aru-field-heuristics-1';
   assert.throws(() => verifyProof(wrongRevision), /does not match the model/);
@@ -471,7 +476,7 @@ test('older browsers can still rate in the inspector when a modal dialog is unav
 
 test('a local fixed plan fills a blind case and an edited input cannot masquerade as it', async () => {
   const app = boot({unrelated_key: 'keep'});
-  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v2.json'), 'utf8');
+  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v3.json'), 'utf8');
   const file = app.context.document.getElementById('blind-plan-file');
   file.files = [{size: Buffer.byteLength(plan), text: async () => plan}];
   await vm.runInContext('loadBlindTrialPlan()', app.context);
@@ -491,6 +496,7 @@ test('a local fixed plan fills a blind case and an edited input cannot masquerad
   assert.deepEqual(report.context, ['favorite color teal']);
   assert.equal(report.prompt, 'My favorite color is not teal.');
   assert.equal(report.response_revision, 'aru-response-2');
+  assert.equal(report.model_revision, 'aru-field-heuristics-3');
 
   app.elements.get('blind-prompt').value = 'edited';
   vm.runInContext('clearBlindTrial()', app.context);
@@ -504,7 +510,7 @@ test('a local fixed plan fills a blind case and an edited input cannot masquerad
 test('blind plan loading rejects invalid files and ignores an older read', async () => {
   const app = boot();
   const file = app.context.document.getElementById('blind-plan-file');
-  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v2.json'), 'utf8');
+  const plan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v3.json'), 'utf8');
   file.files = [{size: Buffer.byteLength(plan), text: async () => plan}];
   await vm.runInContext('loadBlindTrialPlan()', app.context);
   assert.equal(app.elements.get('blind-plan-case').disabled, false);
@@ -517,7 +523,7 @@ test('blind plan loading rejects invalid files and ignores an older read', async
   assert.match(app.elements.get('blind-plan-status').textContent, /FAIL: Repeated context and prompt/);
   assert.equal(app.elements.get('blind-plan-case').disabled, true);
 
-  const oldPlan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan.json'), 'utf8');
+  const oldPlan = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-plan-v2.json'), 'utf8');
   file.files = [{size: Buffer.byteLength(oldPlan), text: async () => oldPlan}];
   await vm.runInContext('loadBlindTrialPlan()', app.context);
   assert.match(app.elements.get('blind-plan-status').textContent, /FAIL: Unsupported trial plan/);
@@ -565,6 +571,9 @@ test('blind trial verifier detects altered outputs and context while exposing it
   assert.equal(verifyBlindTrial(guarded).responseRevision, 'aru-response-2');
   assert.match(guarded.conditions.with_history.response_html, /memory echoes are withheld/);
   assert.doesNotMatch(guarded.conditions.with_history.response_html, /Resonant echoes/);
+  const corrected = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-blind-trial-v3.json'), 'utf8'));
+  assert.equal(verifyBlindTrial(corrected).modelRevision, 'aru-field-heuristics-3');
+  assert.ok(corrected.conditions.with_history.score.after < corrected.conditions.without_history.score.after);
   const app = boot();
   app.context.document.getElementById('blind-context').value = 'always';
   app.context.document.getElementById('blind-prompt').value = 'never';
@@ -592,13 +601,20 @@ test('blind trial verifier detects altered outputs and context while exposing it
   assert.throws(() => verifyBlindTrial(unsupported), /unsupported blind trial/);
 });
 
-test('response guard withholds direct polarity conflicts and literal contradiction echoes without changing the score', () => {
+test('direct polarity corrections lose overlap credit and the response guard withholds stale echoes', () => {
   const at = 1700000001000;
   const model = loadEvaluator();
   model.memoryToCheck = vm.runInContext('advanceMemory([], "favorite color teal", 0.62624, 1700000000000)', model);
   model.inputToCheck = 'My favorite color is not teal.';
   const score = () => vm.runInContext('evaluateCoherence(inputToCheck, {coherence:0.62624, memory:memoryToCheck, messages:[{type:"user", text:"favorite color teal"}]}, 1700000001000)', model);
   const before = JSON.stringify(score());
+  const correctedScore = score();
+  assert.equal(correctedScore.terms.find(t => t.label === 'Prior memory overlap').value, 0);
+  assert.equal(correctedScore.terms.find(t => t.label === 'Direct negation rule').value, -0.03);
+  const oldModel = loadEvaluator('aru-field-heuristics-2');
+  oldModel.inputToCheck = model.inputToCheck;
+  oldModel.memoryToCheck = model.memoryToCheck;
+  assert.ok(vm.runInContext('evaluateCoherence(inputToCheck, {coherence:0.62624, memory:memoryToCheck, messages:[{type:"user", text:"favorite color teal"}]}, 1700000001000).after', oldModel) > correctedScore.after);
   const memoryBefore = JSON.stringify(model.memoryToCheck);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'tools', 'response-model-v1.js'), 'utf8'), model);
   const priorOutput = vm.runInContext('getLegacyResponse(inputToCheck, false, 0.6851839079715081, memoryToCheck, 1700000001000)', model);
@@ -684,43 +700,48 @@ test('trajectory limits invalid sequences and verifies the public synthetic fixt
   assert.ok(Math.abs(result.difference - 0.034986718779233206) < 1e-12);
 });
 
-test('three-control challenge shows positive, zero, and negative effects without changing saved state', async () => {
+test('four-control challenge includes direct corrections without changing saved state', async () => {
   const app = boot();
   app.input('My private local memory');
   app.fact('private fact', 'private value');
   const before = JSON.stringify([...app.saved]);
   vm.runInContext('runMemoryChallenge()', app.context);
-  assert.match(app.elements.get('challenge-result').children[0].textContent, /3\/3 controls/);
+  assert.match(app.elements.get('challenge-result').children[0].textContent, /4\/4 controls/);
   assert.equal(app.elements.get('challenge-download').disabled, false);
   const rows = app.elements.get('challenge-result').children[1].children[0].children[1].children;
-  assert.equal(rows.length, 3);
-  assert.deepEqual(rows.map(row => row.children[5].textContent), ['Expected', 'Expected', 'Expected']);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.map(row => row.children[5].textContent), ['Expected', 'Expected', 'Expected', 'Expected']);
   assert.equal(JSON.stringify([...app.saved]), before);
   vm.runInContext('downloadMemoryChallenge()', app.context);
   const report = JSON.parse(await app.exports[0].text());
-  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-memory-challenge.json'), 'utf8'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-memory-challenge-v3.json'), 'utf8'));
   assert.deepEqual(report, fixture);
   const results = verifyMemoryChallenge(report);
-  assert.deepEqual(results.map(row => row.direction), ['positive', 'zero', 'negative']);
+  assert.deepEqual(results.map(row => row.direction), ['positive', 'zero', 'negative', 'negative']);
   assert.equal(JSON.stringify(report).includes('private value'), false);
   assert.equal(JSON.stringify(report).includes('My private local memory'), false);
 });
 
 test('challenge verifier rejects altered outputs, missing controls, relabeling, and swapped inputs', () => {
-  const report = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-memory-challenge.json'), 'utf8'));
-  assert.equal(verifyMemoryChallenge(report).length, 3);
+  const archived = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-memory-challenge.json'), 'utf8'));
+  assert.equal(verifyMemoryChallenge(archived).length, 3);
+  const report = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-memory-challenge-v3.json'), 'utf8'));
+  assert.equal(verifyMemoryChallenge(report).length, 4);
   const altered = structuredClone(report);
   altered.scenarios[0].trajectory.steps[1].actual.after += 0.01;
   assert.throws(() => verifyMemoryChallenge(altered), /step 2 with history\.after/);
   const missing = structuredClone(report);
   missing.scenarios.pop();
-  assert.throws(() => verifyMemoryChallenge(missing), /exactly three/);
+  assert.throws(() => verifyMemoryChallenge(missing), /exactly 4/);
   const relabeled = structuredClone(report);
   relabeled.scenarios[2].expected_direction = 'positive';
   assert.throws(() => verifyMemoryChallenge(relabeled), /fixed contradiction sequence/);
   const changed = structuredClone(report);
   changed.scenarios[1].trajectory.inputs = ['violet river', 'violet river'];
   assert.throws(() => verifyMemoryChallenge(changed), /fixed unrelated sequence/);
+  const reworded = structuredClone(report);
+  reworded.scenarios[3].trajectory.inputs[1] = 'My favorite color is teal.';
+  assert.throws(() => verifyMemoryChallenge(reworded), /fixed direct-negation sequence/);
 });
 
 test('exact-key evidence recall cites user sources and survives reload without changing freeform memory', () => {
@@ -1370,7 +1391,7 @@ test('malformed memory numbers and tokens are repaired before scoring', () => {
   assert.equal(app.field.memory[0].count, 2);
 });
 
-test('saved v1 memory text is retokenized under v2 on reload', () => {
+test('saved v1 memory text is retokenized under current rules on reload', () => {
   const app = boot({aru_memory: JSON.stringify([{
     text: 'ＣＡＦÉ river', cleaned: 'caf river', tokens: ['caf', 'river'],
     time: Date.now(), weight: 2, count: 1

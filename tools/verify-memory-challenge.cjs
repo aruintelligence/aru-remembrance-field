@@ -10,6 +10,8 @@ const CONTROLS = [
   {id: 'unrelated', label: 'Unrelated phrases', inputs: ['amber comet', 'violet river'], direction: 'zero'},
   {id: 'contradiction', label: 'Contradictory words', inputs: ['always', 'never'], direction: 'negative'}
 ];
+const DIRECT_NEGATION = {id: 'direct-negation', label: 'Direct negation',
+  inputs: ['favorite color teal', 'My favorite color is not teal.'], direction: 'negative'};
 
 function observedDirection(value) {
   return Math.abs(value) < 1e-10 ? 'zero' : value > 0 ? 'positive' : 'negative';
@@ -18,11 +20,14 @@ function observedDirection(value) {
 function verifyMemoryChallenge(report) {
   requireCondition(report && typeof report === 'object' && !Array.isArray(report) &&
     report.format === 'aru-memory-challenge' && report.version === 1 &&
-    report.model_revision === 'aru-field-heuristics-2', 'unsupported memory challenge report');
-  requireCondition(Array.isArray(report.scenarios) && report.scenarios.length === CONTROLS.length,
-    'memory challenge must contain exactly three controls');
+    ['aru-field-heuristics-2', 'aru-field-heuristics-3'].includes(report.model_revision),
+    'unsupported memory challenge report');
+  const controls = report.model_revision === 'aru-field-heuristics-3'
+    ? [...CONTROLS, DIRECT_NEGATION] : CONTROLS;
+  requireCondition(Array.isArray(report.scenarios) && report.scenarios.length === controls.length,
+    `memory challenge must contain exactly ${controls.length} controls`);
   const results = [];
-  CONTROLS.forEach((control, index) => {
+  controls.forEach((control, index) => {
     const row = report.scenarios[index];
     requireCondition(row && row.id === control.id && row.label === control.label &&
       row.expected_direction === control.direction && row.trajectory &&

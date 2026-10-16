@@ -42,12 +42,14 @@ function loadTrialPlan(file) {
   let plan;
   try { plan = JSON.parse(contents.toString('utf8')); }
   catch (error) { throw new Error(`Trial plan ${file}: invalid JSON: ${error.message}`); }
-  const modern = plan && plan.version === 2;
+  const modern = plan && (plan.version === 2 || plan.version === 3);
+  const expectedModelRevision = plan && plan.version === 3
+    ? 'aru-field-heuristics-3' : 'aru-field-heuristics-2';
   const keys = ['format', 'version', 'model_revision', 'primary_outcome', 'cases'];
   if (modern) keys.push('response_revision');
   if (!exactKeys(plan, keys) ||
     plan.format !== 'aru-blind-trial-plan' || (plan.version !== 1 && !modern) ||
-    plan.model_revision !== 'aru-field-heuristics-2' ||
+    plan.model_revision !== expectedModelRevision ||
     (modern && plan.response_revision !== 'aru-response-2') ||
     plan.primary_outcome !== 'history_win_fraction_all' ||
     !Array.isArray(plan.cases) || plan.cases.length < 1 || plan.cases.length > 50) {
@@ -77,7 +79,7 @@ function loadTrialPlan(file) {
     expected += entry.ratings;
   }
   if (expected > MAX_FILES) throw new Error(`Trial plan ${file}: exceeds ${MAX_FILES} rated trials`);
-  return {sha256: sha256(contents), expected, byInput,
+  return {sha256: sha256(contents), expected, byInput, modelRevision: expectedModelRevision,
     responseRevision: modern ? 'aru-response-2' : 'aru-response-1'};
 }
 
@@ -102,6 +104,7 @@ function analyzeTrialFiles(files, {planFile} = {}) {
     decisive_score_choice_agreement: {aligned: 0, opposed: 0, total: 0}
   };
   const hashes = new Map();
+  let batchModelRevision = null;
   let batchResponseRevision = null;
   let totalBytes = 0;
   for (const file of files) {
@@ -115,7 +118,14 @@ function analyzeTrialFiles(files, {planFile} = {}) {
       totalBytes += contents.length;
       if (totalBytes > MAX_TOTAL_BYTES) throw new Error('exceeds 16 MiB total');
       const report = JSON.parse(contents.toString('utf8'));
-      const {preferred, responseRevision, withHistory, withoutHistory} = verifyBlindTrial(report);
+      const {preferred, modelRevision, responseRevision, withHistory, withoutHistory} = verifyBlindTrial(report);
+      if (plan && modelRevision !== plan.modelRevision) {
+        throw new Error(`model revision ${modelRevision} does not match trial plan ${plan.modelRevision}`);
+      }
+      if (batchModelRevision && modelRevision !== batchModelRevision) {
+        throw new Error('mixed score model revisions in one batch');
+      }
+      batchModelRevision = modelRevision;
       if (plan && responseRevision !== plan.responseRevision) {
         throw new Error(`response revision ${responseRevision} does not match trial plan ${plan.responseRevision}`);
       }
@@ -175,7 +185,7 @@ function analyzeTrialFiles(files, {planFile} = {}) {
   const dataset_sha256 = sha256([...hashes].flatMap(([hash, copies]) => Array(copies).fill(hash)).sort().join('\n'));
   const result = {
     format: 'aru-blind-trial-batch-analysis', version: 1,
-    model_revision: 'aru-field-heuristics-2', response_revision: batchResponseRevision,
+    model_revision: batchModelRevision, response_revision: batchResponseRevision,
     dataset_sha256, summary, diagnostics, duplicates,
     limitation: LIMITATION
   };
@@ -228,7 +238,7 @@ if (require.main === module) {
     if (args[0] === '--check-plan') {
       if (args.length !== 2) throw new Error('Usage: node tools/analyze-blind-trials.cjs --check-plan plan.json');
       const plan = loadTrialPlan(args[1]);
-      console.log(`Valid ${plan.responseRevision} plan: ${plan.byInput.size} case${plan.byInput.size === 1 ? '' : 's'}, ${plan.expected} expected rating${plan.expected === 1 ? '' : 's'}. Plan SHA-256: ${plan.sha256}`);
+      console.log(`Valid ${plan.modelRevision} / ${plan.responseRevision} plan: ${plan.byInput.size} case${plan.byInput.size === 1 ? '' : 's'}, ${plan.expected} expected rating${plan.expected === 1 ? '' : 's'}. Plan SHA-256: ${plan.sha256}`);
     } else {
       let json = false, planFile;
       while (args[0] === '--json' || args[0] === '--plan') {
