@@ -8,7 +8,7 @@ const {verifyBlindTrial} = require('./verify-blind-trial.cjs');
 const MAX_FILES = 100;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
-const LIMITATION = 'These counts describe only the supplied files. They cannot establish independent readers, original assignments or ratings, or complete submission. The Wilson interval assumes independent ratings; duplicate or unauthenticated files cannot establish that assumption. Neither score agreement nor the interval proves usefulness or real-world benefit.';
+const LIMITATION = 'These counts describe only the supplied files. They cannot establish independent readers, original assignments or ratings, or complete submission. The Wilson interval assumes independent ratings; duplicate or unauthenticated files cannot establish that assumption. Planned case-balance and leave-one-case-out values are descriptive diagnostics, not confidence intervals. Neither score agreement nor these statistics proves usefulness or real-world benefit.';
 
 function wilsonInterval(wins, trials) {
   const z = 1.959963984540054;
@@ -189,13 +189,26 @@ function analyzeTrialFiles(files, {planFile} = {}) {
     dataset_sha256, summary, diagnostics, duplicates,
     limitation: LIMITATION
   };
-  if (plan) result.plan = {
-    sha256: plan.sha256, expected_trials: plan.expected, cases: plan.byInput.size,
-    coverage: [...plan.byInput.values()].map(({id, expected, received, history_wins, control_wins,
-      ties, score_direction, score_choice_aligned, score_choice_opposed}) =>
-      ({id, expected, received, history_wins, control_wins, ties,
-        score_direction, score_choice_aligned, score_choice_opposed}))
-  };
+  if (plan) {
+    const slots = [...plan.byInput.values()];
+    const caseRates = slots.map(slot => slot.history_wins / slot.received);
+    const sumCaseRates = caseRates.reduce((sum, rate) => sum + rate, 0);
+    const withoutOneCase = caseRates.length > 1
+      ? caseRates.map(rate => (sumCaseRates - rate) / (caseRates.length - 1)) : null;
+    result.plan = {
+      sha256: plan.sha256, expected_trials: plan.expected, cases: slots.length,
+      coverage: slots.map(({id, expected, received, history_wins, control_wins,
+        ties, score_direction, score_choice_aligned, score_choice_opposed}) =>
+        ({id, expected, received, history_wins, control_wins, ties,
+          score_direction, score_choice_aligned, score_choice_opposed})),
+      sensitivity: {
+        equal_case_history_win_fraction_all: sumCaseRates / caseRates.length,
+        largest_case_rating_fraction: Math.max(...slots.map(slot => slot.received)) / summary.trials,
+        leave_one_case_out_equal_case_range: withoutOneCase
+          ? {min: Math.min(...withoutOneCase), max: Math.max(...withoutOneCase)} : null
+      }
+    };
+  }
   return result;
 }
 
@@ -225,7 +238,11 @@ function formatText(report) {
     ...(report.plan ? [
       `Plan complete: ${s.trials}/${report.plan.expected_trials} rated slots across ${report.plan.cases} case${report.plan.cases === 1 ? '' : 's'}. Plan SHA-256: ${report.plan.sha256}`,
       ...report.plan.coverage.map(row =>
-        `  ${row.id}: ${row.received}/${row.expected}; history ${row.history_wins}, control ${row.control_wins}, tie ${row.ties}; modeled ${directionLabel[row.score_direction]}; aligned ${row.score_choice_aligned}, opposed ${row.score_choice_opposed}.`)
+        `  ${row.id}: ${row.received}/${row.expected}; history ${row.history_wins}, control ${row.control_wins}, tie ${row.ties}; modeled ${directionLabel[row.score_direction]}; aligned ${row.score_choice_aligned}, opposed ${row.score_choice_opposed}.`),
+      `Case-balance diagnostic (each planned case weighted equally): history ${pct(report.plan.sensitivity.equal_case_history_win_fraction_all)}; largest case contributes ${pct(report.plan.sensitivity.largest_case_rating_fraction)} of ratings.`,
+      report.plan.sensitivity.leave_one_case_out_equal_case_range
+        ? `Leave-one-case-out equal-case range: ${pct(report.plan.sensitivity.leave_one_case_out_equal_case_range.min)}–${pct(report.plan.sensitivity.leave_one_case_out_equal_case_range.max)} (descriptive, not a confidence interval).`
+        : 'Leave-one-case-out equal-case range: undefined with one planned case.'
     ] : []),
     `Dataset SHA-256: ${report.dataset_sha256}`,
     report.limitation

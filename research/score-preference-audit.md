@@ -8,6 +8,12 @@ Run `node tools/analyze-blind-trials.cjs --plan plan.json trials/*.json` after c
 
 The primary preference fraction is still `history wins / all supplied ratings`, with ties in the denominator. Its reported 95% Wilson score interval uses `z = 1.959963984540054`, `n = all ratings`, and `x = history wins`. For `p = x/n`, the interval is `(p + z²/(2n) ± z√(p(1−p)/n + z²/(4n²))) / (1 + z²/n)`, clipped to `[0,1]`. This interval assumes independent Bernoulli ratings. Repeated readers, shared prompts, convenience sampling, missing submissions, or editable duplicate files weaken a population interpretation. It does not adjust for dependence within a planned case, selection bias, multiple analyses, or unauthenticated choices.
 
+## Check whether one prompt drives the result
+
+For a complete fixed plan, `plan.sensitivity.equal_case_history_win_fraction_all` averages each case's `history wins / received ratings`, with ties in each denominator. Each case gets one share of this diagnostic regardless of its number of ratings. `largest_case_rating_fraction` is the largest case's rating count divided by all ratings. `leave_one_case_out_equal_case_range` gives the minimum and maximum equal-case fractions after omitting each case in turn; it is `null` for a one-case plan. These are descriptive checks, **not** confidence intervals or replacements for the plan's primary all-ratings fraction. A difference between pooled and equal-case fractions flags sensitivity to the plan's rating allocation; a wide omission range flags sensitivity to particular prompts. Equal weighting cannot repair selective submission, repeated readers, or poor choice of prompts.
+
+The test `node tests/blind-analyzer.test.cjs` includes a deliberately imbalanced synthetic plan: eight identical history choices on one prompt, one control choice on another, and one tie on a third. The primary pooled fraction is `8/10 = 80%`, whereas the equal-case fraction is `(1 + 0 + 0)/3 = 33.3%`; the largest case supplies 80% of ratings and the leave-one-case-out range is 0–50%. This checks that an apparently strong pooled outcome is exposed as prompt-sensitive. The choices are fabricated software test data, not observations from readers.
+
 ## Reproduce an audit counterexample
 
 The [synthetic v2 report](example-blind-trial-v2.json) has a history score of `0.68518` and control score of `0.61260` for a negated color prompt, but its recorded choice is deliberately `tie`. To check that an opposed choice is surfaced, create a **synthetic test copy** with B selected (B is the control in this fixture):

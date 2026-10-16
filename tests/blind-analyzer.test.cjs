@@ -168,10 +168,13 @@ test('a fixed plan checks every case count and preserves its exact-file fingerpr
       sha256: loadTrialPlan(planFile).sha256, expected_trials: 1, cases: 1,
       coverage: [{id: 'synthetic-example', expected: 1, received: 1,
         history_wins: 0, control_wins: 0, ties: 1,
-        score_direction: 'score_higher_with_history', score_choice_aligned: 0, score_choice_opposed: 0}]
+        score_direction: 'score_higher_with_history', score_choice_aligned: 0, score_choice_opposed: 0}],
+      sensitivity: {equal_case_history_win_fraction_all: 0, largest_case_rating_fraction: 1,
+        leave_one_case_out_equal_case_range: null}
     });
     assert.match(formatText(result), /Plan complete: 1\/1 rated slots across 1 case/);
     assert.match(formatText(result), /synthetic-example: 1\/1; history 0, control 0, tie 1/);
+    assert.match(formatText(result), /Leave-one-case-out equal-case range: undefined with one planned case/);
     const check = spawnSync(process.execPath, [cli, '--check-plan', planFile], {encoding: 'utf8'});
     assert.equal(check.status, 0, check.stderr);
     assert.match(check.stdout, new RegExp(`Valid aru-field-heuristics-2 / aru-response-1 plan: 1 case, 1 expected rating\\. Plan SHA-256: ${result.plan.sha256}`));
@@ -183,6 +186,40 @@ test('a fixed plan checks every case count and preserves its exact-file fingerpr
     const reformatted = path.join(path.dirname(planFile), 'reformatted.json');
     fs.writeFileSync(reformatted, JSON.stringify(planFixture, null, 2));
     assert.notEqual(analyzeTrialFiles([rated], {planFile: reformatted}).plan.sha256, result.plan.sha256);
+  });
+});
+
+test('planned case sensitivity exposes a dominant prompt without changing the primary outcome', () => {
+  inTempDir(({write}) => {
+    const frequent = modernTrial(['favorite color teal'], 'My favorite color is not teal.', 'A');
+    const control = modernTrial(['always'], 'never', 'B');
+    const tie = modernTrial(['amber comet'], 'violet river', 'tie');
+    const plan = structuredClone(modernPlanFixture);
+    plan.cases = [
+      {id: 'frequent', context: frequent.context, prompt: frequent.prompt, ratings: 8},
+      {id: 'control', context: control.context, prompt: control.prompt, ratings: 1},
+      {id: 'tie', context: tie.context, prompt: tie.prompt, ratings: 1}
+    ];
+    const planFile = write('plan.json', plan);
+    const files = [
+      ...Array.from({length: 8}, (_, index) => write(`frequent-${index}.json`, frequent)),
+      write('control.json', control), write('tie.json', tie)
+    ];
+    const result = analyzeTrialFiles(files, {planFile});
+    assert.equal(result.summary.history_win_fraction_all, 0.8);
+    assert.deepEqual(result.plan.sensitivity, {
+      equal_case_history_win_fraction_all: 1 / 3,
+      largest_case_rating_fraction: 0.8,
+      leave_one_case_out_equal_case_range: {min: 0, max: 0.5}
+    });
+    assert.equal(result.summary.identical_copies, 7);
+    assert.deepEqual(analyzeTrialFiles([...files].reverse(), {planFile}).plan.sensitivity,
+      result.plan.sensitivity);
+    assert.match(formatText(result), /Case-balance diagnostic .* history 33\.3%; largest case contributes 80\.0%/);
+    assert.match(formatText(result), /Leave-one-case-out equal-case range: 0\.0%–50\.0% \(descriptive, not a confidence interval\)/);
+    const command = spawnSync(process.execPath, [cli, '--json', '--plan', planFile, ...files], {encoding: 'utf8'});
+    assert.equal(command.status, 0, command.stderr);
+    assert.deepEqual(JSON.parse(command.stdout).plan.sensitivity, result.plan.sensitivity);
   });
 });
 
