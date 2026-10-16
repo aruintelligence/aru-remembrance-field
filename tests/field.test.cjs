@@ -2041,6 +2041,161 @@ async function auditSavedReceipts(app, reference, receipts, checkpoint = null) {
   return app.elements.get('audit-result');
 }
 
+async function traceSavedReferences(app, a, b, receipts, checkpointA = null, checkpointB = null) {
+  const document = app.context.document;
+  document.getElementById('transition-reference-a').files = [auditFile(a, 'a.json')];
+  document.getElementById('transition-checkpoint-a').files = checkpointA === null ? [] :
+    [auditFile(checkpointA, 'checkpoint-a.json')];
+  document.getElementById('reference-file').files = [auditFile(b, 'b.json')];
+  document.getElementById('checkpoint-file').files = checkpointB === null ? [] :
+    [auditFile(checkpointB, 'checkpoint-b.json')];
+  document.getElementById('audit-receipts').files = receipts;
+  vm.runInContext('invalidateReferenceComparison()', app.context);
+  await vm.runInContext('traceReferenceTransition()', app.context);
+  return app.elements.get('reference-transition-result');
+}
+
+test('two-reference lens traces an omitted conflict, full-snapshot change, and unreadable receipt privately', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const a = fixture('example-evidence-reference-baseline.json');
+  const checkpoint = fixture('example-evidence-ledger-checkpoint.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const full = fixture('example-evidence-receipt.json');
+  const b = JSON.parse(a);
+  b.records.push({...b.records[0], id: 2, value: 'secret <img onerror=alert(1)>', time: 1700000000001});
+  b.next_source_id = 3;
+  const app = boot();
+  app.fact('private note', 'never reveal');
+  const saved = JSON.stringify([...app.saved]);
+  const output = await traceSavedReferences(app, a, JSON.stringify(b),
+    [auditFile(excerpt), auditFile(full), auditFile('{')], checkpoint);
+  assert.match(output.children[0].textContent, /3 receipts traced: 2 verdict changes, 0 unchanged, 1 could not replay.*A checkpoint matches; B checkpoint not supplied/);
+  assert.match(output.children[2].children.map(item => item.textContent).join(' '), /Source #2 was added to B.*next source ID changed/);
+  const cards = output.children[3].children;
+  assert.deepEqual(cards.map(card => card.children[1].textContent),
+    ['A: MATCH → B: DIFFER', 'A: MATCH → B: DIFFER', 'A: FAIL → B: FAIL']);
+  assert.match(cards[0].children[2].textContent, /kind: known → conflict.*source IDs: #1 → #1, #2/);
+  assert.match(cards[1].children[2].textContent, /full receipt requires an exact ordered snapshot/);
+  assert.match(cards[2].children[2].textContent, /not valid JSON.*No reference verdict/);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+  const allText = element => [element.textContent, ...(element.children || []).flatMap(allText)];
+  assert.doesNotMatch(allText(output).join(' '),
+    /secret|never reveal|favorite color|<img|[0-9a-f]{64}/);
+});
+
+test('browser transitions agree with Node and independent Python on the same synthetic references', async () => {
+  const fixture = name => path.join(__dirname, '..', 'research', name);
+  const read = name => fs.readFileSync(fixture(name), 'utf8');
+  const aName = 'example-evidence-reference-baseline.json';
+  const bName = 'example-evidence-reference-conflict.json';
+  const receipts = ['example-evidence-excerpt.json', 'example-evidence-receipt.json'];
+  const checkpointName = 'example-evidence-ledger-checkpoint.json';
+  const output = await traceSavedReferences(boot(), read(aName), read(bName),
+    receipts.map(name => auditFile(read(name))), read(checkpointName));
+  assert.deepEqual(output.children[3].children.map(card => card.children[1].textContent),
+    ['A: MATCH → B: DIFFER', 'A: MATCH → B: DIFFER']);
+  for (const [runtime, executable] of [
+    ['node', process.execPath], ['python', 'python3']]) {
+    const script = path.join(__dirname, '..', 'tools', runtime === 'node' ?
+      'audit-evidence-batch.cjs' : 'independent-evidence-batch.py');
+    const selected = receipts.map(fixture);
+    const before = spawnSync(executable, [script, fixture(aName), ...selected,
+      '--checkpoint', fixture(checkpointName)], {encoding: 'utf8'});
+    const after = spawnSync(executable, [script, fixture(bName), ...selected], {encoding: 'utf8'});
+    assert.equal(before.status, 0, `${runtime}: ${before.stderr}`);
+    assert.match(before.stdout, /2 MATCH, 0 DIFFER, 0 FAIL/);
+    assert.equal(after.status, 1, `${runtime}: ${after.stderr}`);
+    assert.match(after.stdout, /0 MATCH, 2 DIFFER, 0 FAIL/);
+  }
+});
+
+test('lens can show DIFFER to MATCH and leave an excerpt MATCH when only an unrelated source changes', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const a = fixture('example-evidence-reference-baseline.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const full = fixture('example-evidence-receipt.json');
+  const changed = JSON.parse(a);
+  changed.records[0].value = 'amber';
+  const newExcerpt = JSON.parse(excerpt);
+  newExcerpt.records[0].value = 'amber';
+  newExcerpt.answer.value = 'amber';
+  const app = boot();
+  let output = await traceSavedReferences(app, a, JSON.stringify(changed), [auditFile(JSON.stringify(newExcerpt))]);
+  assert.match(output.children[0].textContent, /1 verdict change/);
+  assert.match(output.children[2].children[0].textContent, /Source #1 changed value/);
+  assert.equal(output.children[3].children[0].children[1].textContent, 'A: DIFFER → B: MATCH');
+  assert.match(output.children[3].children[0].children[2].textContent, /value changed \(values hidden\)/);
+
+  const unrelated = JSON.parse(a);
+  unrelated.records.push({id: 2, key: 'private', value: 'hidden', time: 1700000000001,
+    status: 'active', imported: false});
+  unrelated.next_source_id = 3;
+  output = await traceSavedReferences(app, a, JSON.stringify(unrelated),
+    [auditFile(excerpt), auditFile(full)]);
+  assert.match(output.children[0].textContent, /1 verdict change, 1 unchanged/);
+  assert.equal(output.children[3].children[0].children[1].textContent, 'A: MATCH → B: MATCH');
+  assert.equal(output.children[3].children[1].children[1].textContent, 'A: MATCH → B: DIFFER');
+  assert.match(output.children[3].children[0].children[2].textContent, /computed answer and cited sources agree/);
+
+  const nextOnly = {...JSON.parse(a), next_source_id: 8};
+  output = await traceSavedReferences(app, a, JSON.stringify(nextOnly), [auditFile(full)]);
+  assert.match(output.children[2].children[0].textContent, /next source ID changed/);
+  assert.equal(output.children[3].children[0].children[1].textContent, 'A: MATCH → B: MATCH');
+  assert.doesNotMatch(output.children[3].children[0].children[2].textContent, /snapshot.*changed/);
+});
+
+test('a mismatched checkpoint stops the lens before reading receipts', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const a = fixture('example-evidence-reference-baseline.json');
+  const checkpoint = JSON.parse(fixture('example-evidence-ledger-checkpoint.json'));
+  const unread = {name: 'unread.json', size: 1, arrayBuffer: async () => {
+    throw new Error('Receipt should not be opened');
+  }};
+  const app = boot();
+  const output = await traceSavedReferences(app, a, a, [unread],
+    JSON.stringify({...checkpoint, sha256: '0'.repeat(64)}));
+  assert.match(output.textContent, /DIFFER: Reference A differs from its selected checkpoint.*No receipts were traced/);
+  assert.equal(output.children.length, 0);
+  await traceSavedReferences(app, a, '{', [unread]);
+  assert.match(output.textContent, /FAIL: Reference B is not valid JSON/);
+  assert.equal(output.children.length, 0);
+  await traceSavedReferences(app, a, a, [unread], null,
+    JSON.stringify({...checkpoint, sha256: '0'.repeat(64)}));
+  assert.match(output.textContent, /DIFFER: Reference B differs from its selected checkpoint.*No receipts were traced/);
+  assert.equal(output.children.length, 0);
+  await traceSavedReferences(app, a, a, Array(5).fill({name: 'large.json', size: 900000,
+    arrayBuffer: async () => { throw new Error('Receipt should not be opened'); }}));
+  assert.match(output.textContent, /FAIL: Selected receipts exceed the 4 MiB combined limit/);
+  assert.equal(output.children.length, 0);
+});
+
+test('a slower reference read cannot restore stale trace results after a new selection', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const a = fixture('example-evidence-reference-baseline.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const app = boot();
+  const document = app.context.document;
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  document.getElementById('transition-reference-a').files = [{name: 'slow.json', size: Buffer.byteLength(a),
+    arrayBuffer: async () => { await waiting; return auditFile(a).arrayBuffer(); }}];
+  document.getElementById('transition-checkpoint-a').files = [];
+  document.getElementById('reference-file').files = [auditFile(a)];
+  document.getElementById('checkpoint-file').files = [];
+  document.getElementById('audit-receipts').files = [auditFile(excerpt)];
+  const tracing = vm.runInContext('traceReferenceTransition()', app.context);
+  await new Promise(resolve => setImmediate(resolve));
+  document.getElementById('transition-reference-a').files = [auditFile('{')];
+  vm.runInContext('invalidateReferenceTransition()', app.context);
+  release();
+  await tracing;
+  const output = app.elements.get('reference-transition-result');
+  assert.match(output.textContent, /File selection changed/);
+  assert.equal(output.children.length, 0);
+  await vm.runInContext('traceReferenceTransition()', app.context);
+  assert.match(output.textContent, /FAIL: Reference A is not valid JSON/);
+});
+
 test('batch audit checks each receipt against one saved reference and flags repeated text', async () => {
   const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
   const excerpt = fixture('example-evidence-excerpt.json');

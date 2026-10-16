@@ -53,6 +53,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A command-line batch audit report that binds the ordered files and verifier bytes with SHA-256 and can be recomputed against the originals
 - An independent Python batch checker that replays saved answer receipts and browser captures without importing the JavaScript answer model
 - A deterministic offline verifier kit that can preserve the exact browser script and both batch checkers for later local replay, without packing the selected evidence files
+- A local reference transition lens that replays one receipt set against two ledgers and traces changed verdicts to source IDs, field changes, computed answer kinds, and citations without showing fact values
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -186,6 +187,8 @@ To inspect a shared answer without installing Node.js, open **Verify a shared an
 
 To review several shared answers, select the saved reference and optional prior checkpoint in that same panel, then choose **Answer receipt JSON files** and **Audit selected receipts**. The browser checks each selected question, excerpt, or brief independently against the one reference and reports `MATCH`, `DIFFER`, or `FAIL` per file. It flags exact byte repeats; a repeated file is not independent evidence. The checkpoint must match the reference before any receipts are audited. The audit is local, read-only, and limited to 20 receipts, 1 MiB each, and 4 MiB combined. See the [batch audit protocol](research/evidence-batch-audit-protocol.md) for interpretation and limits.
 
+To understand a changed verdict, keep that selected reference as **B**, choose another reference as **A** in **Trace a verdict across two references**, and select the same receipts. The page recomputes each verdict under both ledgers and shows added, removed, edited, or reordered source IDs, changed field names, and answer kind/citation changes without printing private values. Optional A and B checkpoints must match their respective references before any receipt is traced. A and B are comparison labels, not verified dates; a stable verdict can still conceal changed records. Try the [synthetic conflict reference](research/example-evidence-reference-conflict.json) against the [baseline](research/example-evidence-reference-baseline.json) with the [transition guide](research/reference-transition-protocol.md). The view does not establish which ledger is authoritative or whether either is true.
+
 After a bounded audit, **Download audit capture** saves the selected files' SHA-256 hashes, ordered verdicts, duplicate indices, totals, and the exact inline browser script's SHA-256 without file names or fact values. Retain the original files in selection order, then replay the browser capture with the [command-line batch auditor](tools/audit-evidence-batch.cjs):
 
 ```bash
@@ -245,14 +248,10 @@ To move the ledger to another browser, select **Download evidence JSON**. On the
 Run the small regression suite with Node.js:
 
 ```bash
-node tests/field.test.cjs
-node tests/evidence-batch-audit.test.cjs
-node tests/benchmark.test.cjs
-node tests/falsifier.test.cjs
-node tests/blind-analyzer.test.cjs
+node --test tests/*.test.cjs
 ```
 
-These cover first and repeated input scoring, matched and unrelated memory controls, negative history effects, full-sequence controls, the four-control challenge and proof replay, blinded response assignment, rated report replay, fixed trial plans and batch counting, draft non-mutation, single-step proof detection, exact-name recall, constrained sourced questions and composer abstention, conflicts and resolution, portable ledger merging and rejection, reviewed corrections, correction-chain replay, compact packet privacy and local commitments, reviewed full-state restore and rollback, session-only non-persistence and restore blocking, full question receipts, privacy-scoped answer excerpts, reference-ledger omission detection and independently held checkpoint mismatch, safe text display, corrupted saved data, local data controls, benchmark failure modes, and falsifier sensitivity to faulty behavior.
+These cover score controls and proof replay, blind trials, sourced answers, corrections, reference and checkpoint comparison, batch captures, independent Python replay, offline kits, reference transition traces, state recovery, privacy boundaries, and synthetic falsification cases. CI also runs the fixed command-line fixtures and differential challenges.
 
 ## Research question
 
