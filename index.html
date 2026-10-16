@@ -148,6 +148,8 @@
       cursor: pointer;
     }
     .motion-toggle:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
+    .demo-launch { display: inline-block; margin-top: 0.65rem; min-height: 44px; padding: 0.5rem 0.9rem; border-radius: 9999px; border: 1px solid #fbbf24; background: #3b2509; color: #fef3c7; font: 700 0.82rem 'Inter', sans-serif; cursor: pointer; }
+    .demo-launch:focus-visible { outline: 2px solid #67e8f9; outline-offset: 3px; }
 
     .response-area {
       flex: 1;
@@ -376,6 +378,7 @@
     <p>A visual simulation. Inspect exactly how each input changes its modeled state.</p>
     <button class="motion-toggle" id="motion-toggle" type="button" role="switch" aria-checked="true" onclick="toggleVisualMotion()">Visual motion: <span id="motion-state" aria-hidden="true">on</span></button>
     <button class="motion-toggle" id="session-toggle" type="button" role="switch" aria-checked="false" onclick="toggleSessionOnly()">Session-only: <span id="session-state" aria-hidden="true">off</span></button>
+    <button class="demo-launch" type="button" onclick="runEvidenceTrustLab()">Run the evidence challenge</button>
     <p id="session-mode" role="status" aria-live="polite"></p>
     <p id="ledger-sync-alert" role="alert" hidden></p>
   </div>
@@ -477,6 +480,13 @@
 
   <details class="ledger" id="receipt-verifier">
     <summary>Verify a shared answer receipt</summary>
+    <section class="evidence-question" id="evidence-trust-lab">
+      <h2>Evidence trust lab · five synthetic cases</h2>
+      <p>See where a self-consistent answer can still mislead. These fixed examples run through the same receipt, reference, and checkpoint checks as uploaded files. They do not use or change your personal ledger.</p>
+      <div class="ledger-actions"><button type="button" onclick="runEvidenceTrustLab()">Run five cases</button></div>
+      <div id="trust-lab-result" role="status" aria-live="polite">Run the challenge to see which checks catch an omitted conflict or a forged reference.</div>
+      <p>An earlier checkpoint matters only when kept independently. This lab tests software consistency under synthetic inputs, not whether any real-world statement is true.</p>
+    </section>
     <p>Choose a question, brief, correction, correction-chain, or compact correction packet JSON. This browser replays the supplied change; a compact packet is checked against this browser's own ledger. The file is read on this device and is not uploaded by this app.</p>
     <label for="receipt-file">Receipt JSON (up to 1 MiB)</label>
     <input id="receipt-file" type="file" accept=".json,application/json" onchange="verifyEvidenceFile()">
@@ -2065,6 +2075,18 @@ function validateEvidenceReference(baseline) {
   }
 }
 
+function validateEvidenceCheckpoint(checkpoint) {
+  const fields = ["format", "version", "encoding", "sha256"];
+  if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint) ||
+      Object.keys(checkpoint).length !== fields.length ||
+      !fields.every(key => Object.prototype.hasOwnProperty.call(checkpoint, key)) ||
+      checkpoint.format !== "aru-evidence-ledger-checkpoint" || checkpoint.version !== 1 ||
+      checkpoint.encoding !== "aru-evidence-ledger-checkpoint-1" ||
+      typeof checkpoint.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(checkpoint.sha256)) {
+    throw new Error("Unsupported checkpoint format, encoding, or digest.");
+  }
+}
+
 function compareEvidenceToReference(receipt, records) {
   if (receipt.format === "aru-evidence-answer-excerpt") {
     const expected = evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, records));
@@ -2081,6 +2103,97 @@ function compareEvidenceToReference(receipt, records) {
     return {match: false, detail: "The supplied full snapshot differs from the reference ledger."};
   }
   return {match: true, detail: `All ${records.length} supplied records exactly match the reference ledger.`};
+}
+
+let trustLabRequest = 0;
+async function runEvidenceTrustLab() {
+  const request = ++trustLabRequest;
+  const panel = document.getElementById("evidence-trust-lab");
+  const output = document.getElementById("trust-lab-result");
+  document.getElementById("receipt-verifier").open = true;
+  panel.scrollIntoView?.({behavior: "smooth", block: "nearest"});
+  output.textContent = "Running the synthetic checks on this device…";
+  try {
+    const first = {id: 1, key: "favorite color", value: "teal", time: 1700000000000,
+      status: "active", imported: false};
+    const changed = {...first, value: "amber"};
+    const conflict = {...first, id: 2, value: "amber", time: first.time + 1};
+    const historical = {...conflict, status: "superseded"};
+    const baseline = records => ({format: "aru-evidence-ledger-baseline", version: 1,
+      records, next_source_id: Math.max(1, ...records.map(record => record.id + 1))});
+    const receipt = records => ({format: "aru-evidence-answer-excerpt", version: 1,
+      model_revision: "aru-evidence-questions-1", scope: "cited-assertions-only",
+      question: "What is my favorite color?", records,
+      answer: evidenceAnswerSummary(resolveEvidenceQuestion("What is my favorite color?", records))});
+    const honest = baseline([first]);
+    const conflicted = baseline([first, conflict]);
+    const forged = baseline([changed]);
+    const withHistory = baseline([first, historical]);
+    const [honestDigest, conflictDigest, historyDigest] = await Promise.all([
+      ledgerCheckpointSHA256(honest.records, honest.next_source_id),
+      ledgerCheckpointSHA256(conflicted.records, conflicted.next_source_id),
+      ledgerCheckpointSHA256(withHistory.records, withHistory.next_source_id)]);
+    if (request !== trustLabRequest) return;
+    const checkpoint = sha256 => ({format: "aru-evidence-ledger-checkpoint", version: 1,
+      encoding: "aru-evidence-ledger-checkpoint-1", sha256});
+    const alteredAnswer = receipt([first]);
+    alteredAnswer.answer = {...alteredAnswer.answer, value: "purple"};
+    const cases = [
+      {name: "Original answer", receipt: receipt([first]), reference: honest,
+        checkpoint: checkpoint(honestDigest), expected: [true, true, true]},
+      {name: "Omitted current conflict", receipt: receipt([first]), reference: conflicted,
+        checkpoint: checkpoint(conflictDigest), expected: [true, false, true]},
+      {name: "Receipt and reference changed together", receipt: receipt([changed]), reference: forged,
+        checkpoint: checkpoint(honestDigest), expected: [true, true, false]},
+      {name: "Older superseded assertion", receipt: receipt([first]), reference: withHistory,
+        checkpoint: checkpoint(historyDigest), expected: [true, true, true]},
+      {name: "Answer edited without its source", receipt: alteredAnswer, reference: honest,
+        checkpoint: checkpoint(honestDigest), expected: [false, null, true]}
+    ];
+    const observed = [];
+    for (const item of cases) {
+      let replay = false;
+      try { verifyEvidenceBundle(item.receipt); replay = true; } catch (_) { /* Rejected by replay. */ }
+      validateEvidenceReference(item.reference);
+      validateEvidenceCheckpoint(item.checkpoint);
+      const reference = replay ? compareEvidenceToReference(item.receipt, item.reference.records).match : null;
+      const checkpoint = item.checkpoint.sha256 === await ledgerCheckpointSHA256(
+        item.reference.records, item.reference.next_source_id);
+      if (request !== trustLabRequest) return;
+      observed.push({name: item.name, replay, reference, checkpoint,
+        expected: item.expected, accepted: replay && reference && checkpoint});
+    }
+    const expectedCount = observed.filter(item =>
+      [item.replay, item.reference, item.checkpoint].every((value, index) => value === item.expected[index])).length;
+    const heading = document.createElement("p");
+    heading.textContent = `${expectedCount}/${observed.length} fixed scenarios behaved as predicted. Each column was computed from the actual verifier rules.`;
+    const scroller = document.createElement("div");
+    scroller.className = "trajectory-scroll";
+    const table = document.createElement("table");
+    const head = document.createElement("thead");
+    const header = document.createElement("tr");
+    for (const name of ["Scenario", "Receipt replay", "Reference", "Earlier checkpoint", "Decision"]) {
+      const cell = document.createElement("th"); cell.textContent = name; header.appendChild(cell);
+    }
+    head.appendChild(header); table.appendChild(head);
+    const body = document.createElement("tbody");
+    for (const item of observed) {
+      const row = document.createElement("tr");
+      for (const value of [item.name, item.replay ? "PASS" : "FAIL",
+        item.reference === null ? "SKIP" : item.reference ? "MATCH" : "DIFFER",
+        item.checkpoint ? "MATCH" : "DIFFER",
+        item.accepted ? "ACCEPT" : "REJECT"]) {
+        const cell = document.createElement("td"); cell.textContent = value; row.appendChild(cell);
+      }
+      body.appendChild(row);
+    }
+    table.appendChild(body); scroller.appendChild(table);
+    output.replaceChildren();
+    output.appendChild(heading);
+    output.appendChild(scroller);
+  } catch (error) {
+    if (request === trustLabRequest) output.textContent = `Could not run the challenge: ${error.message || "unknown error"}`;
+  }
 }
 
 async function compareVerifiedEvidenceToReference() {
@@ -2105,15 +2218,7 @@ async function compareVerifiedEvidenceToReference() {
     if (!stillCurrent()) return;
     validateEvidenceReference(baseline);
     if (checkpointFile) {
-      const fields = ["format", "version", "encoding", "sha256"];
-      if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint) ||
-          Object.keys(checkpoint).length !== fields.length ||
-          !fields.every(key => Object.prototype.hasOwnProperty.call(checkpoint, key)) ||
-          checkpoint.format !== "aru-evidence-ledger-checkpoint" || checkpoint.version !== 1 ||
-          checkpoint.encoding !== "aru-evidence-ledger-checkpoint-1" ||
-          typeof checkpoint.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(checkpoint.sha256)) {
-        throw new Error("Unsupported checkpoint format, encoding, or digest.");
-      }
+      validateEvidenceCheckpoint(checkpoint);
       const digest = await ledgerCheckpointSHA256(baseline.records, baseline.next_source_id);
       if (!stillCurrent()) return;
       if (checkpoint.sha256 !== digest) {

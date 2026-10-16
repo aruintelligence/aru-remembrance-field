@@ -45,12 +45,15 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - Composer actions for recording a `name: value` assertion and asking recorded facts with sources, without changing the simulation score
 - A browser-side verifier for shared answer receipts and excerpts, with no import or command-line setup
 - An optional reference-ledger comparison that detects omitted conflicts in an excerpt when the checker already holds the relevant sources
+- A one-click synthetic trust lab that contrasts internal replay, reference comparison, and earlier checkpoint matching across five controls
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
 ## Try it
 
 Open the [live demonstration](https://aruintelligence.github.io/aru-remembrance-field/).
+
+Select **Run the evidence challenge** near the top of the page to see five synthetic cases checked by the actual browser verifier. An answer can pass internal replay while an omitted conflict makes it differ from the reference. A receipt and reference changed together can match each other but differ from an earlier checkpoint. A superseded older assertion should still permit the same cited answer. The table shows all three checks and the resulting accept/reject decision. It uses no personal ledger data and does not write browser storage. See the [trust lab protocol](research/evidence-trust-lab-protocol.md) for the exact controls and limits.
 
 To run a local copy:
 

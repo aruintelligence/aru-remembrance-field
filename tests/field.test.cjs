@@ -2352,6 +2352,43 @@ test('a slow saved reference comparison cannot replace a newer selection or rece
   assert.match(app.elements.get('reference-receipt-comparison').textContent, /Verify a question, excerpt, or brief/);
 });
 
+test('the five-case trust lab computes replay, reference, and checkpoint outcomes without user data', async () => {
+  const app = boot();
+  app.fact('private note', 'do not use in demo');
+  const before = JSON.stringify([...app.saved]);
+  const records = JSON.stringify(app.field.claims);
+  await vm.runInContext('runEvidenceTrustLab()', app.context);
+  const output = app.elements.get('trust-lab-result');
+  assert.equal(app.elements.get('receipt-verifier').open, true);
+  assert.match(output.children[0].textContent, /5\/5 fixed scenarios behaved as predicted/);
+  const rows = output.children[1].children[0].children[1].children;
+  assert.deepEqual(rows.map(row => row.children.map(cell => cell.textContent)), [
+    ['Original answer', 'PASS', 'MATCH', 'MATCH', 'ACCEPT'],
+    ['Omitted current conflict', 'PASS', 'DIFFER', 'MATCH', 'REJECT'],
+    ['Receipt and reference changed together', 'PASS', 'MATCH', 'DIFFER', 'REJECT'],
+    ['Older superseded assertion', 'PASS', 'MATCH', 'MATCH', 'ACCEPT'],
+    ['Answer edited without its source', 'FAIL', 'SKIP', 'MATCH', 'REJECT']
+  ]);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  assert.equal(JSON.stringify(app.field.claims), records);
+  assert.doesNotMatch(JSON.stringify(rows.map(row => row.children.map(cell => cell.textContent))), /do not use in demo/);
+  await vm.runInContext('runEvidenceTrustLab()', app.context);
+  assert.equal(app.elements.get('trust-lab-result').children.length, 2, 'repeat runs replace rather than append results');
+});
+
+test('the trust lab flags a broken reference rule and handles unavailable hashing', async () => {
+  const faulty = boot();
+  vm.runInContext('compareEvidenceToReference = () => ({match: true, detail: "broken"})', faulty.context);
+  await vm.runInContext('runEvidenceTrustLab()', faulty.context);
+  assert.match(faulty.elements.get('trust-lab-result').children[0].textContent,
+    /4\/5 fixed scenarios behaved as predicted/);
+  const noCrypto = boot({}, {crypto: {}});
+  await vm.runInContext('runEvidenceTrustLab()', noCrypto.context);
+  assert.match(noCrypto.elements.get('trust-lab-result').textContent,
+    /Could not run the challenge: Secure browser hashing is unavailable/);
+  assert.equal(noCrypto.saved.size, 0);
+});
+
 test('local cross-check refuses a tab whose saved reference changed after file verification', async () => {
   const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
   const excerpt = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8');
