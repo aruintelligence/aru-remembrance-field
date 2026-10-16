@@ -464,7 +464,7 @@
 
   <details class="ledger" id="receipt-verifier">
     <summary>Verify a shared answer receipt</summary>
-    <p>Choose a question receipt, cited answer excerpt, or multi-fact brief receipt JSON. This browser recalculates the answer or brief from the records in that file. The file is read on this device; it is not imported into your ledger or uploaded by this app.</p>
+    <p>Choose a question, brief, or correction receipt JSON. This browser recalculates the answer or ledger change from the records in that file. The file is read on this device; it is not imported into your ledger or uploaded by this app.</p>
     <label for="receipt-file">Answer receipt JSON (up to 1 MiB)</label>
     <input id="receipt-file" type="file" accept=".json,application/json" onchange="verifyEvidenceFile()">
     <p id="receipt-verification" role="status" aria-live="polite">No receipt checked yet.</p>
@@ -499,14 +499,25 @@
       </div>
     </section>
     <label for="fact-key">Fact name</label>
-    <input id="fact-key" maxlength="120" autocomplete="off" placeholder="favorite color">
+    <input id="fact-key" maxlength="120" autocomplete="off" placeholder="favorite color" oninput="invalidateFactCorrection()">
     <label for="fact-value">What should be remembered?</label>
-    <textarea id="fact-value" maxlength="500" rows="2" placeholder="teal"></textarea>
+    <textarea id="fact-value" maxlength="500" rows="2" placeholder="teal" oninput="invalidateFactCorrection()"></textarea>
     <div class="ledger-actions">
       <button type="button" onclick="rememberFact()">Record fact</button>
       <button type="button" onclick="recallFact()">Recall by name</button>
     </div>
     <p id="ledger-result" role="status" aria-live="polite">No fact has been recalled yet.</p>
+    <section class="evidence-question">
+      <h2>Correct a current fact</h2>
+      <p>Use the fact name and new value above. Review the current sources and replacement before applying. The old assertions remain visible as superseded records.</p>
+      <div class="ledger-actions">
+        <button type="button" onclick="previewFactCorrection()">Preview correction</button>
+        <button type="button" id="correction-apply" onclick="applyFactCorrection()" disabled>Apply reviewed correction</button>
+        <button type="button" id="correction-download" onclick="downloadFactCorrection()" disabled>Download correction receipt JSON</button>
+      </div>
+      <div id="correction-preview" role="status" aria-live="polite"></div>
+      <p>Correction receipts contain the full ledger before and after the change, including unrelated facts. They check the recorded transition, not whether either assertion is true.</p>
+    </section>
     <div class="ledger-actions">
       <button type="button" onclick="downloadFactLedger()">Download evidence JSON</button>
     </div>
@@ -1237,6 +1248,8 @@ let pendingFactImport = null;
 let factImportRequest = 0;
 let lastEvidenceAnswer = null;
 let lastEvidenceBrief = null;
+let pendingFactCorrection = null;
+let lastFactCorrection = null;
 let composerEvidence = null;
 
 function lookupFact(key, claims = Field.claims) {
@@ -1301,6 +1314,29 @@ function validateBriefNames(names) {
 function evaluateEvidenceBrief(names, claims = Field.claims) {
   validateBriefNames(names);
   return names.map(name => ({name, answer: evidenceAnswerSummary(lookupFact(name, claims))}));
+}
+
+function computeEvidenceCorrection(name, value, records, id, at) {
+  if (typeof name !== "string" || !name.trim() || name !== name.trim().replace(/\s+/g, " ") || name.length > 120 ||
+      typeof value !== "string" || !value.trim() || value !== value.trim() || value.length > 500 ||
+      !Array.isArray(records) || records.length >= 100 ||
+      !Number.isSafeInteger(id) || id < 1 || id > 1e9 ||
+      !Number.isFinite(at) || at < 0 || at > 8.64e15) {
+    throw new Error("Invalid correction name, value, source ID, timestamp, or ledger size.");
+  }
+  const seen = new Set();
+  for (const record of records) {
+    if (!validFactClaim(record) || seen.has(record.id)) throw new Error("Invalid or duplicate prior source.");
+    seen.add(record.id);
+  }
+  if (records.some(record => record.id >= id)) throw new Error("New source ID must exceed every prior source ID.");
+  const target = normalizeFactKey(name);
+  const active = records.filter(record => normalizeFactKey(record.key) === target && record.status === "active");
+  if (!active.length) throw new Error("No current source exists for this name. Record a new fact instead.");
+  if (active.every(record => record.value === value)) throw new Error("That value is already current. No correction is needed.");
+  return [...records.map(record => normalizeFactKey(record.key) === target
+    ? {...record, status: "superseded"} : {...record}),
+    {id, key: name, value, time: at, status: "active", imported: false}];
 }
 
 function askEvidence() {
@@ -1436,6 +1472,7 @@ function invalidateEvidenceAnswer() {
   clearComposerEvidence();
   lastEvidenceAnswer = null;
   invalidateEvidenceBrief("The ledger changed. Build the brief again for current sources.");
+  invalidateFactCorrection("The ledger changed. Preview the correction again.");
   document.getElementById("evidence-receipt-download").disabled = true;
   document.getElementById("evidence-excerpt-download").disabled = true;
   document.getElementById("fact-answer").textContent = "The ledger changed. Ask again for a current sourced answer.";
@@ -1500,6 +1537,39 @@ function sameEvidenceAnswer(actual, computed) {
 
 function verifyEvidenceBundle(receipt) {
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new Error("Expected a receipt object.");
+  if (receipt.format === "aru-evidence-correction-receipt") {
+    const fields = ["format", "version", "model_revision", "name", "value", "new_source_id",
+      "applied_at", "before_records", "after_records"];
+    if (receipt.version !== 1 || receipt.model_revision !== "aru-evidence-corrections-1" ||
+        Object.keys(receipt).length !== fields.length ||
+        !fields.every(key => Object.prototype.hasOwnProperty.call(receipt, key)) ||
+        !Array.isArray(receipt.before_records) || !Array.isArray(receipt.after_records) ||
+        receipt.before_records.length >= 100 || receipt.after_records.length > 100) {
+      throw new Error("Unsupported correction format, revision, fields, or record count.");
+    }
+    const claimFields = new Set(["id", "key", "value", "time", "status", "imported"]);
+    const ids = new Set();
+    for (const record of receipt.before_records) {
+      if (!validFactClaim(record) || Object.keys(record).some(key => !claimFields.has(key)) ||
+          (record.imported !== undefined && typeof record.imported !== "boolean") || ids.has(record.id)) {
+        throw new Error("Invalid or duplicate prior source record.");
+      }
+      ids.add(record.id);
+    }
+    const computed = computeEvidenceCorrection(receipt.name, receipt.value, receipt.before_records,
+      receipt.new_source_id, receipt.applied_at);
+    if (receipt.after_records.length !== computed.length ||
+        !receipt.after_records.every((record, index) => record && typeof record === "object" &&
+          !Array.isArray(record) && Object.keys(record).length === Object.keys(computed[index]).length &&
+          Object.keys(computed[index]).every(key => Object.prototype.hasOwnProperty.call(record, key) &&
+            record[key] === computed[index][key]))) {
+      throw new Error("The corrected ledger does not match the supplied prior records.");
+    }
+    const superseded = receipt.before_records.filter(record =>
+      normalizeFactKey(record.key) === normalizeFactKey(receipt.name) && record.status === "active").length;
+    return {correction: {id: receipt.new_source_id, superseded},
+      recordCount: computed.length, scope: "full supplied snapshots"};
+  }
   if (receipt.format === "aru-evidence-brief-receipt") {
     const fields = ["format", "version", "model_revision", "names", "records", "results"];
     if (receipt.version !== 1 || receipt.model_revision !== "aru-evidence-briefs-1" ||
@@ -1576,6 +1646,10 @@ async function verifyEvidenceFile() {
     if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error("File exceeds the 1 MiB limit.");
     const receipt = JSON.parse(raw);
     const result = verifyEvidenceBundle(receipt);
+    if (result.correction) {
+      output.textContent = `PASS: correction source #${result.correction.id}; ${result.correction.superseded} prior current source${result.correction.superseded === 1 ? "" : "s"} superseded; ${result.recordCount} resulting records. Consistent with supplied before/after snapshots, not independently verified as true or authentic.`;
+      return;
+    }
     if (result.brief) {
       const known = result.brief.filter(item => item.answer.kind === "known").length;
       output.textContent = `PASS: ${result.brief.length} names; ${known} sourced answer${known === 1 ? "" : "s"}, ${result.brief.length - known} refusal${result.brief.length - known === 1 ? "" : "s"}; ${result.recordCount} supplied records; scope: ${result.scope}. Consistent with the supplied records, not independently verified as true or complete.`;
@@ -1758,6 +1832,85 @@ function prepareFact(rawKey, rawValue) {
     return {error: "The record counter has reached its limit. Export and erase local state to start a new ledger."};
   }
   return {id, key, value};
+}
+
+function invalidateFactCorrection(message = "Name or value changed. Preview the correction again.") {
+  if (!pendingFactCorrection && !lastFactCorrection) return;
+  pendingFactCorrection = null;
+  lastFactCorrection = null;
+  document.getElementById("correction-apply").disabled = true;
+  document.getElementById("correction-download").disabled = true;
+  document.getElementById("correction-preview").textContent = message;
+}
+
+function previewFactCorrection() {
+  invalidateFactCorrection();
+  const output = document.getElementById("correction-preview");
+  const rawKey = document.getElementById("fact-key").value;
+  const rawValue = document.getElementById("fact-value").value;
+  const prepared = prepareFact(rawKey, rawValue);
+  if (prepared.error) { output.textContent = prepared.error; return; }
+  try {
+    computeEvidenceCorrection(prepared.key, prepared.value, Field.claims, prepared.id, now());
+    const active = Field.claims.filter(record =>
+      normalizeFactKey(record.key) === normalizeFactKey(prepared.key) && record.status === "active");
+    output.replaceChildren();
+    const summary = document.createElement("p");
+    summary.textContent = `Review correction for “${prepared.key}”. The following ${active.length} current source${active.length === 1 ? "" : "s"} will become superseded; source #${prepared.id} will become current with value “${prepared.value}”.`;
+    output.appendChild(summary);
+    for (const record of active) {
+      const row = document.createElement("div");
+      row.className = "ledger-entry";
+      row.textContent = `Current source #${record.id}: ${record.value}${record.imported ? " (imported)" : ""}`;
+      output.appendChild(row);
+    }
+    pendingFactCorrection = {prepared, baseline: JSON.stringify([Field.claims, Field.claimCounter, rawKey, rawValue])};
+    document.getElementById("correction-apply").disabled = false;
+  } catch (error) {
+    output.textContent = error.message;
+  }
+}
+
+function applyFactCorrection() {
+  const plan = pendingFactCorrection;
+  if (!plan) return;
+  const rawKey = document.getElementById("fact-key").value;
+  const rawValue = document.getElementById("fact-value").value;
+  if (plan.baseline !== JSON.stringify([Field.claims, Field.claimCounter, rawKey, rawValue])) {
+    invalidateFactCorrection("Name, value, or ledger changed. Preview the correction again.");
+    return;
+  }
+  const before = JSON.parse(JSON.stringify(Field.claims));
+  const at = now();
+  let after;
+  try {
+    after = computeEvidenceCorrection(plan.prepared.key, plan.prepared.value, before, plan.prepared.id, at);
+  } catch (error) {
+    invalidateFactCorrection(error.message);
+    return;
+  }
+  invalidateFactImport();
+  Field.claims = after;
+  Field.claimCounter = plan.prepared.id + 1;
+  Field.save();
+  invalidateEvidenceAnswer();
+  lastFactCorrection = {format: "aru-evidence-correction-receipt", version: 1,
+    model_revision: "aru-evidence-corrections-1", name: plan.prepared.key,
+    value: plan.prepared.value, new_source_id: plan.prepared.id, applied_at: at,
+    before_records: before, after_records: after};
+  document.getElementById("correction-download").disabled = false;
+  document.getElementById("correction-preview").textContent = `Applied. Source #${plan.prepared.id} is current; ${before.filter(record => normalizeFactKey(record.key) === normalizeFactKey(plan.prepared.key) && record.status === "active").length} earlier current source(s) are superseded. Download the receipt before editing the ledger again.`;
+  renderLedger();
+  showFactResult(plan.prepared.key, `Corrected with source #${plan.prepared.id}. `);
+}
+
+function downloadFactCorrection() {
+  if (!lastFactCorrection) return;
+  if (JSON.stringify(Field.claims) !== JSON.stringify(lastFactCorrection.after_records)) {
+    invalidateFactCorrection("The ledger changed. The old correction receipt is no longer available.");
+    return;
+  }
+  downloadJSON(lastFactCorrection, "aru-evidence-correction-receipt.json");
 }
 
 function recordFact({id, key, value}) {

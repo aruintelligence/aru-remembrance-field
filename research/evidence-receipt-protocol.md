@@ -23,6 +23,8 @@ Both files contain the exact question, answer kind, any value and source IDs, an
 
 The same browser panel and CLI also replay `aru-evidence-brief-receipt` files with their ordered names, results, and complete supplied records. The [synthetic brief](example-evidence-brief.json) contains one sourced answer and three distinct refusals. It does not replace the privacy-limited cited answer excerpt for a single known fact.
 
+The [reviewed correction receipt](evidence-correction-protocol.md) supplies complete before and after ledgers. The verifier recomputes which same-name sources become superseded and checks that the new source is the only current one for that name. It can verify a recorded transition, but cannot establish that the prior ledger was complete or authentic.
+
 Changing the question clears the displayed answer and disables both exports. Recording, importing, selecting, or deleting a ledger entry also invalidates the old answer and exports. A refusal cannot produce a cited answer excerpt. The app keeps the snapshot in memory only until another question or edit; it does not add either file to local storage. Downloading is an explicit action.
 
 **Privacy:** An excerpt omits unrelated ledger facts but includes the question and cited values, which can still be sensitive. A full receipt may include sensitive facts unrelated to the question. Inspect either JSON before sharing it. Neither format is an evidence ledger import file.

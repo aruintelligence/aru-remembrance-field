@@ -761,6 +761,125 @@ test('exact-key evidence recall cites user sources and survives reload without c
   assert.equal(reloaded.field.claimCounter, 2);
 });
 
+test('reviewed correction preserves old sources, creates a current one, and replays its transition', async () => {
+  const app = boot();
+  app.fact('favorite color', 'teal');
+  app.fact('FAVORITE  COLOR', 'purple');
+  app.fact('unrelated note', 'private');
+  const key = app.context.document.getElementById('fact-key');
+  const value = app.context.document.getElementById('fact-value');
+  key.value = 'Favorite color';
+  value.value = '<img src=x onerror=alert(1)>';
+  const before = JSON.stringify([...app.saved]);
+  vm.runInContext('previewFactCorrection()', app.context);
+  const preview = app.elements.get('correction-preview');
+  assert.match(preview.children[0].textContent, /source #4.*<img src=x onerror=alert\(1\)>/);
+  assert.equal(preview.children[0].innerHTML, '');
+  assert.equal(preview.children.length, 3);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  assert.equal(app.elements.get('correction-apply').disabled, false);
+  vm.runInContext('applyFactCorrection()', app.context);
+  assert.deepEqual(Array.from(app.field.claims, record => record.status),
+    ['superseded', 'superseded', 'active', 'active']);
+  assert.equal(app.field.claims[3].value, '<img src=x onerror=alert(1)>');
+  assert.equal(app.field.claims[3].id, 4);
+  assert.match(app.elements.get('ledger-result').textContent, /Source #4/);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.messages.length, 0);
+  assert.equal(app.elements.get('correction-download').disabled, false);
+  vm.runInContext('downloadFactCorrection()', app.context);
+  const receipt = JSON.parse(await app.exports[0].text());
+  assert.equal(receipt.before_records.length, 3);
+  assert.equal(receipt.after_records.length, 4);
+  assert.equal(verifyEvidenceReceipt(receipt).superseded, 2);
+  const visitor = boot();
+  assert.match(await chooseReceiptFile(visitor, JSON.stringify(receipt)), /PASS: correction source #4; 2 prior current sources superseded/);
+  assert.equal(visitor.saved.size, 0);
+  assert.equal(visitor.field.claims.length, 0);
+  const reloaded = boot(Object.fromEntries(app.saved));
+  assert.equal(reloaded.field.claims[0].status, 'superseded');
+  assert.equal(reloaded.field.claims[3].status, 'active');
+  key.value = 'changed';
+  vm.runInContext('invalidateFactCorrection()', app.context);
+  vm.runInContext('downloadFactCorrection()', app.context);
+  assert.equal(app.exports.length, 1);
+  assert.equal(app.elements.get('correction-download').disabled, true);
+});
+
+test('correction preview refuses absent or unchanged facts and cannot apply after an edit', () => {
+  const app = boot();
+  const key = app.context.document.getElementById('fact-key');
+  const value = app.context.document.getElementById('fact-value');
+  key.value = 'city'; value.value = 'Portland';
+  vm.runInContext('previewFactCorrection()', app.context);
+  assert.match(app.elements.get('correction-preview').textContent, /No current source/);
+  assert.equal(vm.runInContext('pendingFactCorrection', app.context), null);
+  app.fact('city', 'Portland');
+  key.value = 'city'; value.value = 'Portland';
+  vm.runInContext('previewFactCorrection()', app.context);
+  assert.match(app.elements.get('correction-preview').textContent, /already current/);
+  value.value = 'Denver';
+  vm.runInContext('previewFactCorrection()', app.context);
+  const before = JSON.stringify(app.field.claims);
+  value.value = 'Rome';
+  vm.runInContext('applyFactCorrection()', app.context);
+  assert.equal(JSON.stringify(app.field.claims), before);
+  assert.equal(app.elements.get('correction-apply').disabled, true);
+  value.value = 'Denver';
+  vm.runInContext('previewFactCorrection()', app.context);
+  app.fact('unrelated', 'new');
+  assert.equal(app.elements.get('correction-apply').disabled, true);
+  vm.runInContext('applyFactCorrection()', app.context);
+  assert.equal(app.field.claims.length, 2);
+});
+
+test('reviewed correction respects session-only privacy and refuses a full ledger', async () => {
+  const app = boot();
+  app.fact('city', 'Portland');
+  const saved = JSON.stringify([...app.saved]);
+  vm.runInContext('toggleSessionOnly()', app.context);
+  const key = app.context.document.getElementById('fact-key');
+  const value = app.context.document.getElementById('fact-value');
+  key.value = 'city'; value.value = 'Denver';
+  vm.runInContext('previewFactCorrection(); applyFactCorrection(); downloadFactCorrection()', app.context);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+  assert.equal(verifyEvidenceReceipt(JSON.parse(await app.exports[0].text())).kind, 'correction');
+  const full = Array.from({length: 100}, (_, index) => ({id: index + 1,
+    key: index === 0 ? 'city' : `name ${index}`, value: 'Portland', time: 1700000000000,
+    status: 'active'}));
+  const capped = boot({aru_fact_claims: JSON.stringify(full), aru_fact_counter: '101'});
+  capped.context.document.getElementById('fact-key').value = 'city';
+  capped.context.document.getElementById('fact-value').value = 'Denver';
+  vm.runInContext('previewFactCorrection()', capped.context);
+  assert.match(capped.elements.get('correction-preview').textContent, /100-record limit/);
+  assert.equal(capped.field.claims.length, 100);
+});
+
+test('correction receipts reject tampering and show the completeness limit', async () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction.json'), 'utf8'));
+  assert.equal(verifyEvidenceReceipt(fixture).superseded, 2);
+  const browser = boot();
+  assert.match(await chooseReceiptFile(browser, JSON.stringify(fixture)), /PASS: correction source #5; 2 prior current sources superseded/);
+  const altered = structuredClone(fixture);
+  altered.after_records[0].status = 'active';
+  assert.throws(() => verifyEvidenceReceipt(altered), /corrected ledger does not match/);
+  assert.match(await chooseReceiptFile(browser, JSON.stringify(altered)), /FAIL: The corrected ledger does not match/);
+  const revisedSource = structuredClone(fixture);
+  revisedSource.after_records[4].value = 'violet';
+  assert.throws(() => verifyEvidenceReceipt(revisedSource), /corrected ledger does not match/);
+  const stale = structuredClone(fixture);
+  stale.new_source_id = 3;
+  assert.throws(() => verifyEvidenceReceipt(stale), /must exceed every prior source/);
+  const missing = structuredClone(fixture);
+  missing.before_records = missing.before_records.filter(record => record.id !== 3);
+  assert.throws(() => verifyEvidenceReceipt(missing), /corrected ledger does not match/);
+  const recomputed = structuredClone(missing);
+  recomputed.after_records = require('../tools/benchmark-evidence.cjs').loadModel().correct(
+    recomputed.name, recomputed.value, recomputed.before_records, recomputed.new_source_id, recomputed.applied_at);
+  assert.equal(verifyEvidenceReceipt(recomputed).kind, 'correction',
+    'a consistent receipt does not establish that all prior records were supplied');
+});
+
 test('evidence brief keeps sourced answers beside distinct refusals and exports a replayable snapshot', async () => {
   const app = boot();
   app.fact('favorite color', '<img src=x onerror=alert(1)>');
