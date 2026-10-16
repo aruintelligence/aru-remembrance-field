@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {spawnSync} = require('node:child_process');
 const { webcrypto } = require('node:crypto');
 const { verifyProof, loadEvaluator } = require('../tools/verify-proof.cjs');
 const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
@@ -2006,6 +2007,138 @@ async function chooseReceiptFile(app, text, size = Buffer.byteLength(text)) {
   await vm.runInContext('verifyEvidenceFile()', app.context);
   return app.elements.get('receipt-verification').textContent;
 }
+
+test('a reference ledger detects an omitted conflict that a self-consistent excerpt cannot', async () => {
+  const excerpt = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
+  const unrelated = {id: 2, key: 'unrelated note', value: 'private example', time: 1700000000001,
+    status: 'active', imported: false};
+  const local = boot({aru_fact_claims: JSON.stringify([...reference.records, unrelated]), aru_fact_counter: '3'});
+  const before = JSON.stringify([...local.saved]);
+  assert.match(await chooseReceiptFile(local, JSON.stringify(excerpt)), /PASS: known/);
+  assert.equal(local.elements.get('local-receipt-check').disabled, false);
+  vm.runInContext('compareVerifiedEvidenceToLocal()', local.context);
+  assert.match(local.elements.get('local-receipt-comparison').textContent, /MATCH: The answer and all 1 cited record/);
+  assert.equal(JSON.stringify([...local.saved]), before, 'the comparison is read-only');
+
+  const otherSource = {...unrelated, id: 3, key: 'favorite color', value: 'amber', time: 1700000000002};
+  local.fact(otherSource.key, otherSource.value);
+  assert.equal(verifyEvidenceReceipt(excerpt).kind, 'known', 'the excerpt still passes internal replay');
+  vm.runInContext('compareVerifiedEvidenceToLocal()', local.context);
+  assert.match(local.elements.get('local-receipt-comparison').textContent, /DIFFER: This browser gives a different answer/);
+  const conflicted = {...reference, records: [...reference.records, unrelated, otherSource], next_source_id: 4};
+  assert.throws(() => verifyEvidenceReceipt(excerpt, undefined, conflicted), /reference ledger gives a different answer/);
+  assert.equal(verifyEvidenceReceipt(excerpt, undefined, {...reference, records: [...reference.records, unrelated], next_source_id: 3}).reference_scope,
+    'answer-and-cited-records');
+});
+
+test('reference comparison checks cited record identity and exact full snapshots', async () => {
+  const excerpt = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  const full = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-receipt.json'), 'utf8'));
+  const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
+  const app = boot({aru_fact_claims: JSON.stringify(reference.records), aru_fact_counter: '2'});
+  assert.match(await chooseReceiptFile(app, JSON.stringify(full)), /PASS: known/);
+  vm.runInContext('compareVerifiedEvidenceToLocal()', app.context);
+  assert.match(app.elements.get('local-receipt-comparison').textContent, /MATCH: All 1 supplied records exactly match/);
+  assert.equal(verifyEvidenceReceipt(full, undefined, reference).reference_scope, 'exact-full-snapshot');
+
+  const changedTime = structuredClone(excerpt);
+  changedTime.records[0].time++;
+  assert.match(await chooseReceiptFile(app, JSON.stringify(changedTime)), /PASS: known/);
+  vm.runInContext('compareVerifiedEvidenceToLocal()', app.context);
+  assert.match(app.elements.get('local-receipt-comparison').textContent, /DIFFER: A cited source/);
+  assert.throws(() => verifyEvidenceReceipt(changedTime, undefined, reference), /cited source #1 differs/);
+
+  app.fact('unrelated', 'another value');
+  assert.match(await chooseReceiptFile(app, JSON.stringify(full)), /PASS: known/);
+  vm.runInContext('compareVerifiedEvidenceToLocal()', app.context);
+  assert.match(app.elements.get('local-receipt-comparison').textContent, /DIFFER: The supplied full snapshot/);
+  assert.throws(() => verifyEvidenceReceipt(full, undefined,
+    {...reference, records: app.field.claims, next_source_id: 3}), /supplied full snapshot differs/);
+  assert.throws(() => verifyEvidenceReceipt(full, undefined,
+    {...reference, next_source_id: 1}), /next source ID must exceed/);
+  assert.throws(() => verifyEvidenceReceipt(full, undefined,
+    {...reference, records: [...reference.records, {...reference.records[0]}], next_source_id: 2}),
+    /invalid or duplicate baseline source/);
+  assert.match(await chooseReceiptFile(app, '{}'), /FAIL: Unsupported format/);
+  assert.equal(app.elements.get('local-receipt-check').disabled, true);
+});
+
+test('reference comparison separates unrelated and historical records from omitted answer-changing records', async () => {
+  const excerpt = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  const source = {id: 2, key: 'favorite color', value: 'teal', time: 1700000000001,
+    status: 'active', imported: false};
+  const cases = [
+    {label: 'unrelated', record: {...source, key: 'unrelated'}, match: true},
+    {label: 'historical', record: {...source, value: 'amber', status: 'superseded'}, match: true},
+    {label: 'additional citation', record: source, match: false},
+    {label: 'conflict', record: {...source, value: 'amber'}, match: false},
+    {label: 'ambiguous name', record: {...source, key: 'my favorite color'}, match: false}
+  ];
+  for (const item of cases) {
+    const records = [excerpt.records[0], item.record];
+    const baseline = {format: 'aru-evidence-ledger-baseline', version: 1, records, next_source_id: 3};
+    const app = boot({aru_fact_claims: JSON.stringify(records), aru_fact_counter: '3'});
+    assert.match(await chooseReceiptFile(app, JSON.stringify(excerpt)), /PASS: known/, item.label);
+    vm.runInContext('compareVerifiedEvidenceToLocal()', app.context);
+    assert.match(app.elements.get('local-receipt-comparison').textContent,
+      item.match ? /^MATCH:/ : /^DIFFER:/, item.label);
+    if (item.match) assert.equal(verifyEvidenceReceipt(excerpt, undefined, baseline).reference_match, true, item.label);
+    else assert.throws(() => verifyEvidenceReceipt(excerpt, undefined, baseline), /different answer or citations/, item.label);
+  }
+});
+
+test('a verified brief cross-checks its whole ledger without changing local state', async () => {
+  const origin = boot();
+  origin.fact('color', 'teal');
+  origin.fact('city', 'Portland');
+  origin.context.document.getElementById('brief-names').value = 'color\ncity';
+  vm.runInContext('runEvidenceBrief(); downloadEvidenceBrief()', origin.context);
+  const receipt = JSON.parse(await origin.exports[0].text());
+  const copy = boot(Object.fromEntries(origin.saved));
+  const before = JSON.stringify([...copy.saved]);
+  assert.match(await chooseReceiptFile(copy, JSON.stringify(receipt)), /PASS: 2 names/);
+  vm.runInContext('compareVerifiedEvidenceToLocal()', copy.context);
+  assert.match(copy.elements.get('local-receipt-comparison').textContent, /MATCH: All 2 supplied records/);
+  assert.equal(JSON.stringify([...copy.saved]), before);
+  const baseline = {format: 'aru-evidence-ledger-baseline', version: 1,
+    records: receipt.records, next_source_id: 3};
+  assert.equal(verifyEvidenceReceipt(receipt, undefined, baseline).reference_match, true);
+  copy.fact('new fact', 'value');
+  vm.runInContext('compareVerifiedEvidenceToLocal()', copy.context);
+  assert.match(copy.elements.get('local-receipt-comparison').textContent, /DIFFER: The supplied full snapshot/);
+});
+
+test('the CLI accepts a matching reference and rejects an omitted local conflict', () => {
+  const tool = path.join(__dirname, '..', 'tools', 'verify-evidence-receipt.cjs');
+  const excerpt = path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json');
+  const matching = path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json');
+  const conflicted = path.join(__dirname, '..', 'research', 'example-evidence-ledger-baseline.json');
+  const pass = spawnSync(process.execPath, [tool, excerpt, matching], {encoding: 'utf8'});
+  assert.equal(pass.status, 0);
+  assert.match(pass.stdout, /MATCH: known.*reference answer-and-cited-records/);
+  const fail = spawnSync(process.execPath, [tool, excerpt, conflicted], {encoding: 'utf8'});
+  assert.equal(fail.status, 1);
+  assert.match(fail.stderr, /reference ledger gives a different answer or citations/);
+});
+
+test('local cross-check refuses a tab whose saved reference changed after file verification', async () => {
+  const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
+  const excerpt = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8');
+  const app = boot({aru_fact_claims: JSON.stringify(reference.records), aru_fact_counter: '2'});
+  assert.match(await chooseReceiptFile(app, excerpt), /PASS: known/);
+  app.saved.set('aru_fact_ledger_v1', JSON.stringify({version: 1,
+    claims: [...reference.records, {id: 2, key: 'favorite color', value: 'amber',
+      time: 1700000000001, status: 'active', imported: false}], next_source_id: 3}));
+  vm.runInContext('compareVerifiedEvidenceToLocal()', app.context);
+  assert.match(app.elements.get('local-receipt-comparison').textContent, /saved ledger is unreadable or changed/);
+  assert.match(app.elements.get('ledger-sync-alert').textContent, /Saved evidence changed/);
+  assert.equal(boot(Object.fromEntries(app.saved)).field.claims.length, 2);
+
+  const correction = applicableCorrectionFixture();
+  assert.match(await chooseReceiptFile(app, JSON.stringify(correction)), /PASS: correction/);
+  assert.equal(app.elements.get('local-receipt-check').disabled, true);
+});
 
 test('browser checks shared full receipts and excerpts without importing or saving them', async () => {
   const app = boot({unrelated_key: 'keep'});

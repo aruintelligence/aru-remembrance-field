@@ -482,6 +482,11 @@
     <input id="receipt-file" type="file" accept=".json,application/json" onchange="verifyEvidenceFile()">
     <p id="receipt-verification" role="status" aria-live="polite">No receipt checked yet.</p>
     <div class="ledger-actions">
+      <button type="button" id="local-receipt-check" onclick="compareVerifiedEvidenceToLocal()" disabled>Compare with this browser's ledger</button>
+    </div>
+    <p id="local-receipt-comparison" role="status" aria-live="polite">Verify a question, excerpt, or brief before comparing it with this browser's evidence.</p>
+    <p>A full receipt or brief must match this browser's entire ordered ledger. An excerpt can match its answer and cited records while unrelated local entries remain private. A matching local copy still cannot establish who recorded the assertions or whether they are true.</p>
+    <div class="ledger-actions">
       <button type="button" id="incoming-correction-preview-button" onclick="previewIncomingCorrection()" disabled>Preview applying correction here</button>
       <button type="button" id="incoming-correction-apply" onclick="applyIncomingCorrection()" disabled>Apply reviewed receipt here</button>
     </div>
@@ -1358,6 +1363,9 @@ function renderInspector() {
   alert.hidden = !ledgerStale && !initialLedger?.invalid;
   alert.textContent = ledgerStale ? STALE_LEDGER_NOTICE
     : initialLedger?.invalid ? "Saved evidence is unreadable. Open the inspector to download its raw data or restore a known-good backup." : "";
+  if (ledgerStale && verifiedEvidenceForCrossCheck) {
+    document.getElementById("local-receipt-comparison").textContent = "The saved ledger changed. Reload before comparing this receipt again.";
+  }
   document.getElementById("storage-status").textContent = !sessionOnly && ledgerStale
     ? STALE_LEDGER_NOTICE
     : initialLedger?.invalid
@@ -1612,6 +1620,9 @@ function invalidateEvidenceAnswer() {
   document.getElementById("evidence-receipt-download").disabled = true;
   document.getElementById("evidence-excerpt-download").disabled = true;
   document.getElementById("fact-answer").textContent = "The ledger changed. Ask again for a current sourced answer.";
+  if (verifiedEvidenceForCrossCheck) {
+    document.getElementById("local-receipt-comparison").textContent = "This browser's ledger changed. Run the comparison again.";
+  }
 }
 
 function invalidateEvidenceQuestion() {
@@ -1797,6 +1808,7 @@ function verifyEvidenceBundle(receipt) {
 let receiptVerificationRequest = 0;
 let verifiedIncomingCorrection = null;
 let pendingIncomingCorrection = null;
+let verifiedEvidenceForCrossCheck = null;
 let chainBuildRequest = 0;
 let lastCorrectionChain = null;
 let lastCorrectionPacket = null;
@@ -1891,6 +1903,9 @@ async function replayCorrectionPacket(packet, records, counter) {
 
 async function verifyEvidenceFile() {
   const request = ++receiptVerificationRequest;
+  verifiedEvidenceForCrossCheck = null;
+  document.getElementById("local-receipt-check").disabled = true;
+  document.getElementById("local-receipt-comparison").textContent = "Verify a question, excerpt, or brief before comparing it with this browser's evidence.";
   invalidateIncomingCorrection("Choose a verified correction receipt to preview its local application.");
   document.getElementById("incoming-correction-preview-button").disabled = true;
   document.getElementById("incoming-correction-apply").disabled = true;
@@ -1931,11 +1946,15 @@ async function verifyEvidenceFile() {
       return;
     }
     if (result.brief) {
+      verifiedEvidenceForCrossCheck = receipt;
+      document.getElementById("local-receipt-check").disabled = false;
       const known = result.brief.filter(item => item.answer.kind === "known").length;
       output.textContent = `PASS: ${result.brief.length} names; ${known} sourced answer${known === 1 ? "" : "s"}, ${result.brief.length - known} refusal${result.brief.length - known === 1 ? "" : "s"}; ${result.recordCount} supplied records; scope: ${result.scope}. Consistent with the supplied records, not independently verified as true or complete.`;
       return;
     }
     const answer = result.answer;
+    verifiedEvidenceForCrossCheck = receipt;
+    document.getElementById("local-receipt-check").disabled = false;
     const sources = answer.sources?.length ? answer.sources.map(id => `#${id}`).join(", ") : "none";
     const finding = answer.kind === "known" ? `Recorded answer: “${answer.value}”.` : `No answer (${answer.kind}).`;
     output.textContent = `PASS: ${answer.kind}; ${result.recordCount} supplied records; source IDs: ${sources}; scope: ${result.scope}. Question: “${receipt.question}”. ${finding} Consistent with the supplied records, not independently verified as true.`;
@@ -1944,6 +1963,37 @@ async function verifyEvidenceFile() {
       output.textContent = `FAIL: ${error instanceof SyntaxError ? "File is not valid JSON." : error.message || "Could not check the receipt."}`;
     }
   }
+}
+
+function compareVerifiedEvidenceToLocal() {
+  const output = document.getElementById("local-receipt-comparison");
+  const receipt = verifiedEvidenceForCrossCheck;
+  if (!receipt) { output.textContent = "Verify a question, excerpt, or brief first."; return; }
+  if (initialLedger?.invalid || ledgerStale || !ledgerStillCurrent()) {
+    output.textContent = "This browser's saved ledger is unreadable or changed. Reload or restore it before comparing.";
+    return;
+  }
+  if (receipt.format === "aru-evidence-answer-excerpt") {
+    const localAnswer = evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, Field.claims));
+    if (!sameEvidenceAnswer(receipt.answer, localAnswer)) {
+      output.textContent = "DIFFER: This browser gives a different answer or source list. The excerpt may omit a conflicting or additional source.";
+      return;
+    }
+    if (receipt.records.some(record => {
+      const local = Field.claims.find(item => item.id === record.id);
+      return !local || !sameFactLedger([record], [local]);
+    })) {
+      output.textContent = "DIFFER: A cited source is missing or has different fields in this browser's ledger.";
+      return;
+    }
+    output.textContent = `MATCH: The answer and all ${receipt.records.length} cited record${receipt.records.length === 1 ? "" : "s"} agree with this browser's current ledger. Unrelated records were not disclosed by the excerpt. This does not establish origin or factual truth.`;
+    return;
+  }
+  if (!sameFactLedger(receipt.records, Field.claims)) {
+    output.textContent = "DIFFER: The supplied full snapshot is not this browser's current ordered ledger.";
+    return;
+  }
+  output.textContent = `MATCH: All ${Field.claims.length} supplied records exactly match this browser's current ordered ledger. This does not establish origin or factual truth.`;
 }
 
 function invalidateBuiltChain() {

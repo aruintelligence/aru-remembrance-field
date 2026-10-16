@@ -159,13 +159,45 @@ function verifyBriefReceipt(receipt, model) {
     records: ids.size, scope: "full-supplied-snapshot", model_sha256: model.hash};
 }
 
+function compareWithReference(receipt, model, baseline, result) {
+  if (baseline === null) return result;
+  requireValid(baseline && typeof baseline === "object" && !Array.isArray(baseline) &&
+    Object.keys(baseline).length === 4 &&
+    ["format", "version", "records", "next_source_id"].every(key => Object.hasOwn(baseline, key)) &&
+    baseline.format === "aru-evidence-ledger-baseline" && baseline.version === 1 &&
+    Array.isArray(baseline.records) && Number.isSafeInteger(baseline.next_source_id) &&
+    baseline.next_source_id >= 1 && baseline.next_source_id <= 1e9 + 1,
+    "reference ledger baseline JSON with records and next_source_id required");
+  ledgerSHA256(baseline.records, model);
+  requireValid(baseline.records.every(record => record.id < baseline.next_source_id),
+    "reference next source ID must exceed every record ID");
+  if (receipt.format === "aru-evidence-answer-excerpt") {
+    const expected = model.resolve(receipt.question, baseline.records);
+    try { assert.deepStrictEqual(receipt.answer, expected); }
+    catch (_) { requireValid(false, "reference ledger gives a different answer or citations"); }
+    const referenceById = new Map(baseline.records.map(record => [record.id, record]));
+    for (const record of receipt.records) {
+      try { assert.deepStrictEqual(record, referenceById.get(record.id)); }
+      catch (_) { requireValid(false, `cited source #${record.id} differs from reference ledger`); }
+    }
+    return {...result, reference_match: true, reference_scope: "answer-and-cited-records"};
+  }
+  try { assert.deepStrictEqual(receipt.records, baseline.records); }
+  catch (_) { requireValid(false, "supplied full snapshot differs from reference ledger"); }
+  return {...result, reference_match: true, reference_scope: "exact-full-snapshot"};
+}
+
 function verifyEvidenceReceipt(receipt, model = loadModel(), baseline = null) {
   requireValid(receipt && typeof receipt === "object" && !Array.isArray(receipt), "object expected");
   if (receipt.format === "aru-evidence-correction-packet") return verifyCorrectionPacket(receipt, model, baseline);
-  requireValid(baseline === null, "baseline is only used with compact correction packets");
-  if (receipt.format === "aru-evidence-correction-chain") return verifyCorrectionChain(receipt, model);
-  if (receipt.format === "aru-evidence-correction-receipt") return verifyCorrectionReceipt(receipt, model);
-  if (receipt.format === "aru-evidence-brief-receipt") return verifyBriefReceipt(receipt, model);
+  if (receipt.format === "aru-evidence-correction-chain" || receipt.format === "aru-evidence-correction-receipt") {
+    requireValid(baseline === null, "reference baseline is for question and brief receipts, or compact correction packets");
+    return receipt.format === "aru-evidence-correction-chain"
+      ? verifyCorrectionChain(receipt, model) : verifyCorrectionReceipt(receipt, model);
+  }
+  if (receipt.format === "aru-evidence-brief-receipt") {
+    return compareWithReference(receipt, model, baseline, verifyBriefReceipt(receipt, model));
+  }
   const excerpt = receipt.format === "aru-evidence-answer-excerpt";
   const keys = ["format", "version", "model_revision", "question", "records", "answer",
     ...(excerpt ? ["scope"] : [])];
@@ -194,8 +226,9 @@ function verifyEvidenceReceipt(receipt, model = loadModel(), baseline = null) {
       receipt.records.every(record => computed.sources.includes(record.id)),
     "excerpt must contain exactly its cited active assertions");
   }
-  return { kind: computed.kind, sources: computed.sources || [], records: ids.size,
-    scope: excerpt ? "cited-assertions-only" : "full-supplied-snapshot", model_sha256: model.hash };
+  return compareWithReference(receipt, model, baseline,
+    { kind: computed.kind, sources: computed.sources || [], records: ids.size,
+      scope: excerpt ? "cited-assertions-only" : "full-supplied-snapshot", model_sha256: model.hash });
 }
 
 function readLimited(file) {
@@ -235,9 +268,9 @@ if (require.main === module) {
     } else if (result.kind === "correction") {
       console.log(`PASS: correction source #${result.new_source_id}; ${result.superseded} prior current source${result.superseded === 1 ? "" : "s"} superseded; ${result.records} resulting records; scope ${result.scope}`);
     } else if (result.kind === "brief") {
-      console.log(`PASS: ${result.names} names; ${result.known} sourced answer${result.known === 1 ? "" : "s"}; ${result.names - result.known} refusal${result.names - result.known === 1 ? "" : "s"}; ${result.records} supplied records; scope ${result.scope}`);
+      console.log(`${result.reference_match ? "MATCH" : "PASS"}: ${result.names} names; ${result.known} sourced answer${result.known === 1 ? "" : "s"}; ${result.names - result.known} refusal${result.names - result.known === 1 ? "" : "s"}; ${result.records} supplied records; scope ${result.scope}${result.reference_match ? `; reference ${result.reference_scope}` : ""}`);
     } else {
-      console.log(`PASS: ${result.kind}; ${result.records} supplied records; ${result.sources.length} cited sources; scope ${result.scope}`);
+      console.log(`${result.reference_match ? "MATCH" : "PASS"}: ${result.kind}; ${result.records} supplied records; ${result.sources.length} cited sources; scope ${result.scope}${result.reference_match ? `; reference ${result.reference_scope}` : ""}`);
     }
     console.log(`Local model SHA-256: ${result.model_sha256}`);
     console.log("This checks supplied records or the explicit matching baseline, not their origin or factual truth.");
