@@ -28,6 +28,19 @@ node tools/audit-evidence-batch.cjs research/example-evidence-reference-baseline
 
 The CLI recomputes hashes and outcomes using the same declared receipt rules and rejects any difference in the capture's structure, files, order, verdicts, duplicate indices, totals, or inline browser script bytes in the current checkout. The included [synthetic v2 capture](example-evidence-browser-batch-capture.json) is checked in CI. Older [v1 captures](example-evidence-browser-batch-capture-v1.json) still replay with an explicit message that they lack a browser script hash. The capture does not include CLI code hashes; create a separate CLI report below if you also need to pin verifier and auditor bytes. A successful `--check-capture` means the capture was reproduced, **even if it records `DIFFER` or `FAIL`**. Check its counts. The script hash is not a signature or timestamp and does not pin HTML, CSS, external scripts, or the browser runtime. This cross-runtime replay tests software consistency, not a separate implementation of the answer model.
 
+## Cross-check with an independently written Python auditor
+
+The [Python checker](../tools/independent-evidence-batch.py) separately implements the question, excerpt, brief, reference, and checkpoint rules instead of importing the JavaScript model. It reads the same ordered files, computes raw-byte SHA-256 and exact byte repeats, and produces a result without filenames or answer values. Python 3.12 and its standard library are sufficient:
+
+```bash
+python3 tools/independent-evidence-batch.py research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --check-capture research/example-evidence-browser-batch-capture.json
+python3 tools/independent-evidence-batch.py reference.json answer-1.json answer-2.json --json
+```
+
+Without `--check-capture`, the command exits nonzero for any `DIFFER` or `FAIL` while still writing the JSON report. With it, a successful exit means all recorded outcomes, byte hashes, totals, and the v2 inline browser script fingerprint were independently reproduced, even when a supplied receipt failed. A v1 capture can still be checked but has no script fingerprint. The Python report also identifies its own source bytes with `python_verifier_sha256`; retaining both the code and original input files is necessary for later reproduction.
+
+The automated cross-check covers a mixed batch with omissions, changed citations, invalid UTF-8, malformed JSON, unsupported formats, edited results, and exact versus differently spaced copies. It also runs 24 deterministic variations of source status, values, Unicode name normalization, and citations against both auditors. It checks agreement on these inputs; the two implementations follow the same hand-written specification and can share a mistaken rule. Canonical checkpoint examples use integer millisecond timestamps as the browser exports do. Captures and reports are unsigned and editable, and neither an independent implementation nor a matching digest establishes origin, completeness, or factual truth.
+
 ## Reproduce a batch with the command-line auditor
 
 The [batch auditor](../tools/audit-evidence-batch.cjs) independently reads the ordered input files from disk and replays the existing receipt verifier against one reference. It rejects malformed reference/checkpoint files before opening receipts, requires regular files of at most 1 MiB, 1–20 receipts, and no more than 4 MiB of receipt bytes combined. Receipt files that fit those bounds receive `MATCH`, `DIFFER`, or `FAIL`; a malformed, unsupported, or internally inconsistent receipt gets `FAIL`. A valid receipt that disagrees with the reference gets `DIFFER`. If supplied, a checkpoint must match the reference before any receipt is evaluated.

@@ -49,6 +49,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A bounded, local batch audit for up to 20 shared answer receipts against one saved reference and optional prior checkpoint, with per-file results and repeated-text flags
 - A browser download of the batch's file hashes and verdicts that can be replayed with the command-line auditor
 - A command-line batch audit report that binds the ordered files and verifier bytes with SHA-256 and can be recomputed against the originals
+- An independent Python batch checker that replays saved answer receipts and browser captures without importing the JavaScript answer model
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -189,6 +190,14 @@ node tools/audit-evidence-batch.cjs reference.json answer-1.json answer-2.json -
 ```
 
 The version 2 capture download requires secure browser hashing, access to the loaded inline script, and readable UTF-8 files within the limits. A reported `FAIL` for an oversized or unreadable file remains visible, but that batch has no downloadable capture. A successful replay checks the files, outcomes, and script bytes in the current checkout; review the counts because it can faithfully reproduce a failure. Older version 1 captures still replay, with an explicit message that they lack the script hash. The script hash is a code consistency check, not a signature, timestamp, or proof of factual truth.
+
+For a second implementation of the receipt and comparison rules, replay the same files with Python 3.12:
+
+```bash
+python3 tools/independent-evidence-batch.py reference.json answer-1.json answer-2.json --checkpoint earlier-checkpoint.json --check-capture aru-evidence-browser-batch-capture.json
+```
+
+This checker independently computes question and brief answers, checks exact source records and the optional checkpoint, and compares ordered verdicts and hashes with the browser capture. It has no third-party dependencies and does not upload the files. It prints `MATCH`, `DIFFER`, and `FAIL` for each supplied receipt; a matching capture can include recorded failures, so inspect the counts. The [batch audit protocol](research/evidence-batch-audit-protocol.md) describes its scope and the cross-implementation tests. Agreement between implementations does not authenticate the inputs or make a user assertion true.
 
 To preserve a batch result for reproduction, run the [command-line batch auditor](tools/audit-evidence-batch.cjs) with the same ordered files and save its JSON report:
 

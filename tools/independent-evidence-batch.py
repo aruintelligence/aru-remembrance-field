@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+"""Independently replay a bounded ĀRU answer batch using Python's own rules.
+
+This checks deterministic software consistency, not source identity or factual truth.
+"""
+
+import argparse
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import unicodedata
+
+
+MAX_FILE = 1024 * 1024
+ROOT = Path(__file__).resolve().parents[1]
+FIELDS = {"id", "key", "value", "time", "status", "imported"}
+FORMATS = {"aru-evidence-question-receipt", "aru-evidence-answer-excerpt",
+           "aru-evidence-brief-receipt"}
+
+
+class AuditError(ValueError):
+    pass
+
+
+def require(condition, message):
+    if not condition:
+        raise AuditError(message)
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def int_value(value):
+    return type(value) is int
+
+
+def number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def length(value):
+    """JavaScript string length is measured in UTF-16 code units."""
+    return len(value.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def same(left, right):
+    if number(left) and number(right):
+        return left == right and (left != 0 or math.copysign(1, left) == math.copysign(1, right))
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(same(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(same(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def fields(value, required):
+    return type(value) is dict and value.keys() == set(required)
+
+
+def normalized(name):
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", name).strip()).lower()
+
+
+def records_valid(records):
+    require(type(records) is list and len(records) <= 100, "invalid record count")
+    seen = set()
+    for item in records:
+        require(type(item) is dict and FIELDS.issuperset(item) and
+                {"id", "key", "value", "time", "status"}.issubset(item) and
+                int_value(item["id"]) and 1 <= item["id"] <= 10**9 and
+                type(item["key"]) is str and item["key"].strip() and length(item["key"]) <= 120 and
+                type(item["value"]) is str and item["value"].strip() and length(item["value"]) <= 500 and
+                number(item["time"]) and 0 <= item["time"] <= 8.64e15 and
+                item["status"] in ("active", "superseded") and
+                ("imported" not in item or type(item["imported"]) is bool) and
+                item["id"] not in seen, "invalid or duplicate record")
+        seen.add(item["id"])
+
+
+def reference_valid(reference):
+    require(fields(reference, {"format", "version", "records", "next_source_id"}) and
+            reference["format"] == "aru-evidence-ledger-baseline" and
+            int_value(reference["version"]) and reference["version"] == 1 and
+            int_value(reference["next_source_id"]) and
+            1 <= reference["next_source_id"] <= 10**9 + 1, "invalid reference baseline")
+    records_valid(reference["records"])
+    require(all(item["id"] < reference["next_source_id"] for item in reference["records"]),
+            "reference next source ID is too small")
+
+
+def json_bytes(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def checkpoint_valid(reference, checkpoint):
+    require(fields(checkpoint, {"format", "version", "encoding", "sha256"}) and
+            checkpoint["format"] == "aru-evidence-ledger-checkpoint" and
+            int_value(checkpoint["version"]) and checkpoint["version"] == 1 and
+            checkpoint["encoding"] == "aru-evidence-ledger-checkpoint-1" and
+            type(checkpoint["sha256"]) is str and
+            re.fullmatch(r"[0-9a-f]{64}", checkpoint["sha256"]), "invalid checkpoint")
+    # Browser exports use integer millisecond timestamps. Normalize integral JSON numbers
+    # here because JSON.stringify(1.0) produces 1, unlike json.dumps(1.0).
+    rows = [[item["id"], item["key"], item["value"],
+             int(item["time"]) if item["time"] == int(item["time"]) else item["time"],
+             item["status"], [item["imported"]] if "imported" in item else []]
+            for item in reference["records"]]
+    ledger = sha256(json_bytes(["aru-ledger-commitment-1", rows]))
+    expected = sha256(json_bytes(["aru-evidence-ledger-checkpoint-1", ledger,
+                                  reference["next_source_id"]]))
+    require(checkpoint["sha256"] == expected, "checkpoint differs from reference")
+
+
+def lookup(name, records):
+    key = normalized(name)
+    if not key:
+        return {"kind": "empty"}
+    matching = [item for item in records if normalized(item["key"]) == key]
+    if not matching:
+        return {"kind": "missing"}
+    active = [item for item in matching if item["status"] == "active"]
+    if not active:
+        return {"kind": "historical", "sources": [item["id"] for item in matching]}
+    if len({item["value"] for item in active}) > 1:
+        return {"kind": "conflict", "sources": [item["id"] for item in active]}
+    return {"kind": "known", "value": active[-1]["value"],
+            "sources": [item["id"] for item in active]}
+
+
+def answer(question, records):
+    if not question.strip():
+        return {"kind": "empty"}
+    if length(question) > 200:
+        return {"kind": "unsupported"}
+    match = re.fullmatch(r"what(?:\s+is|['’]s)\s+(.+?)(?:\s*\?)?",
+                         unicodedata.normalize("NFKC", question).strip(), re.IGNORECASE)
+    if not match:
+        return {"kind": "unsupported"}
+    name = match[1].strip()
+    candidates = [name]
+    possessive = re.fullmatch(r"my\s+(.+)", name, re.IGNORECASE)
+    if possessive:
+        candidates.append(possessive[1])
+    keys = list(dict.fromkeys(normalized(item) for item in candidates))
+    present = [key for key in keys if any(normalized(item["key"]) == key for item in records)]
+    if len(present) > 1:
+        return {"kind": "ambiguous", "names": [next(item["key"] for item in records
+                  if normalized(item["key"]) == key) for key in present]}
+    return lookup(present[0], records) if present else {"kind": "missing"}
+
+
+def verify_receipt(receipt):
+    require(type(receipt) is dict and type(receipt.get("format")) is str and
+            receipt["format"] in FORMATS,
+            "unsupported receipt format")
+    kind = receipt["format"]
+    if kind == "aru-evidence-brief-receipt":
+        require(fields(receipt, {"format", "version", "model_revision", "names", "records", "results"}) and
+                int_value(receipt["version"]) and receipt["version"] == 1 and
+                receipt["model_revision"] == "aru-evidence-briefs-1" and
+                type(receipt["names"]) is list and 2 <= len(receipt["names"]) <= 8,
+                "invalid brief format")
+        names = receipt["names"]
+        require(all(type(name) is str and name.strip() and name == name.strip() and
+                    length(name) <= 120 and "\r" not in name and "\n" not in name for name in names),
+                "invalid brief name")
+        require(len({normalized(name) for name in names}) == len(names), "duplicate brief name")
+        records_valid(receipt["records"])
+        computed = [{"name": name, "answer": lookup(name, receipt["records"])} for name in names]
+        require(same(receipt["results"], computed), "brief replay failed")
+        return
+    excerpt = kind == "aru-evidence-answer-excerpt"
+    expected = {"format", "version", "model_revision", "question", "records", "answer"}
+    require(fields(receipt, expected | ({"scope"} if excerpt else set())) and
+            int_value(receipt["version"]) and receipt["version"] == 1 and
+            receipt["model_revision"] == "aru-evidence-questions-1" and
+            (not excerpt or receipt["scope"] == "cited-assertions-only") and
+            type(receipt["question"]) is str and length(receipt["question"]) <= 500,
+            "invalid question receipt")
+    records_valid(receipt["records"])
+    require(not excerpt or bool(receipt["records"]), "empty excerpt")
+    computed = answer(receipt["question"], receipt["records"])
+    require(same(receipt["answer"], computed), "question replay failed")
+    if excerpt:
+        require(computed["kind"] == "known" and
+                all(item["status"] == "active" for item in receipt["records"]) and
+                len(receipt["records"]) == len(computed["sources"]) and
+                all(item["id"] in computed["sources"] for item in receipt["records"]),
+                "excerpt does not contain exactly its active citations")
+
+
+def matches_reference(receipt, reference):
+    records = reference["records"]
+    if receipt["format"] == "aru-evidence-answer-excerpt":
+        if not same(receipt["answer"], answer(receipt["question"], records)):
+            return False
+        by_id = {item["id"]: item for item in records}
+        return all(same(item, by_id.get(item["id"])) for item in receipt["records"])
+    return same(receipt["records"], records)
+
+
+def parse(data):
+    def reject_constant(value):
+        raise ValueError("invalid JSON constant")
+    return json.loads(data.decode("utf-8", errors="strict"), parse_constant=reject_constant)
+
+
+def read_limited(file, label):
+    info = os.stat(file)
+    require(stat.S_ISREG(info.st_mode) and info.st_size <= MAX_FILE,
+            f"{label} must be a regular file of at most 1 MiB")
+    with open(file, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_size <= MAX_FILE,
+                f"{label} must be a regular file of at most 1 MiB")
+        data = handle.read(MAX_FILE + 1)
+    require(len(data) <= MAX_FILE, f"{label} exceeds 1 MiB")
+    return data
+
+
+def script_sha256():
+    html = (ROOT / "index.html").read_bytes().decode("utf-8")
+    scripts = re.findall(r"<script>([\s\S]*?)</script>", html)
+    require(len(scripts) == 1, "expected exactly one inline script")
+    return sha256(scripts[0].encode("utf-8"))
+
+
+def audit(reference_file, receipt_files, checkpoint_file=None):
+    require(1 <= len(receipt_files) <= 20, "provide 1–20 receipts")
+    reference_bytes = read_limited(reference_file, "Reference")
+    reference = parse(reference_bytes)
+    reference_valid(reference)
+    checkpoint_bytes = read_limited(checkpoint_file, "Checkpoint") if checkpoint_file else None
+    if checkpoint_bytes is not None:
+        checkpoint_valid(reference, parse(checkpoint_bytes))
+    file_bytes = [read_limited(file, f"Receipt #{index}")
+                  for index, file in enumerate(receipt_files, 1)]
+    require(sum(map(len, file_bytes)) <= 4 * MAX_FILE, "selected receipts exceed 4 MiB")
+    first = {}
+    totals = {"match": 0, "differ": 0, "fail": 0, "identical_copies": 0}
+    rows = []
+    for index, data in enumerate(file_bytes, 1):
+        duplicate = first.setdefault(data, index)
+        duplicate = duplicate if duplicate != index else None
+        if duplicate is not None:
+            totals["identical_copies"] += 1
+        verdict, reason = "FAIL", "invalid-json"
+        try:
+            receipt = parse(data)
+        except (ValueError, UnicodeError, RecursionError):
+            pass
+        else:
+            reason = "unsupported-format"
+            if type(receipt) is dict and type(receipt.get("format")) is str and receipt["format"] in FORMATS:
+                reason = "replay-failed"
+                try:
+                    verify_receipt(receipt)
+                except AuditError:
+                    pass
+                else:
+                    verdict, reason = (("MATCH", None) if matches_reference(receipt, reference)
+                                       else ("DIFFER", "reference-mismatch"))
+        totals[verdict.lower()] += 1
+        rows.append({"index": index, "sha256": sha256(data), "verdict": verdict,
+                     "reason": reason, "duplicate_of": duplicate})
+    return {"format": "aru-evidence-independent-batch-audit", "version": 1,
+            "python_verifier_sha256": sha256(Path(__file__).read_bytes()),
+            "browser_script_sha256": script_sha256(),
+            "reference_sha256": sha256(reference_bytes),
+            "checkpoint_sha256": sha256(checkpoint_bytes) if checkpoint_bytes is not None else None,
+            "receipts": rows, "totals": totals}
+
+
+def capture_from_report(report, version):
+    require(int_value(version) and version in (1, 2), "unsupported capture version")
+    return {"format": "aru-evidence-browser-batch-capture", "version": version,
+            **({"browser_script_sha256": report["browser_script_sha256"]} if version == 2 else {}),
+            "reference_sha256": report["reference_sha256"],
+            "checkpoint_sha256": report["checkpoint_sha256"],
+            "receipts": [{key: row[key] for key in ("index", "sha256", "verdict", "duplicate_of")}
+                         for row in report["receipts"]], "totals": report["totals"]}
+
+
+def run(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("reference")
+    parser.add_argument("receipts", nargs="+")
+    parser.add_argument("--checkpoint")
+    parser.add_argument("--check-capture")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        report = audit(args.reference, args.receipts, args.checkpoint)
+        if args.check_capture:
+            expected = parse(read_limited(args.check_capture, "Capture"))
+            version = expected.get("version") if type(expected) is dict else None
+            require(same(expected, capture_from_report(report, version)),
+                    "capture differs from independently recomputed files, outcomes, or browser script")
+        totals = report["totals"]
+        if args.json:
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+        else:
+            print(f"{len(report['receipts'])} selected: {totals['match']} MATCH, "
+                  f"{totals['differ']} DIFFER, {totals['fail']} FAIL; "
+                  f"{totals['identical_copies']} identical byte copies.")
+            for row in report["receipts"]:
+                print(f"#{row['index']} {row['verdict']}" +
+                      (f" ({row['reason']})" if row["reason"] else ""))
+            if args.check_capture:
+                print("CAPTURE MATCH: independent Python replay agrees." +
+                      (" Legacy v1 has no script fingerprint." if version == 1 else
+                       " Browser script fingerprint agrees."))
+            print("This checks the supplied files under deterministic rules; it does not prove origin or truth.")
+        return 0 if args.check_capture or not (totals["differ"] or totals["fail"]) else 1
+    except (AuditError, OSError, ValueError, UnicodeError, RecursionError) as error:
+        print(f"FAIL: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(run())
