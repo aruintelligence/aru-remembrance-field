@@ -645,6 +645,7 @@
 
 <script>
 /* ==================== ADVANCED MEMORY & COHERENCE ENGINE ==================== */
+const auditScriptAtLoad = document.currentScript?.textContent || null;
 const STORAGE_KEYS = {
   coherence: "aru_coherence",
   memory: "aru_memory",
@@ -2424,14 +2425,21 @@ async function runEvidenceBatchAudit() {
         "Capture unavailable: secure browser hashing is required. The audit results remain visible above.";
       return;
     }
+    if (!auditScriptAtLoad) {
+      document.getElementById("audit-capture-status").textContent =
+        "Capture unavailable: the loaded browser verifier source could not be read. The audit results remain visible above.";
+      return;
+    }
     try {
-      const [referenceSHA, checkpointSHA, ...receiptSHAs] = await Promise.all([
+      const [scriptSHA, referenceSHA, checkpointSHA, ...receiptSHAs] = await Promise.all([
+        evidenceAuditSHA256(new TextEncoder().encode(auditScriptAtLoad)),
         evidenceAuditSHA256(referenceData.bytes),
         checkpointData ? evidenceAuditSHA256(checkpointData.bytes) : null,
         ...receiptBytes.map(evidenceAuditSHA256)]);
       if (!stillCurrent()) return;
       const payload = {
-        format: "aru-evidence-browser-batch-capture", version: 1,
+        format: "aru-evidence-browser-batch-capture", version: 2,
+        browser_script_sha256: scriptSHA,
         reference_sha256: referenceSHA, checkpoint_sha256: checkpointSHA,
         receipts: rows.map((row, index) => ({index: row.number, sha256: receiptSHAs[index],
           verdict: row.verdict, duplicate_of: row.duplicateOf ?? null})),

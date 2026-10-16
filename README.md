@@ -182,13 +182,13 @@ To inspect a shared answer without installing Node.js, open **Verify a shared an
 
 To review several shared answers, select the saved reference and optional prior checkpoint in that same panel, then choose **Answer receipt JSON files** and **Audit selected receipts**. The browser checks each selected question, excerpt, or brief independently against the one reference and reports `MATCH`, `DIFFER`, or `FAIL` per file. It flags exact byte repeats; a repeated file is not independent evidence. The checkpoint must match the reference before any receipts are audited. The audit is local, read-only, and limited to 20 receipts, 1 MiB each, and 4 MiB combined. See the [batch audit protocol](research/evidence-batch-audit-protocol.md) for interpretation and limits.
 
-After a bounded audit, **Download audit capture** saves the selected files' SHA-256 hashes, ordered verdicts, duplicate indices, and totals without their names or fact values. Retain the original files in selection order, then replay the browser capture with the [command-line batch auditor](tools/audit-evidence-batch.cjs):
+After a bounded audit, **Download audit capture** saves the selected files' SHA-256 hashes, ordered verdicts, duplicate indices, totals, and the exact inline browser script's SHA-256 without file names or fact values. Retain the original files in selection order, then replay the browser capture with the [command-line batch auditor](tools/audit-evidence-batch.cjs):
 
 ```bash
 node tools/audit-evidence-batch.cjs reference.json answer-1.json answer-2.json --checkpoint earlier-checkpoint.json --check-capture aru-evidence-browser-batch-capture.json
 ```
 
-The capture download requires secure browser hashing and readable UTF-8 files within the limits. A reported `FAIL` for an oversized or unreadable file remains visible, but that batch has no downloadable capture. A successful replay checks the files and outcomes; review the counts because it can faithfully reproduce a failure. The capture is not signed, timestamped, or proof of factual truth.
+The version 2 capture download requires secure browser hashing, access to the loaded inline script, and readable UTF-8 files within the limits. A reported `FAIL` for an oversized or unreadable file remains visible, but that batch has no downloadable capture. A successful replay checks the files, outcomes, and script bytes in the current checkout; review the counts because it can faithfully reproduce a failure. Older version 1 captures still replay, with an explicit message that they lack the script hash. The script hash is a code consistency check, not a signature, timestamp, or proof of factual truth.
 
 To preserve a batch result for reproduction, run the [command-line batch auditor](tools/audit-evidence-batch.cjs) with the same ordered files and save its JSON report:
 

@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const {spawnSync} = require('node:child_process');
-const { webcrypto } = require('node:crypto');
+const { createHash, webcrypto } = require('node:crypto');
 const { verifyProof, loadEvaluator } = require('../tools/verify-proof.cjs');
 const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
 const { verifyMemoryChallenge } = require('../tools/verify-memory-challenge.cjs');
@@ -55,6 +55,7 @@ function boot(values = {}, options = {}) {
   }
   const document = {
     body: new Element('body'),
+    currentScript: options.scriptSource === null ? null : {textContent: source},
     hidden: !!options.hidden,
     addEventListener(event, callback) { documentEvents.set(event, callback); },
     getElementById(id) {
@@ -2181,6 +2182,9 @@ test('browser capture is byte-bound and the CLI reproduces mixed outcomes withou
   vm.runInContext('downloadEvidenceBatchCapture()', app.context);
   const capture = JSON.parse(await app.exports[0].text());
   assert.equal(capture.format, 'aru-evidence-browser-batch-capture');
+  assert.equal(capture.version, 2);
+  assert.equal(capture.browser_script_sha256,
+    createHash('sha256').update(source).digest('hex'));
   assert.deepEqual(capture.receipts.map(row => [row.verdict, row.duplicate_of]),
     [['MATCH', null], ['DIFFER', null], ['FAIL', null], ['MATCH', 1]]);
   assert.deepEqual(capture.totals, {match: 2, differ: 1, fail: 1, identical_copies: 1});
@@ -2226,6 +2230,13 @@ test('capture requires readable UTF-8 files and secure hashing while audit remai
   assert.match(noHash.elements.get('audit-result').children[0].textContent, /1 MATCH/);
   assert.equal(noHash.elements.get('audit-capture-download').disabled, true);
   assert.match(noHash.elements.get('audit-capture-status').textContent, /secure browser hashing is required/);
+
+  const noScript = boot({}, {scriptSource: null});
+  await auditSavedReceipts(noScript, reference, [auditFile(excerpt)]);
+  assert.match(noScript.elements.get('audit-result').children[0].textContent, /1 MATCH/);
+  assert.equal(noScript.elements.get('audit-capture-download').disabled, true);
+  assert.match(noScript.elements.get('audit-capture-status').textContent,
+    /loaded browser verifier source could not be read/);
 
   const invalid = boot();
   const file = {name: 'invalid.json', size: 2,

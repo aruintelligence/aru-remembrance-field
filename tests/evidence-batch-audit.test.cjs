@@ -128,14 +128,25 @@ test('CLI reports differences with nonzero status but can reproduce that exact r
 test('CLI replays a minimal browser capture and rejects added fields or altered verdicts', () => temporary(save => {
   const report = auditEvidenceBatch(baseline, [excerpt, full], {checkpointFile: checkpoint});
   const capture = browserCaptureFromReport(report);
-  assert.deepEqual(Object.keys(capture), ['format', 'version', 'reference_sha256',
+  assert.deepEqual(Object.keys(capture), ['format', 'version', 'browser_script_sha256', 'reference_sha256',
     'checkpoint_sha256', 'receipts', 'totals']);
+  assert.equal(capture.version, 2);
+  const script = fs.readFileSync(path.join(root, 'index.html'), 'utf8')
+    .match(/<script>([\s\S]*?)<\/script>/)[1];
+  assert.equal(capture.browser_script_sha256, digest(Buffer.from(script, 'utf8')));
   assert.equal(capture.receipts[0].sha256, digest(fs.readFileSync(excerpt)));
   const file = save('capture.json', JSON.stringify(capture));
   const args = [cli, baseline, excerpt, full, '--checkpoint', checkpoint, '--check-capture', file];
   const pass = spawnSync(process.execPath, args, {encoding: 'utf8'});
   assert.equal(pass.status, 0, pass.stderr);
   assert.match(pass.stdout, /CAPTURE MATCH/);
+  assert.match(pass.stdout, /Browser verifier script fingerprint agrees/);
+  const changedScript = save('changed-script.json', JSON.stringify({...capture,
+    browser_script_sha256: '0'.repeat(64)}));
+  const mismatchedScript = spawnSync(process.execPath,
+    [...args.slice(0, -1), changedScript], {encoding: 'utf8'});
+  assert.equal(mismatchedScript.status, 1);
+  assert.match(mismatchedScript.stderr, /Browser capture differs/);
   const added = save('added.json', JSON.stringify({...capture, private_field: 'no'}));
   const extra = spawnSync(process.execPath, [...args.slice(0, -1), added], {encoding: 'utf8'});
   assert.equal(extra.status, 1);
@@ -145,6 +156,19 @@ test('CLI replays a minimal browser capture and rejects added fields or altered 
   const fail = spawnSync(process.execPath, [...args.slice(0, -1), altered], {encoding: 'utf8'});
   assert.equal(fail.status, 1);
   assert.match(fail.stderr, /Browser capture differs/);
+}));
+
+test('older v1 browser captures still replay with an explicit missing-code warning', () => temporary(save => {
+  const report = auditEvidenceBatch(baseline, [excerpt], {checkpointFile: checkpoint});
+  const legacy = browserCaptureFromReport(report, 1);
+  assert.equal(legacy.version, 1);
+  assert.equal('browser_script_sha256' in legacy, false);
+  const file = save('legacy.json', JSON.stringify(legacy));
+  const replay = spawnSync(process.execPath,
+    [cli, baseline, excerpt, '--checkpoint', checkpoint, '--check-capture', file],
+    {encoding: 'utf8'});
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.match(replay.stdout, /Legacy v1 capture has no browser script fingerprint/);
 }));
 
 test('bounds, invalid UTF-8, and unknown options fail or classify without partial acceptance', () => temporary(save => {

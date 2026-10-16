@@ -4,6 +4,7 @@
 const assert = require("node:assert/strict");
 const {createHash} = require("node:crypto");
 const fs = require("node:fs");
+const path = require("node:path");
 const {loadModel} = require("./benchmark-evidence.cjs");
 const {verifyEvidenceReceipt, verifyLedgerBaseline, verifyLedgerCheckpoint} =
   require("./verify-evidence-receipt.cjs");
@@ -100,9 +101,20 @@ function auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile} = {}) 
   };
 }
 
-function browserCaptureFromReport(report) {
+function browserScriptSHA256() {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const script = html.match(/<script>([\s\S]*?)<\/script>/);
+  if (!script || html.indexOf("<script>", script.index + 1) !== -1) {
+    throw new Error("Expected exactly one inline browser verifier script");
+  }
+  return sha256(Buffer.from(script[1], "utf8"));
+}
+
+function browserCaptureFromReport(report, version = 2) {
+  if (version !== 1 && version !== 2) throw new Error("Unsupported browser capture version");
   return {
-    format: "aru-evidence-browser-batch-capture", version: 1,
+    format: "aru-evidence-browser-batch-capture", version,
+    ...(version === 2 ? {browser_script_sha256: browserScriptSHA256()} : {}),
     reference_sha256: report.reference_sha256,
     checkpoint_sha256: report.checkpoint_sha256,
     receipts: report.receipts.map(item => ({index: item.index, sha256: item.sha256,
@@ -145,6 +157,7 @@ function parseArgs(args) {
 function run(args = process.argv.slice(2)) {
   const {referenceFile, receiptFiles, checkpointFile, reportFile, captureFile, json} = parseArgs(args);
   const report = auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile});
+  let captureVersion;
   if (reportFile !== undefined) {
     const expected = parseJSON(readLimited(reportFile, "Saved report"), "Saved report");
     try { assert.deepStrictEqual(report, expected); }
@@ -152,7 +165,8 @@ function run(args = process.argv.slice(2)) {
   }
   if (captureFile !== undefined) {
     const expected = parseJSON(readLimited(captureFile, "Browser capture"), "Browser capture");
-    try { assert.deepStrictEqual(browserCaptureFromReport(report), expected); }
+    captureVersion = expected?.version;
+    try { assert.deepStrictEqual(browserCaptureFromReport(report, captureVersion), expected); }
     catch (_) { throw new Error("Browser capture differs from the recomputed audit or ordered input bytes"); }
   }
   if (json) console.log(JSON.stringify(report, null, 2));
@@ -162,7 +176,9 @@ function run(args = process.argv.slice(2)) {
       console.log(`#${item.index} ${item.verdict}${item.reason ? ` (${item.reason})` : ""}${item.duplicate_of === null ? "" : `; identical to #${item.duplicate_of}`}`);
     }
     if (reportFile !== undefined) console.log("REPORT MATCH: the saved report was reproduced from the ordered files and current verifier bytes.");
-    if (captureFile !== undefined) console.log("CAPTURE MATCH: the browser's file hashes and verdicts were reproduced from the ordered files.");
+    if (captureFile !== undefined) console.log("CAPTURE MATCH: the browser's file hashes and verdicts were reproduced from the ordered files." +
+      (captureVersion === 1
+        ? " Legacy v1 capture has no browser script fingerprint." : " Browser verifier script fingerprint agrees."));
     console.log("Hashes bind these supplied file bytes; they do not prove origin, time, factual truth, independence, or completeness.");
   }
   if (reportFile === undefined && captureFile === undefined &&
