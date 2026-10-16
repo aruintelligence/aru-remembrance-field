@@ -52,6 +52,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A private, per-field replay diagnosis showing which script, reference, checkpoint, receipt position, verdict, repeat, or total changed, without displaying the original assertion values
 - A command-line batch audit report that binds the ordered files and verifier bytes with SHA-256 and can be recomputed against the originals
 - An independent Python batch checker that replays saved answer receipts and browser captures without importing the JavaScript answer model
+- A deterministic offline verifier kit that can preserve the exact browser script and both batch checkers for later local replay, without packing the selected evidence files
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -192,6 +193,15 @@ node tools/audit-evidence-batch.cjs reference.json answer-1.json answer-2.json -
 ```
 
 The version 2 capture download requires secure browser hashing, access to the loaded inline script, and readable UTF-8 files within the limits. A reported `FAIL` for an oversized or unreadable file remains visible, but that batch has no downloadable capture. To replay without tools, select the original reference, optional checkpoint, and receipts in the same order in the browser, run the audit, choose the saved capture under it, and select **Compare saved capture**. `CAPTURE MATCH` means the capture was reproduced, not that every receipt passed: read the `MATCH`, `DIFFER`, and `FAIL` counts separately. When it differs, the page identifies the mismatched script, reference, checkpoint, individual receipt bytes or verdict, repeat relationship, and totals without printing assertions or file hashes. The [diagnostic record](research/capture-replay-diagnostics.md) documents the exact scope and next investigation. A version 2 capture made under an older page script will differ after that script changes; use the archived code version to reproduce it. Older version 1 captures still replay, with an explicit message that they lack the script hash. The script hash is a code consistency check, not a signature, timestamp, or proof of factual truth.
+
+To retain the matching verifier code while you still have it, create a separate offline folder from the current checkout:
+
+```bash
+node tools/verifier-kit.cjs create aru-evidence-browser-batch-capture.json /path/to/new-verifier-kit
+node /path/to/new-verifier-kit/tools/verifier-kit.cjs check /path/to/new-verifier-kit aru-evidence-browser-batch-capture.json
+```
+
+The creator refuses a capture whose browser script fingerprint differs from this checkout. It copies only code and a manifest, never the capture, selected reference, checkpoint, or receipts. Run the archived Node and independent Python auditors with those original files when needed. The [offline kit protocol](research/verifier-kit-protocol.md) gives exact commands and explains why this is a reproducibility aid, not authentication or a factual proof.
 
 For a second implementation of the receipt and comparison rules, replay the same files with Python 3.12:
 
