@@ -982,7 +982,7 @@ test('reviewed incoming correction in session-only mode never writes browser sto
   assert.equal(reopened.field.claims.length, 4);
 });
 
-test('incoming correction rolls back a failed persistent write and leaves the ledger intact', async () => {
+test('incoming correction rejects a failed snapshot write and leaves the ledger intact', async () => {
   const fixture = applicableCorrectionFixture();
   const app = boot({aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'});
   await chooseReceiptFile(app, JSON.stringify(fixture));
@@ -992,7 +992,7 @@ test('incoming correction rolls back a failed persistent write and leaves the le
   const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
   let failOnce = true;
   app.context.localStorage.setItem = (key, value) => {
-    if (key === 'aru_fact_counter' && failOnce) { failOnce = false; throw new Error('quota'); }
+    if (key === 'aru_fact_ledger_v1' && failOnce) { failOnce = false; throw new Error('quota'); }
     setItem(key, value);
   };
   vm.runInContext('applyIncomingCorrection()', app.context);
@@ -1001,6 +1001,124 @@ test('incoming correction rolls back a failed persistent write and leaves the le
   assert.equal(JSON.stringify(app.field.claims), priorLedger);
   assert.equal(JSON.stringify([...app.saved]), priorStorage);
   assert.equal(app.field.claimCounter, 5);
+});
+
+test('a completed single-key correction write reloads a complete ledger even before UI mutation', () => {
+  const fixture = applicableCorrectionFixture();
+  const prior = {aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'};
+  const app = boot(prior);
+  assert.equal(boot(Object.fromEntries(app.saved)).field.claims.length, 4, 'before the write, the old copy is intact');
+  const writes = [];
+  const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
+  app.context.localStorage.setItem = (key, value) => { writes.push(key); setItem(key, value); };
+  app.context.nextLedger = fixture.after_records;
+  vm.runInContext('persistIncomingCorrection(nextLedger, 6)', app.context);
+  assert.deepEqual(writes, ['aru_fact_ledger_v1']);
+  assert.equal(app.field.claims.length, 4, 'the simulated page closes before its in-memory update');
+  assert.equal(app.saved.has('aru_fact_claims'), false);
+  assert.equal(app.saved.has('aru_fact_counter'), false);
+  const reopened = boot(Object.fromEntries(app.saved));
+  assert.deepEqual(JSON.parse(JSON.stringify(reopened.field.claims)), fixture.after_records);
+  assert.equal(reopened.field.claimCounter, 6);
+  const snapshot = JSON.parse(app.saved.get('aru_fact_ledger_v1'));
+  assert.deepEqual(snapshot, {version: 1, claims: fixture.after_records, next_source_id: 6});
+});
+
+test('the new ledger snapshot wins if cleanup of obsolete keys is interrupted', () => {
+  const fixture = applicableCorrectionFixture();
+  const prior = {aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'};
+  const app = boot(prior);
+  app.context.localStorage.removeItem = () => { throw new Error('interrupted cleanup'); };
+  app.context.nextLedger = fixture.after_records;
+  vm.runInContext('persistIncomingCorrection(nextLedger, 6)', app.context);
+  assert.equal(app.saved.has('aru_fact_claims'), true);
+  assert.equal(app.saved.has('aru_fact_ledger_v1'), true);
+  const reopened = boot(Object.fromEntries(app.saved));
+  assert.equal(reopened.field.claims.length, 5);
+  assert.equal(reopened.field.claims[4].value, fixture.value);
+  assert.equal(reopened.field.claimCounter, 6);
+});
+
+test('an incoming correction refuses a saved ledger changed by another tab after preview', async () => {
+  const fixture = applicableCorrectionFixture();
+  const app = boot({aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'});
+  await chooseReceiptFile(app, JSON.stringify(fixture));
+  vm.runInContext('previewIncomingCorrection()', app.context);
+  const changed = fixture.before_records.map(record => record.id === 2
+    ? {...record, value: 'changed in another tab'} : record);
+  app.saved.set('aru_fact_ledger_v1', JSON.stringify({version: 1, claims: changed, next_source_id: 5}));
+  vm.runInContext('applyIncomingCorrection()', app.context);
+  assert.match(app.elements.get('incoming-correction-preview').textContent, /Saved ledger changed in another tab/);
+  assert.equal(app.field.claims.length, 4);
+  assert.equal(app.field.claims[1].value, fixture.before_records[1].value);
+  assert.equal(boot(Object.fromEntries(app.saved)).field.claims[1].value, 'changed in another tab');
+});
+
+test('a failed ordinary ledger save reloads the prior complete snapshot', () => {
+  const origin = boot();
+  origin.fact('city', 'Corvallis');
+  const app = boot(Object.fromEntries(origin.saved));
+  const original = app.saved.get('aru_fact_ledger_v1');
+  const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
+  app.context.localStorage.setItem = (key, value) => {
+    if (key === 'aru_fact_ledger_v1') throw new Error('quota');
+    setItem(key, value);
+  };
+  app.fact('color', 'amber');
+  assert.equal(app.field.claims.length, 2);
+  assert.equal(app.field.storageAvailable, false);
+  assert.equal(app.saved.get('aru_fact_ledger_v1'), original);
+  const reopened = boot(Object.fromEntries(app.saved));
+  assert.equal(reopened.field.claims.length, 1);
+  assert.equal(reopened.field.claimCounter, 2);
+});
+
+test('a legacy ledger migrates on save, and an unreadable snapshot is preserved for recovery', async () => {
+  const fixture = applicableCorrectionFixture();
+  const old = {aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'};
+  const migrated = boot(old);
+  migrated.fact('another name', 'new value');
+  assert.equal(migrated.saved.has('aru_fact_ledger_v1'), true);
+  assert.equal(migrated.saved.has('aru_fact_claims'), false);
+  assert.equal(migrated.saved.has('aru_fact_counter'), false);
+  const staleLegacy = {...Object.fromEntries(migrated.saved), ...old};
+  assert.equal(boot(staleLegacy).field.claims.length, 5, 'the snapshot overrides stale legacy keys');
+  const raw = '{"version":1,"claims":"not an array","next_source_id":5}';
+  const damaged = boot({...old, aru_fact_ledger_v1: raw});
+  assert.equal(damaged.field.claims.length, 0, 'stale legacy state cannot silently replace a damaged snapshot');
+  assert.match(damaged.elements.get('storage-status').textContent, /Saved ledger snapshot is unreadable/);
+  assert.equal(damaged.elements.get('ledger-recovery-download').hidden, false);
+  vm.runInContext('downloadUnreadableLedger()', damaged.context);
+  assert.equal(JSON.parse(await damaged.exports[0].text()).raw_storage_value, raw);
+  damaged.fact('ephemeral', 'not saved');
+  assert.equal(damaged.saved.get('aru_fact_ledger_v1'), raw);
+  const backup = boot(old);
+  vm.runInContext('downloadState()', backup.context);
+  await chooseStateFile(damaged, await backup.exports[0].text());
+  vm.runInContext('applyStateImport()', damaged.context);
+  assert.equal(damaged.window.reloaded, true);
+  assert.equal(boot(Object.fromEntries(damaged.saved)).field.claims.length, 4);
+});
+
+test('full-state restore rolls back if cleanup fails after writing the new ledger snapshot', async () => {
+  const source = boot();
+  source.fact('new fact', 'new value');
+  vm.runInContext('downloadState()', source.context);
+  const old = {aru_fact_claims: JSON.stringify([{id: 1, key: 'old fact', value: 'old value',
+    time: 1700000000000, status: 'active', imported: false}]), aru_fact_counter: '2'};
+  const target = boot(old);
+  await chooseStateFile(target, await source.exports[0].text());
+  const before = JSON.stringify([...target.saved]);
+  const removeItem = target.context.localStorage.removeItem.bind(target.context.localStorage);
+  let fail = true;
+  target.context.localStorage.removeItem = key => {
+    if (key === 'aru_fact_claims' && fail) { fail = false; throw new Error('interrupted cleanup'); }
+    removeItem(key);
+  };
+  vm.runInContext('applyStateImport()', target.context);
+  assert.match(target.elements.get('state-import-preview').textContent, /Restore failed; original local state was kept/);
+  assert.equal(JSON.stringify([...target.saved]), before);
+  assert.equal(boot(Object.fromEntries(target.saved)).field.claims[0].value, 'old value');
 });
 
 async function chooseChainFiles(app, receipts) {
@@ -1077,7 +1195,7 @@ test('chain replay detects missing, forked, reordered, duplicated, and altered s
   assert.equal(app.field.claims.length, 0);
 });
 
-test('chain application rejects a changed ledger and rolls back a failed two-key write', async () => {
+test('chain application rejects a changed ledger and a failed snapshot write', async () => {
   const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
   const saved = {aru_fact_claims: JSON.stringify(chain.receipts[0].before_records), aru_fact_counter: '5'};
   const diverged = boot(saved);
@@ -1101,7 +1219,7 @@ test('chain application rejects a changed ledger and rolls back a failed two-key
   const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
   let fail = true;
   app.context.localStorage.setItem = (key, value) => {
-    if (key === 'aru_fact_counter' && fail) { fail = false; throw new Error('quota'); }
+    if (key === 'aru_fact_ledger_v1' && fail) { fail = false; throw new Error('quota'); }
     setItem(key, value);
   };
   vm.runInContext('applyIncomingCorrection()', app.context);
@@ -1221,7 +1339,7 @@ test('compact replay rejects mismatched baselines, altered steps, gaps, and unre
   assert.equal(app.field.claims.length, 5);
 });
 
-test('compact application rolls back a storage failure and respects Session-only mode', async () => {
+test('compact application rejects a snapshot failure and respects Session-only mode', async () => {
   const packet = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-packet.json'), 'utf8'));
   const baseline = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-baseline.json'), 'utf8'));
   const prior = {aru_fact_claims: JSON.stringify(baseline.records), aru_fact_counter: '5'};
@@ -1232,7 +1350,7 @@ test('compact application rolls back a storage failure and respects Session-only
   const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
   let fail = true;
   app.context.localStorage.setItem = (key, value) => {
-    if (key === 'aru_fact_counter' && fail) { fail = false; throw new Error('quota'); }
+    if (key === 'aru_fact_ledger_v1' && fail) { fail = false; throw new Error('quota'); }
     setItem(key, value);
   };
   await vm.runInContext('applyIncomingCorrection()', app.context);
@@ -2066,6 +2184,7 @@ test('export includes entered text and reset removes only this app’s keys', as
   assert.equal(app.saved.has('aru_last_transition'), false);
   assert.equal(app.saved.has('aru_fact_claims'), false);
   assert.equal(app.saved.has('aru_fact_counter'), false);
+  assert.equal(app.saved.has('aru_fact_ledger_v1'), false);
 });
 
 async function chooseStateFile(app, text) {
@@ -2105,6 +2224,7 @@ test('full state backup restores score, history, and sourced facts across browse
   assert.equal(restored.elements.get('messages').children[1].innerHTML, '');
   assert.equal(restored.field.claims[0].value, 'teal');
   assert.equal(restored.field.claimCounter, origin.field.claimCounter);
+  assert.equal(restored.saved.has('aru_fact_ledger_v1'), true);
   assert.equal(restored.field.lastProof, null);
   assert.equal(restored.field.lastTransition, null);
   restored.input('Café river');

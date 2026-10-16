@@ -428,6 +428,7 @@
     <p id="storage-status">Your entries stay in this browser unless you download them. Export includes text you entered.</p>
     <div class="inspector-actions">
       <button type="button" onclick="downloadState()">Download local state JSON</button>
+      <button type="button" id="ledger-recovery-download" onclick="downloadUnreadableLedger()" hidden>Download unreadable ledger data</button>
       <button type="button" onclick="resetField()">Erase local state</button>
     </div>
     <label for="state-import">Restore local state JSON from this device</label>
@@ -593,7 +594,8 @@ const STORAGE_KEYS = {
   lastTransition: "aru_last_transition",
   lastProof: "aru_last_proof",
   claims: "aru_fact_claims",
-  claimCounter: "aru_fact_counter"
+  claimCounter: "aru_fact_counter",
+  ledger: "aru_fact_ledger_v1"
 };
 const PROOF_MODEL_REVISION = "aru-field-heuristics-3";
 const RESPONSE_MODEL_REVISION = "aru-response-2";
@@ -652,6 +654,38 @@ function storedClaims() {
     imported: claim.imported === true
   }));
 }
+function storedLedger() {
+  let raw;
+  try { raw = localStorage.getItem(STORAGE_KEYS.ledger); }
+  catch (_) { return null; }
+  if (raw === null) return null;
+  try {
+    const bundle = JSON.parse(raw);
+    if (!bundle || Array.isArray(bundle) || Object.keys(bundle).length !== 3 ||
+        bundle.version !== 1 || !Array.isArray(bundle.claims) || bundle.claims.length > 100 ||
+        !Number.isSafeInteger(bundle.next_source_id) || bundle.next_source_id < 1 ||
+        bundle.next_source_id > 1e9 + 1) throw new Error("Invalid ledger snapshot.");
+    const fields = new Set(["id", "key", "value", "time", "status", "imported"]);
+    const ids = new Set();
+    for (const claim of bundle.claims) {
+      if (!validFactClaim(claim) || Object.keys(claim).some(key => !fields.has(key)) ||
+          (claim.imported !== undefined && typeof claim.imported !== "boolean") ||
+          claim.key !== claim.key.trim().replace(/\s+/g, " ") || claim.value !== claim.value.trim() ||
+          claim.id >= bundle.next_source_id || ids.has(claim.id)) throw new Error("Invalid ledger source.");
+      ids.add(claim.id);
+    }
+    return {claims: bundle.claims, counter: bundle.next_source_id};
+  } catch (_) { return {claims: [], counter: 1, invalid: true}; }
+}
+const initialLedger = storedLedger();
+function ledgerSnapshot(claims, counter) {
+  return JSON.stringify({version: 1, claims, next_source_id: counter});
+}
+function removeLegacyLedgerKeys() {
+  for (const key of [STORAGE_KEYS.claims, STORAGE_KEYS.claimCounter]) {
+    try { localStorage.removeItem(key); } catch (_) { /* The snapshot remains authoritative. */ }
+  }
+}
 function canStore() {
   try {
     localStorage.setItem("aru_storage_probe", "1");
@@ -672,12 +706,12 @@ const Field = {
   lastIgnition: storedNumber(STORAGE_KEYS.lastIgnition, 0),
   lastTransition: readStored(STORAGE_KEYS.lastTransition, null),
   lastProof: readStored(STORAGE_KEYS.lastProof, null),
-  claims: storedClaims(),
-  claimCounter: storedNumber(STORAGE_KEYS.claimCounter, 1),
-  storageAvailable: canStore(),
+  claims: initialLedger === null ? storedClaims() : initialLedger.claims,
+  claimCounter: initialLedger === null ? storedNumber(STORAGE_KEYS.claimCounter, 1) : initialLedger.counter,
+  storageAvailable: !initialLedger?.invalid && canStore(),
   busy: false,
   save() {
-    if (sessionOnly) return;
+    if (sessionOnly || initialLedger?.invalid) return;
     try {
       localStorage.setItem(STORAGE_KEYS.coherence, JSON.stringify(this.coherence));
       localStorage.setItem(STORAGE_KEYS.memory, JSON.stringify(this.memory.slice(-100)));
@@ -687,9 +721,13 @@ const Field = {
       localStorage.setItem(STORAGE_KEYS.lastIgnition, JSON.stringify(this.lastIgnition || 0));
       localStorage.setItem(STORAGE_KEYS.lastTransition, JSON.stringify(this.lastTransition));
       localStorage.setItem(STORAGE_KEYS.lastProof, JSON.stringify(this.lastProof));
-      localStorage.setItem(STORAGE_KEYS.claims, JSON.stringify(this.claims));
-      localStorage.setItem(STORAGE_KEYS.claimCounter, JSON.stringify(this.claimCounter));
+      const nextId = Math.max(Number.isSafeInteger(this.claimCounter) && this.claimCounter >= 1 &&
+        this.claimCounter <= 1e9 + 1 ? this.claimCounter : 1,
+        1, ...this.claims.map(claim => claim.id + 1));
+      localStorage.setItem(STORAGE_KEYS.ledger, ledgerSnapshot(this.claims, nextId));
+      this.claimCounter = nextId;
       this.storageAvailable = true;
+      removeLegacyLedgerKeys();
     } catch (_) {
       this.storageAvailable = false;
     }
@@ -1248,8 +1286,10 @@ function renderInspector() {
   } else {
     summary.textContent = "No input has changed the model yet.";
   }
-  document.getElementById("storage-status").textContent = sessionOnly
-    ? "Session-only is on. New entries and score changes are not saved. Earlier stored state remains on this device. Downloads include current session text if you choose to save them."
+  document.getElementById("storage-status").textContent = initialLedger?.invalid
+    ? "Saved ledger snapshot is unreadable. Its records were not loaded and new work will not be saved. Download the raw data for inspection, then restore a known-good state backup or erase local state."
+    : sessionOnly
+      ? "Session-only is on. New entries and score changes are not saved. Earlier stored state remains on this device. Downloads include current session text if you choose to save them."
     : Field.storageAvailable
       ? "Stored locally in this browser. Downloaded JSON includes your entered text; nothing is uploaded by this app."
       : "Browser storage is unavailable. This session still works, but it will not persist after closing.";
@@ -2046,25 +2086,22 @@ async function previewCorrectionPacket(packet, previewRequest) {
 
 function persistIncomingCorrection(after, nextId) {
   if (sessionOnly) return;
-  const keys = [STORAGE_KEYS.claims, STORAGE_KEYS.claimCounter];
-  let previous;
+  if (initialLedger?.invalid) throw new Error("Saved ledger snapshot is unreadable. Restore a known-good backup or erase local state before applying corrections.");
   try {
-    previous = keys.map(key => localStorage.getItem(key));
-    localStorage.setItem(keys[0], JSON.stringify(after));
-    localStorage.setItem(keys[1], JSON.stringify(nextId));
-    Field.storageAvailable = true;
-  } catch (_) {
-    if (previous) {
-      try {
-        keys.forEach((key, index) => previous[index] === null
-          ? localStorage.removeItem(key) : localStorage.setItem(key, previous[index]));
-      } catch (_) {
-        Field.storageAvailable = false;
-        throw new Error("Browser storage failed and could not be rolled back. Inspect saved state before retrying.");
-      }
+    const stored = storedLedger();
+    if (stored?.invalid) throw new Error("Saved ledger snapshot is unreadable. Nothing was changed.");
+    const current = stored === null
+      ? {claims: storedClaims(), counter: storedNumber(STORAGE_KEYS.claimCounter, 1)} : stored;
+    if (!sameFactLedger(current.claims, Field.claims) || current.counter !== Field.claimCounter) {
+      throw new Error("Saved ledger changed in another tab or session. Reload and review the correction again.");
     }
+    localStorage.setItem(STORAGE_KEYS.ledger, ledgerSnapshot(after, nextId));
+    Field.storageAvailable = true;
+    removeLegacyLedgerKeys();
+  } catch (error) {
+    if (error.message?.startsWith("Saved ledger")) throw error;
     Field.storageAvailable = false;
-    throw new Error("Browser storage rejected the correction. No in-memory change was applied; try Session-only mode or free storage space.");
+    throw new Error("Browser storage rejected the ledger snapshot. No in-memory change was applied; try Session-only mode or free storage space.");
   }
 }
 
@@ -3016,7 +3053,7 @@ function applyStateImport() {
     [STORAGE_KEYS.coherence, state.coherence], [STORAGE_KEYS.memory, state.memory],
     [STORAGE_KEYS.messages, state.messages], [STORAGE_KEYS.ignitions, state.ignitions],
     [STORAGE_KEYS.lastAuto, state.lastAuto], [STORAGE_KEYS.lastIgnition, state.lastIgnition],
-    [STORAGE_KEYS.claims, state.claims], [STORAGE_KEYS.claimCounter, state.claimCounter]
+    [STORAGE_KEYS.ledger, {version: 1, claims: state.claims, next_source_id: state.claimCounter}]
   ]);
   const keys = Object.values(STORAGE_KEYS);
   let previous;
@@ -3025,6 +3062,8 @@ function applyStateImport() {
     for (const [key, value] of replacements) localStorage.setItem(key, JSON.stringify(value));
     localStorage.removeItem(STORAGE_KEYS.lastTransition);
     localStorage.removeItem(STORAGE_KEYS.lastProof);
+    localStorage.removeItem(STORAGE_KEYS.claims);
+    localStorage.removeItem(STORAGE_KEYS.claimCounter);
   } catch (_) {
     if (previous) {
       try {
@@ -3041,6 +3080,18 @@ function applyStateImport() {
   pendingStateImport = null;
   ++stateImportRequest;
   window.location.reload();
+}
+
+function downloadUnreadableLedger() {
+  if (!initialLedger?.invalid) return;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.ledger);
+    if (raw === null) return;
+    downloadJSON({format: "aru-unreadable-ledger-recovery", version: 1, raw_storage_value: raw},
+      "aru-unreadable-ledger-recovery.json");
+  } catch (_) {
+    document.getElementById("storage-status").textContent = "The unreadable ledger could not be downloaded. Keep this browser state and try again before replacing it.";
+  }
 }
 
 function resetField() {
@@ -3139,6 +3190,7 @@ function autonomousReflection() {
 SIM.init();
 updateUI();
 renderLedger();
+document.getElementById("ledger-recovery-download").hidden = !initialLedger?.invalid;
 restoreMessages();
 syncVisualMotion();
 setInterval(autonomousReflection, 12000);
