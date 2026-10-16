@@ -48,6 +48,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A one-click synthetic trust lab that contrasts internal replay, reference comparison, and earlier checkpoint matching across five controls
 - A bounded, local batch audit for up to 20 shared answer receipts against one saved reference and optional prior checkpoint, with per-file results and repeated-text flags
 - A browser download of the batch's file hashes and verdicts that can be replayed with the command-line auditor
+- A local browser comparison of a saved audit capture against the original selected files, with no command-line setup
 - A command-line batch audit report that binds the ordered files and verifier bytes with SHA-256 and can be recomputed against the originals
 - An independent Python batch checker that replays saved answer receipts and browser captures without importing the JavaScript answer model
 
@@ -189,7 +190,7 @@ After a bounded audit, **Download audit capture** saves the selected files' SHA-
 node tools/audit-evidence-batch.cjs reference.json answer-1.json answer-2.json --checkpoint earlier-checkpoint.json --check-capture aru-evidence-browser-batch-capture.json
 ```
 
-The version 2 capture download requires secure browser hashing, access to the loaded inline script, and readable UTF-8 files within the limits. A reported `FAIL` for an oversized or unreadable file remains visible, but that batch has no downloadable capture. A successful replay checks the files, outcomes, and script bytes in the current checkout; review the counts because it can faithfully reproduce a failure. Older version 1 captures still replay, with an explicit message that they lack the script hash. The script hash is a code consistency check, not a signature, timestamp, or proof of factual truth.
+The version 2 capture download requires secure browser hashing, access to the loaded inline script, and readable UTF-8 files within the limits. A reported `FAIL` for an oversized or unreadable file remains visible, but that batch has no downloadable capture. To replay without tools, select the original reference, optional checkpoint, and receipts in the same order in the browser, run the audit, choose the saved capture under it, and select **Compare saved capture**. A match checks the file bytes, outcomes, and exact inline script running on the page. A version 2 capture made under an older page script will differ after that script changes; use the archived code version to reproduce it. A successful replay can faithfully reproduce a failure, so review the counts. Older version 1 captures still replay, with an explicit message that they lack the script hash. The script hash is a code consistency check, not a signature, timestamp, or proof of factual truth.
 
 For a second implementation of the receipt and comparison rules, replay the same files with Python 3.12:
 

@@ -2220,6 +2220,97 @@ test('browser capture is byte-bound and the CLI reproduces mixed outcomes withou
   assert.equal(app.elements.get('audit-capture-download').disabled, true);
 });
 
+test('browser replays saved v2 and v1 captures and exposes byte, script, and structure differences', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const reference = fixture('example-evidence-reference-baseline.json');
+  const checkpoint = fixture('example-evidence-ledger-checkpoint.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const app = boot();
+  app.fact('private note', 'never show this');
+  const before = JSON.stringify([...app.saved]);
+  await auditSavedReceipts(app, reference, [auditFile(excerpt), auditFile('{')], checkpoint);
+  vm.runInContext('downloadEvidenceBatchCapture()', app.context);
+  const capture = JSON.parse(await app.exports[0].text());
+  const input = app.context.document.getElementById('audit-capture-file');
+  const output = app.elements.get('audit-capture-verification');
+  const compare = async value => {
+    input.files = [auditFile(typeof value === 'string' ? value : JSON.stringify(value), 'saved.json')];
+    vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+    await vm.runInContext('verifySavedBatchCapture()', app.context);
+    return output.textContent;
+  };
+  assert.match(await compare(capture), /PASS: Saved capture reproduced.*1 MATCH, 0 DIFFER, 1 FAIL.*fingerprint agrees/);
+  assert.match(await compare({totals: capture.totals, receipts: capture.receipts,
+    checkpoint_sha256: capture.checkpoint_sha256, reference_sha256: capture.reference_sha256,
+    browser_script_sha256: capture.browser_script_sha256, version: 2, format: capture.format}),
+    /PASS: Saved capture reproduced/);
+  const {browser_script_sha256, ...old} = capture;
+  assert.match(await compare({...old, version: 1}), /PASS:.*Legacy v1 capture has no browser script fingerprint/);
+  assert.match(await compare({...capture, browser_script_sha256: '0'.repeat(64)}),
+    /DIFFER:.*browser verifier script fingerprint differs/);
+  assert.match(await compare({...capture, reference_sha256: '0'.repeat(64)}),
+    /DIFFER:.*selected file bytes/);
+  assert.match(await compare({...capture, receipts: [{...capture.receipts[0], verdict: 'DIFFER'}, capture.receipts[1]]}),
+    /DIFFER:.*verdicts/);
+  assert.match(await compare({...capture, private_value: 'never show this'}), /DIFFER:.*structure/);
+  assert.match(await compare({...old, version: 1, browser_script_sha256}), /DIFFER:.*structure/);
+  assert.match(await compare('{'), /FAIL: Saved capture is not valid JSON/);
+  assert.match(await compare({...capture, version: 3}), /FAIL: Unsupported saved capture format or version/);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  assert.doesNotMatch(output.textContent, /never show this/);
+
+  input.files = [auditFile(JSON.stringify(capture), 'saved.json')];
+  vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+  app.context.document.getElementById('audit-receipts').files = [auditFile(excerpt + '\n')];
+  vm.runInContext('invalidateEvidenceBatchAudit()', app.context);
+  assert.equal(app.elements.get('audit-capture-verify').disabled, true);
+  await vm.runInContext('runEvidenceBatchAudit()', app.context);
+  assert.equal(app.elements.get('audit-capture-verify').disabled, false);
+  await vm.runInContext('verifySavedBatchCapture()', app.context);
+  assert.match(output.textContent, /DIFFER:.*selected file bytes/);
+});
+
+test('browser capture replay refuses unreadable files and ignores a stale read', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const app = boot();
+  await auditSavedReceipts(app, fixture('example-evidence-reference-baseline.json'),
+    [auditFile(fixture('example-evidence-excerpt.json'))]);
+  vm.runInContext('downloadEvidenceBatchCapture()', app.context);
+  const capture = await app.exports[0].text();
+  const input = app.context.document.getElementById('audit-capture-file');
+  const output = app.elements.get('audit-capture-verification');
+  const inspect = async file => {
+    input.files = [file];
+    vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+    await vm.runInContext('verifySavedBatchCapture()', app.context);
+    return output.textContent;
+  };
+  assert.match(await inspect(auditFile(capture, 'oversized.json', 1024 * 1024 + 1)),
+    /FAIL: Saved capture exceeds the 1 MiB limit/);
+  const badEncoding = {name: 'bad.json', size: 1,
+    arrayBuffer: async () => Uint8Array.from([0xff]).buffer};
+  assert.match(await inspect(badEncoding), /FAIL: Saved capture is not valid UTF-8/);
+
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  input.files = [{name: 'slow.json', size: Buffer.byteLength(capture), arrayBuffer: async () => {
+    await waiting; return auditFile(capture).arrayBuffer();
+  }}];
+  vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+  const checking = vm.runInContext('verifySavedBatchCapture()', app.context);
+  await new Promise(resolve => setImmediate(resolve));
+  input.files = [auditFile(capture, 'new.json')];
+  vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+  release();
+  await checking;
+  assert.match(output.textContent, /Saved capture selection changed/);
+  await vm.runInContext('verifySavedBatchCapture()', app.context);
+  assert.match(output.textContent, /PASS: Saved capture reproduced/);
+  vm.runInContext('invalidateReferenceComparison()', app.context);
+  assert.equal(app.elements.get('audit-capture-verify').disabled, true);
+  assert.match(output.textContent, /Audit the selected files again/);
+});
+
 test('capture requires readable UTF-8 files and secure hashing while audit remains read-only', async () => {
   const reference = fs.readFileSync(path.join(__dirname, '..', 'research',
     'example-evidence-reference-baseline.json'), 'utf8');

@@ -518,7 +518,13 @@
       </div>
       <div id="audit-result" role="status" aria-live="polite">Choose a reference and answer receipts to run a local audit.</div>
       <p id="audit-capture-status" role="status" aria-live="polite">Run the audit before downloading a capture.</p>
-      <p>Results cover only the files selected here. A repeated file is not a new independent source. The capture contains hashes and outcomes, not record values or filenames. No files are uploaded or imported.</p>
+      <label for="audit-capture-file">Saved audit capture JSON (up to 1 MiB)</label>
+      <input id="audit-capture-file" type="file" accept=".json,application/json" onchange="invalidateEvidenceBatchCaptureReplay()">
+      <div class="ledger-actions">
+        <button type="button" id="audit-capture-verify" onclick="verifySavedBatchCapture()" disabled>Compare saved capture</button>
+      </div>
+      <p id="audit-capture-verification" role="status" aria-live="polite">Audit the selected files, then choose a saved capture to compare.</p>
+      <p>Run the audit, choose a saved capture, then compare it with these original files. A passing comparison can reproduce recorded failures; review the counts. A repeated file is not a new independent source. The capture contains hashes and outcomes, not record values or filenames. No files are uploaded or imported.</p>
     </section>
     <div class="ledger-actions">
       <button type="button" id="incoming-correction-preview-button" onclick="previewIncomingCorrection()" disabled>Preview applying correction here</button>
@@ -2254,10 +2260,18 @@ async function compareVerifiedEvidenceToReference() {
 
 let evidenceBatchAuditRequest = 0;
 let lastEvidenceBatchCapture = null;
+let evidenceBatchCaptureReplayRequest = 0;
+function invalidateEvidenceBatchCaptureReplay(message = "Saved capture selection changed. Compare it again.") {
+  ++evidenceBatchCaptureReplayRequest;
+  document.getElementById("audit-capture-verify").disabled =
+    !lastEvidenceBatchCapture || !document.getElementById("audit-capture-file").files?.[0];
+  document.getElementById("audit-capture-verification").textContent = message;
+}
 function invalidateEvidenceBatchCapture(message) {
   lastEvidenceBatchCapture = null;
   document.getElementById("audit-capture-download").disabled = true;
   document.getElementById("audit-capture-status").textContent = message;
+  invalidateEvidenceBatchCaptureReplay("Audit the selected files again before comparing a saved capture.");
 }
 
 function invalidateEvidenceBatchAudit(message = "Receipt selection changed. Audit the selected files again.") {
@@ -2297,6 +2311,66 @@ function downloadEvidenceBatchCapture() {
     return;
   }
   downloadJSON(capture.payload, "aru-evidence-browser-batch-capture.json");
+}
+
+function sameEvidenceCaptureValue(actual, expected) {
+  if (actual === expected) return true;
+  if (!actual || !expected || typeof actual !== "object" || typeof expected !== "object" ||
+      Array.isArray(actual) !== Array.isArray(expected)) return false;
+  const keys = Object.keys(expected);
+  return Object.keys(actual).length === keys.length && keys.every(key =>
+    Object.prototype.hasOwnProperty.call(actual, key) &&
+    sameEvidenceCaptureValue(actual[key], expected[key]));
+}
+
+async function verifySavedBatchCapture() {
+  const request = ++evidenceBatchCaptureReplayRequest;
+  const audit = lastEvidenceBatchCapture;
+  const captureInput = document.getElementById("audit-capture-file");
+  const file = captureInput.files?.[0];
+  const output = document.getElementById("audit-capture-verification");
+  if (!audit) { output.textContent = "Run the audit on the selected files first."; return; }
+  if (!file) { output.textContent = "Choose a saved audit capture JSON file."; return; }
+  const stillCurrent = () => request === evidenceBatchCaptureReplayRequest &&
+    lastEvidenceBatchCapture === audit && captureInput.files?.[0] === file &&
+    document.getElementById("reference-file").files?.[0] === audit.referenceFile &&
+    document.getElementById("checkpoint-file").files?.[0] === audit.checkpointFile &&
+    document.getElementById("audit-receipts").files?.length === audit.files.length &&
+    audit.files.every((item, index) => document.getElementById("audit-receipts").files[index] === item);
+  if (!stillCurrent()) {
+    invalidateEvidenceBatchAudit("Selection changed. Audit the selected files again.");
+    return;
+  }
+  output.textContent = "Comparing the saved capture with this browser's audit…";
+  try {
+    const {raw} = await readEvidenceAuditBytes(file, "Saved capture");
+    if (!stillCurrent()) return;
+    const saved = parseEvidenceAuditJSON(raw, "Saved capture");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved) ||
+        saved.format !== "aru-evidence-browser-batch-capture" ||
+        (saved.version !== 1 && saved.version !== 2)) {
+      output.textContent = "FAIL: Unsupported saved capture format or version.";
+      return;
+    }
+    if (saved.version === 2 &&
+        saved.browser_script_sha256 !== audit.payload.browser_script_sha256) {
+      output.textContent = "DIFFER: The saved capture's browser verifier script fingerprint differs from this page.";
+      return;
+    }
+    const {browser_script_sha256, ...legacy} = audit.payload;
+    const expected = saved.version === 2 ? audit.payload : {...legacy, version: 1};
+    if (!sameEvidenceCaptureValue(saved, expected)) {
+      output.textContent = "DIFFER: The saved capture differs in its structure, selected file bytes, order, verdicts, or totals.";
+      return;
+    }
+    const totals = audit.payload.totals;
+    output.textContent = `PASS: Saved capture reproduced from the selected files: ${totals.match} MATCH, ${totals.differ} DIFFER, ${totals.fail} FAIL. ` +
+      (saved.version === 1 ? "Legacy v1 capture has no browser script fingerprint. " :
+        "Browser verifier script fingerprint agrees. ") +
+      "Review the recorded outcomes; this does not prove origin or factual truth.";
+  } catch (error) {
+    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not read the saved capture."}`;
+  }
 }
 
 async function runEvidenceBatchAudit() {
@@ -2448,8 +2522,12 @@ async function runEvidenceBatchAudit() {
       };
       lastEvidenceBatchCapture = {payload, referenceFile, checkpointFile, files};
       document.getElementById("audit-capture-download").disabled = false;
+      document.getElementById("audit-capture-verify").disabled =
+        !document.getElementById("audit-capture-file").files?.[0];
+      document.getElementById("audit-capture-verification").textContent =
+        "Audit ready. Choose a saved capture and compare it with these selected files.";
       document.getElementById("audit-capture-status").textContent =
-        "Capture ready. Keep the original files in this order to recheck it with the command-line auditor.";
+        "Capture ready. Keep the original files in this order for later browser or command-line replay.";
     } catch (error) {
       if (stillCurrent()) document.getElementById("audit-capture-status").textContent =
         `Capture unavailable: ${error.message || "Could not hash the selected files."}`;
