@@ -125,6 +125,17 @@
       margin-top: 0.25rem;
     }
 
+    #ledger-sync-alert {
+      max-width: 52rem;
+      margin-top: 0.75rem;
+      padding: 0.7rem 0.9rem;
+      border: 1px solid #fbbf24;
+      border-radius: 10px;
+      background: rgba(120,53,15,0.9);
+      color: #fff7ed;
+      line-height: 1.45;
+    }
+
     .motion-toggle {
       margin-top: 0.65rem;
       min-height: 44px;
@@ -366,6 +377,7 @@
     <button class="motion-toggle" id="motion-toggle" type="button" role="switch" aria-checked="true" onclick="toggleVisualMotion()">Visual motion: <span id="motion-state" aria-hidden="true">on</span></button>
     <button class="motion-toggle" id="session-toggle" type="button" role="switch" aria-checked="false" onclick="toggleSessionOnly()">Session-only: <span id="session-state" aria-hidden="true">off</span></button>
     <p id="session-mode" role="status" aria-live="polite"></p>
+    <p id="ledger-sync-alert" role="alert" hidden></p>
   </div>
 
   <details class="inspector" id="inspector">
@@ -654,10 +666,11 @@ function storedClaims() {
     imported: claim.imported === true
   }));
 }
-function storedLedger() {
-  let raw;
-  try { raw = localStorage.getItem(STORAGE_KEYS.ledger); }
-  catch (_) { return null; }
+function storedLedger(raw) {
+  if (raw === undefined) {
+    try { raw = localStorage.getItem(STORAGE_KEYS.ledger); }
+    catch (_) { return null; }
+  }
   if (raw === null) return null;
   try {
     const bundle = JSON.parse(raw);
@@ -675,7 +688,7 @@ function storedLedger() {
       ids.add(claim.id);
     }
     return {claims: bundle.claims, counter: bundle.next_source_id};
-  } catch (_) { return {claims: [], counter: 1, invalid: true}; }
+  } catch (_) { return {claims: [], counter: 1, invalid: true, raw}; }
 }
 const initialLedger = storedLedger();
 function ledgerSnapshot(claims, counter) {
@@ -712,6 +725,7 @@ const Field = {
   busy: false,
   save() {
     if (sessionOnly || initialLedger?.invalid) return;
+    if (!ledgerStillCurrent()) return;
     try {
       localStorage.setItem(STORAGE_KEYS.coherence, JSON.stringify(this.coherence));
       localStorage.setItem(STORAGE_KEYS.memory, JSON.stringify(this.memory.slice(-100)));
@@ -724,8 +738,13 @@ const Field = {
       const nextId = Math.max(Number.isSafeInteger(this.claimCounter) && this.claimCounter >= 1 &&
         this.claimCounter <= 1e9 + 1 ? this.claimCounter : 1,
         1, ...this.claims.map(claim => claim.id + 1));
-      localStorage.setItem(STORAGE_KEYS.ledger, ledgerSnapshot(this.claims, nextId));
+      const nextBaseline = JSON.stringify([this.claims, nextId]);
+      if (!hasSavedLedgerSnapshot || nextBaseline !== savedLedgerBaseline) {
+        localStorage.setItem(STORAGE_KEYS.ledger, ledgerSnapshot(this.claims, nextId));
+        hasSavedLedgerSnapshot = true;
+      }
       this.claimCounter = nextId;
+      savedLedgerBaseline = nextBaseline;
       this.storageAvailable = true;
       removeLegacyLedgerKeys();
     } catch (_) {
@@ -733,6 +752,55 @@ const Field = {
     }
   }
 };
+let savedLedgerBaseline = JSON.stringify([Field.claims, Field.claimCounter]);
+let hasSavedLedgerSnapshot = initialLedger !== null;
+let ledgerStale = false;
+const STALE_LEDGER_NOTICE = "Saved evidence changed in another tab or session. This tab will not overwrite it. Download this tab's state if needed, then reload to see the saved ledger. Compare backups before restoring over newer data.";
+
+function savedLedgerForGuard() {
+  const raw = localStorage.getItem(STORAGE_KEYS.ledger);
+  if (raw !== null) {
+    hasSavedLedgerSnapshot = true;
+    return storedLedger(raw);
+  }
+  hasSavedLedgerSnapshot = false;
+  // A legacy ledger is read only when no versioned snapshot exists.
+  localStorage.getItem(STORAGE_KEYS.claims);
+  localStorage.getItem(STORAGE_KEYS.claimCounter);
+  return {claims: storedClaims(), counter: storedNumber(STORAGE_KEYS.claimCounter, 1)};
+}
+
+function ledgerStillCurrent() {
+  if (sessionOnly) return true;
+  if (ledgerStale) return false;
+  try {
+    if (initialLedger?.invalid) {
+      if (localStorage.getItem(STORAGE_KEYS.ledger) === initialLedger.raw) return true;
+      ledgerStale = true;
+      document.getElementById("ledger-recovery-download").hidden = true;
+      renderInspector();
+      return false;
+    }
+    const saved = savedLedgerForGuard();
+    if (saved.invalid || JSON.stringify([saved.claims, saved.counter]) !== savedLedgerBaseline) {
+      ledgerStale = true;
+      renderInspector();
+      return false;
+    }
+    return true;
+  } catch (_) {
+    Field.storageAvailable = false;
+    renderInspector();
+    return false;
+  }
+}
+
+function ledgerEditAllowed(output) {
+  if (ledgerStillCurrent()) return true;
+  output.textContent = ledgerStale ? STALE_LEDGER_NOTICE
+    : "Cannot read the saved ledger. Try Session-only mode for unsaved work, or restore browser storage and try again.";
+  return false;
+}
 
 function textWords(text) {
   return text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}\p{M}]+/gu) || [];
@@ -1286,8 +1354,14 @@ function renderInspector() {
   } else {
     summary.textContent = "No input has changed the model yet.";
   }
-  document.getElementById("storage-status").textContent = initialLedger?.invalid
-    ? "Saved ledger snapshot is unreadable. Its records were not loaded and new work will not be saved. Download the raw data for inspection, then restore a known-good state backup or erase local state."
+  const alert = document.getElementById("ledger-sync-alert");
+  alert.hidden = !ledgerStale && !initialLedger?.invalid;
+  alert.textContent = ledgerStale ? STALE_LEDGER_NOTICE
+    : initialLedger?.invalid ? "Saved evidence is unreadable. Open the inspector to download its raw data or restore a known-good backup." : "";
+  document.getElementById("storage-status").textContent = !sessionOnly && ledgerStale
+    ? STALE_LEDGER_NOTICE
+    : initialLedger?.invalid
+      ? "Saved ledger snapshot is unreadable. Its records were not loaded and new work will not be saved. Download the raw data for inspection, then restore a known-good state backup or erase local state."
     : sessionOnly
       ? "Session-only is on. New entries and score changes are not saved. Earlier stored state remains on this device. Downloads include current session text if you choose to save them."
     : Field.storageAvailable
@@ -1492,7 +1566,10 @@ function recordComposerFact() {
     output.textContent = "Recording canceled. Your text is still here.";
     return;
   }
-  recordFact(plan);
+  if (!recordFact(plan)) {
+    output.textContent = document.getElementById("ledger-result").textContent;
+    return;
+  }
   input.value = "";
   input.style.height = "52px";
   document.getElementById("draft-comparison").replaceChildren();
@@ -2087,19 +2164,23 @@ async function previewCorrectionPacket(packet, previewRequest) {
 function persistIncomingCorrection(after, nextId) {
   if (sessionOnly) return;
   if (initialLedger?.invalid) throw new Error("Saved ledger snapshot is unreadable. Restore a known-good backup or erase local state before applying corrections.");
+  if (ledgerStale) throw new Error(STALE_LEDGER_NOTICE);
   try {
-    const stored = storedLedger();
+    const stored = savedLedgerForGuard();
     if (stored?.invalid) throw new Error("Saved ledger snapshot is unreadable. Nothing was changed.");
-    const current = stored === null
-      ? {claims: storedClaims(), counter: storedNumber(STORAGE_KEYS.claimCounter, 1)} : stored;
-    if (!sameFactLedger(current.claims, Field.claims) || current.counter !== Field.claimCounter) {
+    if (JSON.stringify([stored.claims, stored.counter]) !== savedLedgerBaseline ||
+        !sameFactLedger(stored.claims, Field.claims) || stored.counter !== Field.claimCounter) {
+      ledgerStale = true;
+      renderInspector();
       throw new Error("Saved ledger changed in another tab or session. Reload and review the correction again.");
     }
     localStorage.setItem(STORAGE_KEYS.ledger, ledgerSnapshot(after, nextId));
+    savedLedgerBaseline = JSON.stringify([after, nextId]);
+    hasSavedLedgerSnapshot = true;
     Field.storageAvailable = true;
     removeLegacyLedgerKeys();
   } catch (error) {
-    if (error.message?.startsWith("Saved ledger")) throw error;
+    if (error.message?.startsWith("Saved ledger") || error.message === STALE_LEDGER_NOTICE) throw error;
     Field.storageAvailable = false;
     throw new Error("Browser storage rejected the ledger snapshot. No in-memory change was applied; try Session-only mode or free storage space.");
   }
@@ -2320,6 +2401,7 @@ function applyFactImport() {
     invalidateFactImport();
     return;
   }
+  if (!ledgerEditAllowed(document.getElementById("fact-import-preview"))) return;
   Field.claims = plan.merged;
   Field.claimCounter = plan.nextCounter;
   Field.save();
@@ -2397,6 +2479,7 @@ function applyFactCorrection() {
     invalidateFactCorrection("Name, value, or ledger changed. Preview the correction again.");
     return;
   }
+  if (!ledgerEditAllowed(document.getElementById("correction-preview"))) return;
   const before = JSON.parse(JSON.stringify(Field.claims));
   const at = now();
   let after;
@@ -2431,6 +2514,7 @@ function downloadFactCorrection() {
 }
 
 function recordFact({id, key, value}) {
+  if (!ledgerEditAllowed(document.getElementById("ledger-result"))) return false;
   invalidateFactImport();
   Field.claims.push({ id, key, value, time: now(), status: "active", imported: false });
   Field.claimCounter = id + 1;
@@ -2438,6 +2522,7 @@ function recordFact({id, key, value}) {
   invalidateEvidenceAnswer();
   renderLedger();
   showFactResult(key, `Recorded source #${id}. `);
+  return true;
 }
 
 function rememberFact() {
@@ -2445,8 +2530,7 @@ function rememberFact() {
   const valueInput = document.getElementById("fact-value");
   const plan = prepareFact(keyInput.value, valueInput.value);
   if (plan.error) { document.getElementById("ledger-result").textContent = plan.error; return; }
-  recordFact(plan);
-  valueInput.value = "";
+  if (recordFact(plan)) valueInput.value = "";
 }
 
 function recallFact() {
@@ -2456,6 +2540,7 @@ function recallFact() {
 function selectFact(id) {
   const selected = Field.claims.find(claim => claim.id === id);
   if (!selected) return;
+  if (!ledgerEditAllowed(document.getElementById("ledger-result"))) return;
   invalidateFactImport();
   const key = normalizeFactKey(selected.key);
   Field.claims.forEach(claim => {
@@ -2470,7 +2555,8 @@ function selectFact(id) {
 
 function deleteFact(id) {
   const claim = Field.claims.find(entry => entry.id === id);
-  if (!claim || !window.confirm(`Delete local fact record #${id}?`)) return;
+  if (!claim || !ledgerEditAllowed(document.getElementById("ledger-result")) ||
+      !window.confirm(`Delete local fact record #${id}?`)) return;
   invalidateFactImport();
   Field.claims = Field.claims.filter(entry => entry.id !== id);
   Field.save();
@@ -3047,6 +3133,7 @@ function applyStateImport() {
     output.textContent = "Local state changed. Choose the file again to review a fresh preview.";
     return;
   }
+  if (!ledgerEditAllowed(output)) return;
   if (!window.confirm("Replace this browser's score, memories, messages, and evidence records with the reviewed file? Download your current state first if you need it.")) return;
   const state = plan.state;
   const replacements = new Map([
@@ -3086,7 +3173,12 @@ function downloadUnreadableLedger() {
   if (!initialLedger?.invalid) return;
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.ledger);
-    if (raw === null) return;
+    if (raw !== initialLedger.raw) {
+      ledgerStale = true;
+      document.getElementById("ledger-recovery-download").hidden = true;
+      renderInspector();
+      return;
+    }
     downloadJSON({format: "aru-unreadable-ledger-recovery", version: 1, raw_storage_value: raw},
       "aru-unreadable-ledger-recovery.json");
   } catch (_) {
@@ -3191,6 +3283,11 @@ SIM.init();
 updateUI();
 renderLedger();
 document.getElementById("ledger-recovery-download").hidden = !initialLedger?.invalid;
+window.addEventListener("storage", event => {
+  if (event.key === null || [STORAGE_KEYS.ledger, STORAGE_KEYS.claims, STORAGE_KEYS.claimCounter].includes(event.key)) {
+    ledgerStillCurrent();
+  }
+});
 restoreMessages();
 syncVisualMotion();
 setInterval(autonomousReflection, 12000);

@@ -14,13 +14,14 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 function boot(values = {}, options = {}) {
-  const saved = new Map(Object.entries(values));
+  const saved = options.sharedSaved || new Map(Object.entries(values));
   const elements = new Map();
   const exports = [];
   const frames = new Map();
   let nextFrame = 1;
   let paintCalls = 0;
   const documentEvents = new Map();
+  const windowEvents = new Map();
   const motionPreference = {
     matches: !!options.reducedMotion,
     addEventListener(event, callback) { if (event === 'change') this.onchange = callback; }
@@ -62,7 +63,7 @@ function boot(values = {}, options = {}) {
   };
   const window = {
     innerWidth: 72, innerHeight: 72, devicePixelRatio: options.dpr || 1,
-    addEventListener() {}, confirm() { return true },
+    addEventListener(event, callback) { windowEvents.set(event, callback); }, confirm() { return true },
     matchMedia() { return motionPreference; },
     location: { reload() { window.reloaded = true; } }
   };
@@ -87,6 +88,7 @@ function boot(values = {}, options = {}) {
     get pendingFrames() { return frames.size; },
     get paintCalls() { return paintCalls; },
     setHidden(hidden) { document.hidden = hidden; documentEvents.get('visibilitychange')(); },
+    notifyStorage(key) { windowEvents.get('storage')?.({key}); },
     setReducedMotion(reduced) {
       motionPreference.matches = reduced;
       motionPreference.onchange?.();
@@ -1052,6 +1054,182 @@ test('an incoming correction refuses a saved ledger changed by another tab after
   assert.equal(app.field.claims.length, 4);
   assert.equal(app.field.claims[1].value, fixture.before_records[1].value);
   assert.equal(boot(Object.fromEntries(app.saved)).field.claims[1].value, 'changed in another tab');
+});
+
+test('an older tab cannot overwrite a newer ledger while saving an unrelated message', () => {
+  const sharedSaved = new Map();
+  const writer = boot({}, {sharedSaved});
+  const older = boot({}, {sharedSaved});
+  writer.fact('color', 'teal');
+  const newerSnapshot = sharedSaved.get('aru_fact_ledger_v1');
+  older.input('An unrelated remembrance');
+  assert.equal(sharedSaved.get('aru_fact_ledger_v1'), newerSnapshot);
+  assert.match(older.elements.get('storage-status').textContent, /Saved evidence changed/);
+  older.fact('city', 'Corvallis');
+  assert.equal(older.field.claims.length, 0, 'the refused edit does not enter the older in-memory ledger');
+  assert.equal(older.elements.get('fact-value').value, 'Corvallis', 'the draft remains for review');
+  assert.equal(boot(Object.fromEntries(sharedSaved)).field.claims[0].value, 'teal');
+  writer.fact('city', 'Corvallis');
+  assert.equal(boot(Object.fromEntries(sharedSaved)).field.claims.length, 2);
+});
+
+test('unrelated score saves do not rewrite an unchanged ledger, even if another tab writes after the check', () => {
+  const origin = boot();
+  origin.fact('color', 'teal');
+  const app = boot(Object.fromEntries(origin.saved));
+  const prior = JSON.parse(app.saved.get('aru_fact_ledger_v1'));
+  const newer = JSON.stringify({...prior, claims: [...prior.claims,
+    {id: 2, key: 'city', value: 'Corvallis', time: Date.now(), status: 'active', imported: false}],
+    next_source_id: 3});
+  const getItem = app.context.localStorage.getItem.bind(app.context.localStorage);
+  const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
+  let changedBetweenCheckAndWrite = false;
+  let ledgerWrites = 0;
+  app.context.localStorage.getItem = key => {
+    const value = getItem(key);
+    if (key === 'aru_fact_ledger_v1' && !changedBetweenCheckAndWrite) {
+      changedBetweenCheckAndWrite = true;
+      app.saved.set(key, newer);
+    }
+    return value;
+  };
+  app.context.localStorage.setItem = (key, value) => {
+    if (key === 'aru_fact_ledger_v1') ledgerWrites++;
+    setItem(key, value);
+  };
+  app.input('A score-only message');
+  assert.equal(changedBetweenCheckAndWrite, true);
+  assert.equal(ledgerWrites, 0);
+  assert.equal(app.saved.get('aru_fact_ledger_v1'), newer);
+  assert.match(app.elements.get('storage-status').textContent, /Saved evidence changed/);
+});
+
+test('a storage notification warns a stale tab before selection or deletion', () => {
+  const sharedSaved = new Map();
+  const first = boot({}, {sharedSaved});
+  first.fact('color', 'teal');
+  const writer = boot({}, {sharedSaved});
+  const older = boot({}, {sharedSaved});
+  writer.fact('city', 'Corvallis');
+  older.notifyStorage('aru_fact_ledger_v1');
+  assert.match(older.elements.get('storage-status').textContent, /This tab will not overwrite it/);
+  assert.equal(older.elements.get('ledger-sync-alert').hidden, false);
+  assert.match(older.elements.get('ledger-sync-alert').textContent, /reload to see the saved ledger/);
+  vm.runInContext('deleteFact(1); selectFact(1)', older.context);
+  assert.equal(older.field.claims.length, 1);
+  assert.equal(older.field.claims[0].status, 'active');
+  assert.equal(boot(Object.fromEntries(sharedSaved)).field.claims.length, 2);
+});
+
+test('reviewed local corrections and imports refuse a newer saved ledger', async () => {
+  const sharedSaved = new Map();
+  const seed = boot({}, {sharedSaved});
+  seed.fact('color', 'teal');
+  const correctionTab = boot({}, {sharedSaved});
+  correctionTab.context.document.getElementById('fact-key').value = 'color';
+  correctionTab.context.document.getElementById('fact-value').value = 'amber';
+  vm.runInContext('previewFactCorrection()', correctionTab.context);
+  const writer = boot({}, {sharedSaved});
+  writer.fact('city', 'Corvallis');
+  const beforeCorrection = sharedSaved.get('aru_fact_ledger_v1');
+  vm.runInContext('applyFactCorrection()', correctionTab.context);
+  assert.equal(correctionTab.field.claims.length, 1);
+  assert.match(correctionTab.elements.get('correction-preview').textContent, /Saved evidence changed/);
+  assert.equal(sharedSaved.get('aru_fact_ledger_v1'), beforeCorrection);
+
+  const source = boot();
+  source.fact('material', 'oak');
+  vm.runInContext('downloadFactLedger()', source.context);
+  const fileText = await source.exports[0].text();
+  const importTab = boot({}, {sharedSaved});
+  importTab.context.document.getElementById('fact-import').files = [
+    {size: Buffer.byteLength(fileText), text: async () => fileText}
+  ];
+  await vm.runInContext('previewFactImport()', importTab.context);
+  writer.fact('color', 'violet');
+  vm.runInContext('applyFactImport()', importTab.context);
+  assert.equal(importTab.field.claims.length, 2);
+  assert.match(importTab.elements.get('fact-import-preview').textContent, /Saved evidence changed/);
+  assert.equal(boot(Object.fromEntries(sharedSaved)).field.claims.length, 3);
+});
+
+test('a migrated legacy ledger blocks an old tab but accepts a same-ledger save', () => {
+  const original = boot();
+  original.fact('color', 'teal');
+  const records = JSON.parse(original.saved.get('aru_fact_ledger_v1')).claims;
+  const sharedSaved = new Map([['aru_fact_claims', JSON.stringify(records)], ['aru_fact_counter', '2']]);
+  const writer = boot({}, {sharedSaved});
+  const older = boot({}, {sharedSaved});
+  writer.fact('city', 'Corvallis');
+  older.fact('material', 'oak');
+  assert.match(older.elements.get('ledger-result').textContent, /Saved evidence changed/);
+  assert.equal(older.field.claims.length, 1);
+  assert.equal(boot(Object.fromEntries(sharedSaved)).field.claims.length, 2);
+
+  const sameLedgerWriter = boot({}, {sharedSaved});
+  const sameLedgerReader = boot({}, {sharedSaved});
+  sameLedgerWriter.input('Only the simulation score changed');
+  sameLedgerReader.fact('material', 'oak');
+  assert.equal(boot(Object.fromEntries(sharedSaved)).field.claims.length, 3);
+});
+
+test('a later damaged saved snapshot is preserved when an old tab tries to save', () => {
+  const original = boot();
+  original.fact('color', 'teal');
+  const old = boot(Object.fromEntries(original.saved));
+  const damaged = '{"version":1,"claims":"damaged","next_source_id":2}';
+  old.saved.set('aru_fact_ledger_v1', damaged);
+  old.input('score change');
+  assert.equal(old.saved.get('aru_fact_ledger_v1'), damaged);
+  old.fact('city', 'Corvallis');
+  assert.equal(old.field.claims.length, 1);
+  assert.match(old.elements.get('storage-status').textContent, /Saved evidence changed/);
+});
+
+test('an applied incoming correction refreshes the guard for the next local edit', async () => {
+  const fixture = applicableCorrectionFixture();
+  const app = boot({aru_fact_claims: JSON.stringify(fixture.before_records), aru_fact_counter: '5'});
+  await chooseReceiptFile(app, JSON.stringify(fixture));
+  vm.runInContext('previewIncomingCorrection(); applyIncomingCorrection()', app.context);
+  assert.equal(app.field.claims.length, 5);
+  app.fact('new name', 'new value');
+  assert.equal(app.field.claims.length, 6);
+  assert.equal(boot(Object.fromEntries(app.saved)).field.claims.length, 6);
+  assert.doesNotMatch(app.elements.get('storage-status').textContent, /Saved evidence changed/);
+});
+
+test('full-state restore refuses a saved ledger changed after its preview', async () => {
+  const source = boot();
+  source.fact('city', 'Salem');
+  vm.runInContext('downloadState()', source.context);
+  const sharedSaved = new Map();
+  const older = boot({}, {sharedSaved});
+  const writer = boot({}, {sharedSaved});
+  await chooseStateFile(older, await source.exports[0].text());
+  writer.fact('city', 'Corvallis');
+  const newerSnapshot = sharedSaved.get('aru_fact_ledger_v1');
+  vm.runInContext('applyStateImport()', older.context);
+  assert.equal(older.window.reloaded, undefined);
+  assert.match(older.elements.get('state-import-preview').textContent, /Saved evidence changed/);
+  assert.equal(sharedSaved.get('aru_fact_ledger_v1'), newerSnapshot);
+});
+
+test('a recovery tab refuses to replace a damaged snapshot that another tab repaired', async () => {
+  const raw = '{"version":1,"claims":"damaged","next_source_id":1}';
+  const damaged = boot({aru_fact_ledger_v1: raw});
+  assert.equal(damaged.elements.get('ledger-sync-alert').hidden, false);
+  const backup = boot();
+  backup.fact('color', 'teal');
+  vm.runInContext('downloadState()', backup.context);
+  await chooseStateFile(damaged, await backup.exports[0].text());
+  const repaired = backup.saved.get('aru_fact_ledger_v1');
+  damaged.saved.set('aru_fact_ledger_v1', repaired);
+  vm.runInContext('applyStateImport(); downloadUnreadableLedger()', damaged.context);
+  assert.equal(damaged.window.reloaded, undefined);
+  assert.equal(damaged.saved.get('aru_fact_ledger_v1'), repaired);
+  assert.equal(damaged.exports.length, 0);
+  assert.equal(damaged.elements.get('ledger-recovery-download').hidden, true);
+  assert.match(damaged.elements.get('storage-status').textContent, /Saved evidence changed/);
 });
 
 test('a failed ordinary ledger save reloads the prior complete snapshot', () => {
