@@ -24,6 +24,7 @@ jobs:
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-brief.json
+      - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction.json
       - run: node tools/verify-proof.cjs research/example-proof.json
       - run: node tools/verify-proof.cjs research/example-proof-v2.json
       - run: node tools/verify-proof.cjs research/example-proof-v3.json
@@ -51,3 +52,6 @@ jobs:
       - run: |
           python3 tools/differential-brief.py --seed 20261015 --runs 2000 --json | tee /tmp/aru-brief-differential.json
           diff -u research/example-brief-differential-report.json /tmp/aru-brief-differential.json
+      - run: |
+          python3 tools/differential-correction.py --seed 20261015 --runs 2000 --json | tee /tmp/aru-correction-differential.json
+          diff -u research/example-correction-differential-report.json /tmp/aru-correction-differential.json

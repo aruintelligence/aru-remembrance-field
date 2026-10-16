@@ -1,0 +1,22 @@
+{
+  "format": "aru-evidence-correction-receipt",
+  "version": 1,
+  "model_revision": "aru-evidence-corrections-1",
+  "name": "favorite color",
+  "value": "amber",
+  "new_source_id": 5,
+  "applied_at": 1700000001000,
+  "before_records": [
+    {"id": 1, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "active"},
+    {"id": 2, "key": "unrelated note", "value": "private example", "time": 1700000000001, "status": "active"},
+    {"id": 3, "key": "FAVORITE  COLOR", "value": "purple", "time": 1700000000002, "status": "active", "imported": true},
+    {"id": 4, "key": "favorite color", "value": "red", "time": 1700000000003, "status": "superseded"}
+  ],
+  "after_records": [
+    {"id": 1, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "superseded"},
+    {"id": 2, "key": "unrelated note", "value": "private example", "time": 1700000000001, "status": "active"},
+    {"id": 3, "key": "FAVORITE  COLOR", "value": "purple", "time": 1700000000002, "status": "superseded", "imported": true},
+    {"id": 4, "key": "favorite color", "value": "red", "time": 1700000000003, "status": "superseded"},
+    {"id": 5, "key": "favorite color", "value": "amber", "time": 1700000001000, "status": "active", "imported": false}
+  ]
+}

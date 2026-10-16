@@ -14,8 +14,11 @@ Open **Evidence memory** in the [live demo](https://aruintelligence.github.io/ar
 | Select source #1 in that conflict; recall it | Return `teal` with source #1. The `amber` record remains marked superseded. |
 | Add `violet` to the resolved name; recall it | Conflict again; a new assertion cannot silently override the chosen source. |
 | Delete the chosen source when only superseded records remain | Withhold an answer until a remaining record is explicitly selected. |
+| With `favorite color` = `teal` current, preview a correction to `amber`, then apply it | The preview makes no change. Apply creates a new current source with `amber` and retains `teal` as superseded. A changed input or ledger invalidates the preview. |
 
 The test suite runs these transitions in `tests/field.test.cjs`. It also checks that fact records survive a reload, do not change the freeform memory or score, render entered markup as text, reject malformed stored records, and refuse to evict a record silently at the 100-entry limit. Run `node tests/field.test.cjs` from the repository root.
+
+The [reviewed correction protocol](evidence-correction-protocol.md) adds a portable before/after receipt and an independently written Python comparison against the deterministic correction rule.
 
 ## Portable merge challenge
 

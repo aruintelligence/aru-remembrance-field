@@ -37,6 +37,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A browser-side checker for current-model transition proofs, including the no-history control and every score term
 - A separate evidence ledger for exact-name fact recall, source IDs, conflicts, explicit resolution, and shareable cited-answer excerpts
 - A multi-fact evidence brief that displays sourced values and explicit refusals together, with a replayable full-snapshot receipt
+- A reviewed fact correction that preserves earlier assertions, makes a new source current, and exports a replayable before/after receipt
 - Composer actions for recording a `name: value` assertion and asking recorded facts with sources, without changing the simulation score
 - A browser-side verifier for shared answer receipts and excerpts, with no import or command-line setup
 
@@ -136,6 +137,8 @@ The verifiers recalculate every score term and reject mismatches. This checks **
 ## Evidence memory: recall with sources
 
 Open **Evidence memory**, enter a fact name such as `favorite color` and a value such as `teal`, then select **Record fact**. Entering `FAVORITE  COLOR` and selecting **Recall by name** retrieves the recorded value and its local source number. Matching ignores case, repeated spaces, and Unicode compatibility forms in the *name*; it does not infer synonyms or the meaning of prose.
+
+To change a current value, enter the existing fact name and replacement value and select **Preview correction**. Review the current source IDs and values, then select **Apply reviewed correction**. The app creates a new source and marks the older same-name assertions superseded; it preserves unrelated records. A changed name, value, or ledger invalidates the preview. **Download correction receipt JSON** captures the complete ledger before and after the applied change for browser or command-line replay. It can contain unrelated private facts. The [correction protocol](research/evidence-correction-protocol.md) has a public fixture and independent differential check; no receipt authenticates its origin or the truth of an assertion.
 
 For a small set of facts, enter 2–8 names on separate lines under **Evidence brief** and select **Build evidence brief**. Each row independently shows a cited user assertion or an explicit missing, conflicting, or historical refusal. A conflict on one name never turns another name into a guessed answer. **Download brief receipt JSON** captures the names, results, and full ledger snapshot for replay in the browser's **Verify a shared answer receipt** panel or with `node tools/verify-evidence-receipt.cjs /path/to/aru-evidence-brief-receipt.json`. Editing the names or ledger disables the old download. The [brief protocol](research/evidence-brief-protocol.md) includes a public four-name example and an independent Python differential challenge. The full snapshot can contain unrelated private facts; inspect it before sharing.
 

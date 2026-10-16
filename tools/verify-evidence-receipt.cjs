@@ -8,10 +8,41 @@ const { loadModel } = require("./benchmark-evidence.cjs");
 const MAX_BYTES = 1024 * 1024;
 const MODEL_REVISION = "aru-evidence-questions-1";
 const BRIEF_REVISION = "aru-evidence-briefs-1";
+const CORRECTION_REVISION = "aru-evidence-corrections-1";
 const CLAIM_FIELDS = new Set(["id", "key", "value", "time", "status", "imported"]);
 
 function requireValid(condition, message) {
   if (!condition) throw new Error(`Invalid receipt: ${message}`);
+}
+
+function verifyCorrectionReceipt(receipt, model) {
+  const keys = ["format", "version", "model_revision", "name", "value", "new_source_id",
+    "applied_at", "before_records", "after_records"];
+  requireValid(keys.every(key => Object.hasOwn(receipt, key)) &&
+    Object.keys(receipt).every(key => keys.includes(key)) &&
+    receipt.version === 1 && receipt.model_revision === CORRECTION_REVISION &&
+    Array.isArray(receipt.before_records) && receipt.before_records.length < 100 &&
+    Array.isArray(receipt.after_records) && receipt.after_records.length <= 100,
+    "unsupported correction format, model revision, or record count");
+  const ids = new Set();
+  for (const record of receipt.before_records) {
+    requireValid(model.validClaim(record) && Object.keys(record).every(key => CLAIM_FIELDS.has(key)) &&
+      (record.imported === undefined || typeof record.imported === "boolean") && !ids.has(record.id),
+      "invalid or duplicate prior record");
+    ids.add(record.id);
+  }
+  let computed;
+  try {
+    computed = model.correct(receipt.name, receipt.value, receipt.before_records,
+      receipt.new_source_id, receipt.applied_at);
+  } catch (error) { requireValid(false, error.message); }
+  try { assert.deepStrictEqual(receipt.after_records, computed); }
+  catch (_) { requireValid(false, "corrected ledger does not match the supplied prior records"); }
+  const normalized = receipt.name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+  const superseded = receipt.before_records.filter(record => record.status === "active" &&
+    record.key.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase() === normalized).length;
+  return {kind: "correction", new_source_id: receipt.new_source_id, superseded,
+    records: computed.length, scope: "full-supplied-snapshots", model_sha256: model.hash};
 }
 
 function verifyBriefReceipt(receipt, model) {
@@ -48,6 +79,7 @@ function verifyBriefReceipt(receipt, model) {
 
 function verifyEvidenceReceipt(receipt, model = loadModel()) {
   requireValid(receipt && typeof receipt === "object" && !Array.isArray(receipt), "object expected");
+  if (receipt.format === "aru-evidence-correction-receipt") return verifyCorrectionReceipt(receipt, model);
   if (receipt.format === "aru-evidence-brief-receipt") return verifyBriefReceipt(receipt, model);
   const excerpt = receipt.format === "aru-evidence-answer-excerpt";
   const keys = ["format", "version", "model_revision", "question", "records", "answer",
@@ -104,13 +136,15 @@ if (require.main === module) {
     try { receipt = JSON.parse(readLimited(process.argv[2])); }
     catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid receipt: file is not valid JSON"); throw error; }
     const result = verifyEvidenceReceipt(receipt);
-    if (result.kind === "brief") {
+    if (result.kind === "correction") {
+      console.log(`PASS: correction source #${result.new_source_id}; ${result.superseded} prior current source${result.superseded === 1 ? "" : "s"} superseded; ${result.records} resulting records; scope ${result.scope}`);
+    } else if (result.kind === "brief") {
       console.log(`PASS: ${result.names} names; ${result.known} sourced answer${result.known === 1 ? "" : "s"}; ${result.names - result.known} refusal${result.names - result.known === 1 ? "" : "s"}; ${result.records} supplied records; scope ${result.scope}`);
     } else {
       console.log(`PASS: ${result.kind}; ${result.records} supplied records; ${result.sources.length} cited sources; scope ${result.scope}`);
     }
     console.log(`Local model SHA-256: ${result.model_sha256}`);
-    console.log("This checks the answer against supplied records, not omitted ledger entries, origin, or factual truth.");
+    console.log("This checks the result against supplied records, not omitted ledger entries, origin, or factual truth.");
   } catch (error) {
     console.error(`FAIL: ${error.message}`);
     process.exitCode = 1;

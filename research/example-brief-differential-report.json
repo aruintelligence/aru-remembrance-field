@@ -7,6 +7,6 @@
   "checked": 2008,
   "mutation_probe": "detected",
   "result": "pass",
-  "javascript_model_sha256": "7c70707e9018ba147392d692de5f475bd60ddfc60cc688799e1b7ac44441b549",
+  "javascript_model_sha256": "35a50422c5655d47a1e6c8a16e58847a33dbed84f9f3bfa53738b4af61fdadb7",
   "python_reference_sha256": "73e3fe6af7d3ae2340115486e6fd9e930d6268d9375b2945424f098d255836fe"
 }
