@@ -508,6 +508,13 @@
       </div>
       <p id="reference-receipt-comparison" role="status" aria-live="polite">Verify a question, excerpt, or brief first.</p>
       <p>A match depends on the reference you supplied. A checkpoint adds evidence only if you kept it independently before receiving the later files; it does not prove when it was made, who recorded the facts, or that they are true.</p>
+      <h2>Audit a set of shared answers</h2>
+      <p>Use the reference and optional checkpoint selected above. Check up to 20 question, excerpt, or brief receipts together. Every file gets its own replay and reference comparison; identical text is flagged as a repeat.</p>
+      <label for="audit-receipts">Answer receipt JSON files (1–20, up to 1 MiB each and 4 MiB combined)</label>
+      <input id="audit-receipts" type="file" accept=".json,application/json" multiple onchange="invalidateEvidenceBatchAudit()">
+      <div class="ledger-actions"><button type="button" onclick="runEvidenceBatchAudit()">Audit selected receipts</button></div>
+      <div id="audit-result" role="status" aria-live="polite">Choose a reference and answer receipts to run a local audit.</div>
+      <p>Results cover only the files selected here. A repeated text file is not a new independent source. No files are uploaded or imported.</p>
     </section>
     <div class="ledger-actions">
       <button type="button" id="incoming-correction-preview-button" onclick="previewIncomingCorrection()" disabled>Preview applying correction here</button>
@@ -2048,12 +2055,18 @@ function compareVerifiedEvidenceToLocal() {
 function invalidateReferenceComparison(message = "File selection changed. Compare again to check the selected files.") {
   ++referenceComparisonRequest;
   document.getElementById("reference-receipt-comparison").textContent = message;
+  invalidateEvidenceBatchAudit("Reference or checkpoint selection changed. Audit the selected receipts again.");
 }
 
-async function readEvidenceComparisonFile(file, label) {
+async function readEvidenceComparisonText(file, label) {
   if (file.size > 1024 * 1024) throw new Error(`${label} exceeds the 1 MiB limit.`);
   const raw = await file.text();
   if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error(`${label} exceeds the 1 MiB limit.`);
+  return raw;
+}
+
+async function readEvidenceComparisonFile(file, label) {
+  const raw = await readEvidenceComparisonText(file, label);
   try { return JSON.parse(raw); }
   catch (_) { throw new Error(`${label} is not valid JSON.`); }
 }
@@ -2231,6 +2244,118 @@ async function compareVerifiedEvidenceToReference() {
     output.textContent = `${outcome.match ? "MATCH" : "DIFFER"}: ${checkpointFile ? "Checkpoint agrees with the reference. " : "No checkpoint supplied. "}${outcome.detail} This does not establish origin or factual truth.`;
   } catch (error) {
     if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not compare the selected files."}`;
+  }
+}
+
+let evidenceBatchAuditRequest = 0;
+function invalidateEvidenceBatchAudit(message = "Receipt selection changed. Audit the selected files again.") {
+  ++evidenceBatchAuditRequest;
+  document.getElementById("audit-result").textContent = message;
+}
+
+async function runEvidenceBatchAudit() {
+  const request = ++evidenceBatchAuditRequest;
+  const output = document.getElementById("audit-result");
+  const referenceInput = document.getElementById("reference-file");
+  const checkpointInput = document.getElementById("checkpoint-file");
+  const receiptInput = document.getElementById("audit-receipts");
+  const referenceFile = referenceInput.files?.[0];
+  const checkpointFile = checkpointInput.files?.[0];
+  const files = Array.from(receiptInput.files || []);
+  if (!referenceFile) { output.textContent = "Choose a reference ledger JSON file above."; return; }
+  if (files.length < 1 || files.length > 20) {
+    output.textContent = "Choose 1–20 question, excerpt, or brief receipt files."; return;
+  }
+  if (files.reduce((sum, file) => sum + file.size, 0) > 4 * 1024 * 1024) {
+    output.textContent = "FAIL: The selected receipts exceed the 4 MiB combined limit."; return;
+  }
+  const stillCurrent = () => request === evidenceBatchAuditRequest &&
+    referenceInput.files?.[0] === referenceFile && checkpointInput.files?.[0] === checkpointFile &&
+    receiptInput.files?.length === files.length &&
+    files.every((file, index) => receiptInput.files[index] === file);
+  output.textContent = "Auditing selected files on this device…";
+  try {
+    const [baseline, checkpoint] = await Promise.all([
+      readEvidenceComparisonFile(referenceFile, "Reference ledger"),
+      checkpointFile ? readEvidenceComparisonFile(checkpointFile, "Checkpoint") : null]);
+    if (!stillCurrent()) return;
+    validateEvidenceReference(baseline);
+    if (checkpointFile) {
+      validateEvidenceCheckpoint(checkpoint);
+      const digest = await ledgerCheckpointSHA256(baseline.records, baseline.next_source_id);
+      if (!stillCurrent()) return;
+      if (checkpoint.sha256 !== digest) {
+        output.textContent = "DIFFER: The reference ledger differs from the selected checkpoint. No receipts were audited.";
+        return;
+      }
+    }
+    const seenText = new Map();
+    const rows = [];
+    const totals = {MATCH: 0, DIFFER: 0, FAIL: 0};
+    let repeats = 0;
+    for (const [index, file] of files.entries()) {
+      let verdict = "FAIL";
+      let detail;
+      let duplicateOf;
+      try {
+        const raw = await readEvidenceComparisonText(file, `Receipt #${index + 1}`);
+        if (!stillCurrent()) return;
+        duplicateOf = seenText.get(raw);
+        if (duplicateOf === undefined) seenText.set(raw, index + 1);
+        else repeats++;
+        let receipt;
+        try { receipt = JSON.parse(raw); }
+        catch (_) { throw new Error("File is not valid JSON."); }
+        if (!["aru-evidence-question-receipt", "aru-evidence-answer-excerpt",
+              "aru-evidence-brief-receipt"].includes(receipt?.format)) {
+          throw new Error("Only question, excerpt, or brief receipts can be audited.");
+        }
+        verifyEvidenceBundle(receipt);
+        const outcome = compareEvidenceToReference(receipt, baseline.records);
+        verdict = outcome.match ? "MATCH" : "DIFFER";
+        detail = outcome.detail;
+      } catch (error) {
+        if (!stillCurrent()) return;
+        detail = error.message || "Could not check this receipt.";
+      }
+      totals[verdict]++;
+      rows.push({number: index + 1, name: file.name || `Receipt #${index + 1}`,
+        verdict, detail, duplicateOf});
+    }
+    if (!stillCurrent()) return;
+    const summary = document.createElement("p");
+    summary.textContent = `${files.length} selected: ${totals.MATCH} MATCH, ${totals.DIFFER} DIFFER, ${totals.FAIL} FAIL; ${repeats} identical-text repeat${repeats === 1 ? "" : "s"}. ${checkpointFile ? "Checkpoint agrees with reference." : "No checkpoint supplied."}`;
+    const scroller = document.createElement("div");
+    scroller.className = "trajectory-scroll";
+    const table = document.createElement("table");
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const label of ["#", "File", "Result", "Reason / repeat"]) {
+      const cell = document.createElement("th");
+      cell.setAttribute("scope", "col");
+      cell.textContent = label;
+      headRow.appendChild(cell);
+    }
+    head.appendChild(headRow);
+    const body = document.createElement("tbody");
+    for (const row of rows) {
+      const line = document.createElement("tr");
+      for (const value of [String(row.number), row.name, row.verdict,
+        `${row.detail}${row.duplicateOf === undefined ? "" : ` Identical text to #${row.duplicateOf}; not an independent file.`}`]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        line.appendChild(cell);
+      }
+      body.appendChild(line);
+    }
+    table.appendChild(head);
+    table.appendChild(body);
+    scroller.appendChild(table);
+    output.replaceChildren();
+    output.appendChild(summary);
+    output.appendChild(scroller);
+  } catch (error) {
+    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not audit the selected files."}`;
   }
 }
 
