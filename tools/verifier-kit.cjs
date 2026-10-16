@@ -19,7 +19,7 @@ const FILES = [...CODE_FILES, "README.md"];
 const README = `# ĀRU offline verifier kit
 
 This folder preserves the exact browser page and the Node and independent Python
-batch checkers for a version 2 browser audit capture. It contains no selected
+batch checkers for a version 2 browser audit capture or a paired transition capture. It contains no selected
 reference, checkpoint, receipt, or capture file. Keep those originals separately
 and provide them explicitly when replaying a capture.
 
@@ -29,6 +29,10 @@ From this folder, with Node.js 22+ and Python 3.12+ installed:
 node tools/verifier-kit.cjs check . /path/to/capture.json
 node tools/audit-evidence-batch.cjs /path/to/reference.json /path/to/receipt-1.json --checkpoint /path/to/checkpoint.json --check-capture /path/to/capture.json
 python3 tools/independent-evidence-batch.py /path/to/reference.json /path/to/receipt-1.json --checkpoint /path/to/checkpoint.json --check-capture /path/to/capture.json
+
+# For a paired transition capture, supply both references and all original receipts:
+node tools/audit-evidence-batch.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-transition /path/to/transition.json
+python3 tools/independent-evidence-batch.py /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-transition /path/to/transition.json
 \`\`\`
 
 Omit \`--checkpoint\` when the original capture has no checkpoint. Supply all
@@ -58,11 +62,7 @@ function regularBytes(file, limit, label) {
   return bytes;
 }
 
-function captureScriptHash(file) {
-  const bytes = regularBytes(file, MAX_CAPTURE_BYTES, "Capture");
-  let capture;
-  try { capture = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(bytes)); }
-  catch (_) { throw new Error("Capture is not valid UTF-8 JSON"); }
+function browserCaptureHash(capture) {
   const digest = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   if (!exactly(capture, ["format", "version", "browser_script_sha256", "reference_sha256",
     "checkpoint_sha256", "receipts", "totals"]) ||
@@ -90,6 +90,31 @@ function captureScriptHash(file) {
     throw new Error("Capture totals disagree with its receipt rows");
   }
   return capture.browser_script_sha256;
+}
+
+function captureScriptHash(file) {
+  const bytes = regularBytes(file, MAX_CAPTURE_BYTES, "Capture");
+  let capture;
+  try { capture = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(bytes)); }
+  catch (_) { throw new Error("Capture is not valid UTF-8 JSON"); }
+  if (capture?.format !== "aru-evidence-reference-transition-capture") {
+    return browserCaptureHash(capture);
+  }
+  if (!exactly(capture, ["format", "version", "capture_a", "capture_b", "changed_receipts"]) ||
+      capture.version !== 1 || !Array.isArray(capture.changed_receipts)) {
+    throw new Error("Expected a well-formed paired transition capture");
+  }
+  const aHash = browserCaptureHash(capture.capture_a);
+  const bHash = browserCaptureHash(capture.capture_b);
+  const a = capture.capture_a.receipts;
+  const b = capture.capture_b.receipts;
+  const changed = a.filter((row, index) => row.verdict !== b[index]?.verdict).map(row => row.index);
+  if (aHash !== bHash || a.length !== b.length || a.some((row, index) =>
+      row.sha256 !== b[index].sha256 || row.duplicate_of !== b[index].duplicate_of) ||
+      JSON.stringify(changed) !== JSON.stringify(capture.changed_receipts)) {
+    throw new Error("Paired transition sides disagree on script, ordered receipts, or changed verdicts");
+  }
+  return aHash;
 }
 
 function scriptHash(htmlBytes) {

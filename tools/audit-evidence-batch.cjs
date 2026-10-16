@@ -123,26 +123,53 @@ function browserCaptureFromReport(report, version = 2) {
   };
 }
 
+function transitionCaptureFromReports(aReport, bReport) {
+  const a = browserCaptureFromReport(aReport);
+  const b = browserCaptureFromReport(bReport);
+  if (a.browser_script_sha256 !== b.browser_script_sha256 ||
+      a.receipts.length !== b.receipts.length || a.receipts.some((row, index) =>
+        row.sha256 !== b.receipts[index].sha256 || row.duplicate_of !== b.receipts[index].duplicate_of)) {
+    throw new Error("Transition sides must use the same verifier and ordered receipt bytes");
+  }
+  return {format: "aru-evidence-reference-transition-capture", version: 1,
+    capture_a: a, capture_b: b,
+    changed_receipts: a.receipts.filter((row, index) => row.verdict !== b.receipts[index].verdict)
+      .map(row => row.index)};
+}
+
 function parseArgs(args) {
   let checkpointFile;
+  let referenceB;
+  let checkpointB;
   let reportFile;
   let captureFile;
+  let transitionFile;
   let json = false;
   const files = [];
   for (let index = 0; index < args.length; index++) {
     const item = args[index];
-    if (item === "--checkpoint" || item === "--check-report" || item === "--check-capture") {
+    if (["--checkpoint", "--reference-b", "--checkpoint-b", "--check-report",
+         "--check-capture", "--check-transition"].includes(item)) {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error(`${item} requires a file`);
       if (item === "--checkpoint") {
         if (checkpointFile !== undefined) throw new Error("Duplicate --checkpoint option");
         checkpointFile = value;
+      } else if (item === "--reference-b") {
+        if (referenceB !== undefined) throw new Error("Duplicate --reference-b option");
+        referenceB = value;
+      } else if (item === "--checkpoint-b") {
+        if (checkpointB !== undefined) throw new Error("Duplicate --checkpoint-b option");
+        checkpointB = value;
       } else if (item === "--check-report") {
         if (reportFile !== undefined) throw new Error("Duplicate --check-report option");
         reportFile = value;
-      } else {
+      } else if (item === "--check-capture") {
         if (captureFile !== undefined) throw new Error("Duplicate --check-capture option");
         captureFile = value;
+      } else {
+        if (transitionFile !== undefined) throw new Error("Duplicate --check-transition option");
+        transitionFile = value;
       }
     } else if (item === "--json") {
       if (json) throw new Error("Duplicate --json option");
@@ -150,13 +177,38 @@ function parseArgs(args) {
     } else if (item.startsWith("--")) throw new Error(`Unknown option ${item}`);
     else files.push(item);
   }
-  if (files.length < 2) throw new Error("Usage: node tools/audit-evidence-batch.cjs <reference.json> <receipt.json>... [--checkpoint prior.json] [--json] [--check-report saved-report.json] [--check-capture browser-capture.json]");
-  return {referenceFile: files[0], receiptFiles: files.slice(1), checkpointFile, reportFile, captureFile, json};
+  if (files.length < 2) throw new Error("Usage: node tools/audit-evidence-batch.cjs <reference-a.json> <receipt.json>... [--checkpoint a.json] [--reference-b b.json --checkpoint-b b-checkpoint.json --check-transition capture.json] [--json] [--check-report report.json] [--check-capture capture.json]");
+  if ((checkpointB || transitionFile) && !referenceB) throw new Error("--checkpoint-b and --check-transition require --reference-b");
+  if (referenceB && (reportFile || captureFile)) throw new Error("Use --check-transition instead of a single-reference report or capture with --reference-b");
+  return {referenceFile: files[0], receiptFiles: files.slice(1), checkpointFile,
+    referenceB, checkpointB, reportFile, captureFile, transitionFile, json};
 }
 
 function run(args = process.argv.slice(2)) {
-  const {referenceFile, receiptFiles, checkpointFile, reportFile, captureFile, json} = parseArgs(args);
+  const {referenceFile, receiptFiles, checkpointFile, referenceB, checkpointB,
+    reportFile, captureFile, transitionFile, json} = parseArgs(args);
   const report = auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile});
+  if (referenceB !== undefined) {
+    const other = auditEvidenceBatch(referenceB, receiptFiles, {checkpointFile: checkpointB});
+    const transition = transitionCaptureFromReports(report, other);
+    if (transitionFile !== undefined) {
+      const expected = parseJSON(readLimited(transitionFile, "Saved transition capture"), "Saved transition capture");
+      try { assert.deepStrictEqual(transition, expected); }
+      catch (_) { throw new Error("Saved transition capture differs from the recomputed references, ordered receipts, outcomes, or browser script"); }
+    }
+    if (json) console.log(JSON.stringify(transition, null, 2));
+    else {
+      for (const [label, audit] of [["A", report], ["B", other]]) {
+        console.log(`${label}: ${audit.totals.match} MATCH, ${audit.totals.differ} DIFFER, ${audit.totals.fail} FAIL.`);
+      }
+      console.log(`${transition.changed_receipts.length} changed receipt verdicts.`);
+      if (transitionFile !== undefined) console.log("TRANSITION CAPTURE MATCH: both supplied references, ordered files, outcomes, and browser script were reproduced. Inspect A and B counts independently.");
+      console.log("A and B are labels, not verified dates; consistency does not prove origin, completeness, or factual truth.");
+    }
+    if (transitionFile === undefined && [report, other].some(audit =>
+      audit.totals.differ || audit.totals.fail)) process.exitCode = 1;
+    return transition;
+  }
   let captureVersion;
   if (reportFile !== undefined) {
     const expected = parseJSON(readLimited(reportFile, "Saved report"), "Saved report");
@@ -191,4 +243,4 @@ if (require.main === module) {
   catch (error) { console.error(`FAIL: ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = {auditEvidenceBatch, browserCaptureFromReport, run};
+module.exports = {auditEvidenceBatch, browserCaptureFromReport, transitionCaptureFromReports, run};

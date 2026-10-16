@@ -544,9 +544,17 @@
         <input id="transition-reference-a" type="file" accept=".json,application/json" onchange="invalidateReferenceTransition()">
         <label for="transition-checkpoint-a">Reference A checkpoint JSON (optional, up to 1 MiB)</label>
         <input id="transition-checkpoint-a" type="file" accept=".json,application/json" onchange="invalidateReferenceTransition()">
-        <div class="ledger-actions"><button type="button" onclick="traceReferenceTransition()">Trace selected receipts</button></div>
+        <div class="ledger-actions">
+          <button type="button" onclick="traceReferenceTransition()">Trace selected receipts</button>
+          <button type="button" id="transition-capture-download" onclick="downloadReferenceTransitionCapture()" disabled>Download transition capture</button>
+        </div>
         <div id="reference-transition-result" role="status" aria-live="polite">Choose reference A, the selected reference B, and 1–20 receipts to trace.</div>
-        <p>A and B are comparison labels, not verified dates. An unchanged verdict can conceal a different reason. A checkpoint checks the ordered records and next source ID under these rules; a trusted copy held separately is needed for provenance. Neither reference proves the assertions are true or complete.</p>
+        <p id="transition-capture-status" role="status" aria-live="polite">Trace the selected files before downloading a capture.</p>
+        <label for="transition-capture-file">Saved transition capture JSON (up to 1 MiB)</label>
+        <input id="transition-capture-file" type="file" accept=".json,application/json" onchange="invalidateReferenceTransitionReplay()">
+        <div class="ledger-actions"><button type="button" id="transition-capture-verify" onclick="verifySavedReferenceTransition()" disabled>Compare saved transition capture</button></div>
+        <div id="transition-capture-verification" role="status" aria-live="polite">Trace the original files, then choose a saved transition capture to compare.</div>
+        <p>A and B are comparison labels, not verified dates. An unchanged verdict can conceal a different reason. A checkpoint checks the ordered records and next source ID under these rules; a trusted copy held separately is needed for provenance. The capture contains hashes and outcomes, not fact values, but predictable private assertions may be guessable from a hash. Neither reference proves the assertions are true or complete.</p>
       </section>
     </section>
     <div class="ledger-actions">
@@ -2285,8 +2293,31 @@ let evidenceBatchAuditRequest = 0;
 let lastEvidenceBatchCapture = null;
 let evidenceBatchCaptureReplayRequest = 0;
 let referenceTransitionRequest = 0;
+let lastReferenceTransitionCapture = null;
+let referenceTransitionReplayRequest = 0;
+function referenceTransitionSelectionsMatch(state) {
+  return document.getElementById("transition-reference-a").files?.[0] === state.aFile &&
+    document.getElementById("transition-checkpoint-a").files?.[0] === state.aCheckpointFile &&
+    document.getElementById("reference-file").files?.[0] === state.bFile &&
+    document.getElementById("checkpoint-file").files?.[0] === state.bCheckpointFile &&
+    document.getElementById("audit-receipts").files?.length === state.files.length &&
+    state.files.every((file, index) => document.getElementById("audit-receipts").files[index] === file);
+}
+function invalidateReferenceTransitionReplay(message = "Saved transition capture selection changed. Compare again.") {
+  ++referenceTransitionReplayRequest;
+  document.getElementById("transition-capture-verify").disabled =
+    !lastReferenceTransitionCapture || !document.getElementById("transition-capture-file").files?.[0];
+  const output = document.getElementById("transition-capture-verification");
+  output.replaceChildren();
+  output.textContent = message;
+}
 function invalidateReferenceTransition(message = "File selection changed. Trace the selected files again.") {
   ++referenceTransitionRequest;
+  lastReferenceTransitionCapture = null;
+  document.getElementById("transition-capture-download").disabled = true;
+  document.getElementById("transition-capture-status").textContent =
+    "Selection changed. Trace the selected files again before downloading a capture.";
+  invalidateReferenceTransitionReplay("Trace the selected files again before comparing a saved transition capture.");
   const output = document.getElementById("reference-transition-result");
   output.replaceChildren();
   output.textContent = message;
@@ -2319,6 +2350,14 @@ async function readEvidenceAuditBytes(file, label) {
   if (bytes.byteLength > 1024 * 1024) throw new Error(`${label} exceeds the 1 MiB limit.`);
   try { return {bytes, raw: new TextDecoder("utf-8", {fatal: true}).decode(bytes)}; }
   catch (_) { throw new Error(`${label} is not valid UTF-8.`); }
+}
+
+function firstIdenticalReceipt(seen, raw, bytes, index) {
+  const candidates = seen.get(raw) || [];
+  const first = candidates.find(candidate => candidate.bytes.length === bytes.length &&
+    candidate.bytes.every((byte, position) => byte === bytes[position]));
+  if (!first) { candidates.push({bytes, index}); seen.set(raw, candidates); }
+  return first?.index;
 }
 
 function parseEvidenceAuditJSON(raw, label) {
@@ -2418,9 +2457,60 @@ function referenceReceiptTrace(receipt, a, b, ledgerChanged) {
     "The computed answer and cited sources agree across A and B under this receipt's scope.";
 }
 
+function downloadReferenceTransitionCapture() {
+  const state = lastReferenceTransitionCapture;
+  if (!state) return;
+  if (!referenceTransitionSelectionsMatch(state)) {
+    invalidateReferenceTransition();
+    return;
+  }
+  downloadJSON(state.payload, "aru-evidence-reference-transition-capture.json");
+}
+
+async function verifySavedReferenceTransition() {
+  const request = ++referenceTransitionReplayRequest;
+  const state = lastReferenceTransitionCapture;
+  const input = document.getElementById("transition-capture-file");
+  const file = input.files?.[0];
+  const output = document.getElementById("transition-capture-verification");
+  if (!state) { output.textContent = "Trace the original files first."; return; }
+  if (!file) { output.textContent = "Choose a saved transition capture JSON file."; return; }
+  const stillCurrent = () => request === referenceTransitionReplayRequest &&
+    lastReferenceTransitionCapture === state && input.files?.[0] === file &&
+    referenceTransitionSelectionsMatch(state);
+  if (!stillCurrent()) { invalidateReferenceTransition(); return; }
+  output.replaceChildren();
+  output.textContent = "Comparing the saved transition capture with both current replays…";
+  try {
+    const {raw} = await readEvidenceAuditBytes(file, "Saved transition capture");
+    if (!stillCurrent()) return;
+    const saved = parseEvidenceAuditJSON(raw, "Saved transition capture");
+    if (saved?.format !== "aru-evidence-reference-transition-capture" || saved.version !== 1) {
+      output.textContent = "FAIL: Unsupported transition capture format or version.";
+      return;
+    }
+    if (!sameEvidenceCaptureValue(saved, state.payload)) {
+      output.textContent = "DIFFER: The saved transition capture does not reproduce both references, ordered receipt bytes and verdicts, totals, and browser script fingerprint. Recheck all selected originals and the archived page version.";
+      return;
+    }
+    const a = state.payload.capture_a.totals;
+    const b = state.payload.capture_b.totals;
+    output.textContent = `TRANSITION CAPTURE MATCH: ${state.payload.changed_receipts.length} verdict changes. ` +
+      `A: ${a.match} MATCH, ${a.differ} DIFFER, ${a.fail} FAIL. ` +
+      `B: ${b.match} MATCH, ${b.differ} DIFFER, ${b.fail} FAIL. ` +
+      "This reproduces the selected files and browser script, including any DIFFER or FAIL results. It does not prove origin, chronology, completeness, or factual truth.";
+  } catch (error) {
+    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not read the saved transition capture."}`;
+  }
+}
+
 async function traceReferenceTransition() {
   const request = ++referenceTransitionRequest;
   const output = document.getElementById("reference-transition-result");
+  lastReferenceTransitionCapture = null;
+  document.getElementById("transition-capture-download").disabled = true;
+  document.getElementById("transition-capture-status").textContent = "Tracing files before a capture can be downloaded…";
+  invalidateReferenceTransitionReplay("Trace the selected files again before comparing a saved transition capture.");
   const aInput = document.getElementById("transition-reference-a");
   const aCheckpointInput = document.getElementById("transition-checkpoint-a");
   const bInput = document.getElementById("reference-file");
@@ -2431,19 +2521,25 @@ async function traceReferenceTransition() {
   const bFile = bInput.files?.[0];
   const bCheckpointFile = bCheckpointInput.files?.[0];
   const files = Array.from(receiptInput.files || []);
+  const selection = {aFile, aCheckpointFile, bFile, bCheckpointFile, files};
   output.replaceChildren();
-  if (!aFile || !bFile) { output.textContent = "Choose reference A and the selected reference B."; return; }
+  if (!aFile || !bFile) {
+    output.textContent = "Choose reference A and the selected reference B.";
+    document.getElementById("transition-capture-status").textContent = "Choose both references before creating a capture.";
+    return;
+  }
   if (files.length < 1 || files.length > 20) {
-    output.textContent = "Choose 1–20 answer receipts above."; return;
+    output.textContent = "Choose 1–20 answer receipts above.";
+    document.getElementById("transition-capture-status").textContent = "Choose 1–20 receipts before creating a capture.";
+    return;
   }
   if (files.reduce((sum, file) => sum + file.size, 0) > 4 * 1024 * 1024) {
-    output.textContent = "FAIL: Selected receipts exceed the 4 MiB combined limit."; return;
+    output.textContent = "FAIL: Selected receipts exceed the 4 MiB combined limit.";
+    document.getElementById("transition-capture-status").textContent = "Capture unavailable: selected receipts exceed the combined limit.";
+    return;
   }
   const stillCurrent = () => request === referenceTransitionRequest &&
-    aInput.files?.[0] === aFile && aCheckpointInput.files?.[0] === aCheckpointFile &&
-    bInput.files?.[0] === bFile && bCheckpointInput.files?.[0] === bCheckpointFile &&
-    receiptInput.files?.length === files.length &&
-    files.every((file, index) => receiptInput.files[index] === file);
+    referenceTransitionSelectionsMatch(selection);
   output.textContent = "Checking both references and replaying selected receipts on this device…";
   try {
     const [aData, bData, aCheckpointData, bCheckpointData] = await Promise.all([
@@ -2463,16 +2559,24 @@ async function traceReferenceTransition() {
       if (!stillCurrent()) return;
       if (checkpoint.sha256 !== digest) {
         output.textContent = `DIFFER: Reference ${label} differs from its selected checkpoint. No receipts were traced.`;
+        document.getElementById("transition-capture-status").textContent =
+          `Capture unavailable: reference ${label} differs from its checkpoint.`;
         return;
       }
     }
     const changes = referenceLedgerChanges(a, b);
     const rows = [];
+    const receiptBytes = [];
+    const seenText = new Map();
+    let capturable = true;
     for (const [index, file] of files.entries()) {
       let stage = "read";
+      let duplicateOf = null;
       try {
-        const {raw} = await readEvidenceAuditBytes(file, `Receipt #${index + 1}`);
+        const {bytes, raw} = await readEvidenceAuditBytes(file, `Receipt #${index + 1}`);
         if (!stillCurrent()) return;
+        receiptBytes.push(bytes);
+        duplicateOf = firstIdenticalReceipt(seenText, raw, bytes, index + 1) ?? null;
         stage = "parse";
         const receipt = parseEvidenceAuditJSON(raw, "Receipt");
         stage = "format";
@@ -2482,14 +2586,15 @@ async function traceReferenceTransition() {
         verifyEvidenceBundle(receipt);
         const before = compareEvidenceToReference(receipt, a.records).match ? "MATCH" : "DIFFER";
         const after = compareEvidenceToReference(receipt, b.records).match ? "MATCH" : "DIFFER";
-        rows.push({index: index + 1, before, after,
+        rows.push({index: index + 1, before, after, duplicateOf,
           detail: referenceReceiptTrace(receipt, a, b, !sameFactLedger(a.records, b.records))});
       } catch (_) {
         if (!stillCurrent()) return;
+        if (stage === "read") capturable = false;
         const descriptions = {read: "Unreadable, invalid UTF-8, or oversized receipt.",
           parse: "Receipt is not valid JSON.", format: "Unsupported answer receipt format.",
           replay: "Receipt failed its own rule replay."};
-        rows.push({index: index + 1, before: "FAIL", after: "FAIL",
+        rows.push({index: index + 1, before: "FAIL", after: "FAIL", duplicateOf,
           detail: `${descriptions[stage]} No reference verdict can be inferred.`});
       }
     }
@@ -2535,8 +2640,57 @@ async function traceReferenceTransition() {
     output.replaceChildren();
     output.appendChild(summary); output.appendChild(heading); output.appendChild(list);
     output.appendChild(cards);
+    const status = document.getElementById("transition-capture-status");
+    if (!capturable) {
+      status.textContent = "Capture unavailable: every selected receipt must be readable UTF-8 and at most 1 MiB. The trace remains visible above.";
+      return;
+    }
+    if (!globalThis.crypto?.subtle || !auditScriptAtLoad) {
+      status.textContent = "Capture unavailable: secure hashing and the loaded browser verifier script are required. The trace remains visible above.";
+      return;
+    }
+    try {
+      const [scriptSHA, aSHA, bSHA, aCheckpointSHA, bCheckpointSHA, ...receiptSHAs] =
+        await Promise.all([
+          evidenceAuditSHA256(new TextEncoder().encode(auditScriptAtLoad)),
+          evidenceAuditSHA256(aData.bytes), evidenceAuditSHA256(bData.bytes),
+          aCheckpointData ? evidenceAuditSHA256(aCheckpointData.bytes) : null,
+          bCheckpointData ? evidenceAuditSHA256(bCheckpointData.bytes) : null,
+          ...receiptBytes.map(evidenceAuditSHA256)]);
+      if (!stillCurrent()) return;
+      const makeCapture = (referenceSHA, checkpointSHA, verdictField) => {
+        const totals = {match: 0, differ: 0, fail: 0, identical_copies: 0};
+        const receipts = rows.map((row, index) => {
+          totals[row[verdictField].toLowerCase()]++;
+          if (row.duplicateOf !== null) totals.identical_copies++;
+          return {index: row.index, sha256: receiptSHAs[index],
+            verdict: row[verdictField], duplicate_of: row.duplicateOf};
+        });
+        return {format: "aru-evidence-browser-batch-capture", version: 2,
+          browser_script_sha256: scriptSHA, reference_sha256: referenceSHA,
+          checkpoint_sha256: checkpointSHA, receipts, totals};
+      };
+      const payload = {format: "aru-evidence-reference-transition-capture", version: 1,
+        capture_a: makeCapture(aSHA, aCheckpointSHA, "before"),
+        capture_b: makeCapture(bSHA, bCheckpointSHA, "after"),
+        changed_receipts: rows.filter(row => row.before !== row.after).map(row => row.index)};
+      lastReferenceTransitionCapture = {...selection, payload};
+      document.getElementById("transition-capture-download").disabled = false;
+      document.getElementById("transition-capture-verify").disabled =
+        !document.getElementById("transition-capture-file").files?.[0];
+      document.getElementById("transition-capture-verification").textContent =
+        "Trace ready. Choose a saved transition capture to compare with these selected files.";
+      status.textContent = "Transition capture ready. Keep both references, optional checkpoints, and every original receipt in selection order.";
+    } catch (error) {
+      if (stillCurrent()) status.textContent =
+        `Capture unavailable: ${error.message || "Could not hash the selected files."}`;
+    }
   } catch (error) {
-    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not trace the selected files."}`;
+    if (stillCurrent()) {
+      output.textContent = `FAIL: ${error.message || "Could not trace the selected files."}`;
+      document.getElementById("transition-capture-status").textContent =
+        "Capture unavailable: fix the selected references or checkpoints and trace again.";
+    }
   }
 }
 
@@ -2736,9 +2890,8 @@ async function runEvidenceBatchAudit() {
         const {bytes, raw} = await readEvidenceAuditBytes(file, `Receipt #${index + 1}`);
         if (!stillCurrent()) return;
         receiptBytes.push(bytes);
-        duplicateOf = seenText.get(raw);
-        if (duplicateOf === undefined) seenText.set(raw, index + 1);
-        else repeats++;
+        duplicateOf = firstIdenticalReceipt(seenText, raw, bytes, index + 1);
+        if (duplicateOf !== undefined) repeats++;
         const receipt = parseEvidenceAuditJSON(raw, "File");
         if (!["aru-evidence-question-receipt", "aru-evidence-answer-excerpt",
               "aru-evidence-brief-receipt"].includes(receipt?.format)) {

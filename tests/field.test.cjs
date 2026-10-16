@@ -2196,6 +2196,142 @@ test('a slower reference read cannot restore stale trace results after a new sel
   assert.match(output.textContent, /FAIL: Reference A is not valid JSON/);
 });
 
+test('browser downloads and replays a strict paired capture without confusing consistency with verdicts', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const a = fixture('example-evidence-reference-baseline.json');
+  const b = fixture('example-evidence-reference-conflict.json');
+  const checkpoint = fixture('example-evidence-ledger-checkpoint.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const full = fixture('example-evidence-receipt.json');
+  const app = boot();
+  app.fact('private note', 'never disclose');
+  const savedState = JSON.stringify([...app.saved]);
+  const files = [auditFile(excerpt), auditFile(full), auditFile('{')];
+  await traceSavedReferences(app, a, b, files, checkpoint);
+  assert.equal(app.elements.get('transition-capture-download').disabled, false);
+  vm.runInContext('downloadReferenceTransitionCapture()', app.context);
+  const capture = JSON.parse(await app.exports[0].text());
+  assert.deepEqual(Object.keys(capture), ['format', 'version', 'capture_a', 'capture_b', 'changed_receipts']);
+  assert.equal(capture.version, 1);
+  assert.deepEqual(capture.changed_receipts, [1, 2]);
+  assert.deepEqual(capture.capture_a.totals, {match: 2, differ: 0, fail: 1, identical_copies: 0});
+  assert.deepEqual(capture.capture_b.totals, {match: 0, differ: 2, fail: 1, identical_copies: 0});
+  assert.equal(capture.capture_a.browser_script_sha256, createHash('sha256').update(source).digest('hex'));
+  assert.equal(capture.capture_a.browser_script_sha256, capture.capture_b.browser_script_sha256);
+  assert.doesNotMatch(JSON.stringify(capture), /favorite color|teal|amber|never disclose|private note/);
+  assert.equal(JSON.stringify([...app.saved]), savedState);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aru-browser-transition-'));
+  try {
+    const write = (name, data) => { const file = path.join(dir, name); fs.writeFileSync(file, data); return file; };
+    const selected = [write('excerpt.json', excerpt), write('full.json', full), write('malformed.json', '{')];
+    const args = [write('a.json', a), ...selected, '--checkpoint', write('a-checkpoint.json', checkpoint),
+      '--reference-b', write('b.json', b), '--check-transition', write('capture.json', JSON.stringify(capture))];
+    for (const [executable, script] of [
+      [process.execPath, 'audit-evidence-batch.cjs'], ['python3', 'independent-evidence-batch.py']]) {
+      const replay = spawnSync(executable, [path.join(__dirname, '..', 'tools', script), ...args],
+        {encoding: 'utf8'});
+      assert.equal(replay.status, 0, replay.stderr);
+      assert.match(replay.stdout, /TRANSITION CAPTURE MATCH/);
+      assert.match(replay.stdout, /1 FAIL/);
+    }
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+
+  const input = app.context.document.getElementById('transition-capture-file');
+  const output = app.elements.get('transition-capture-verification');
+  const compare = async value => {
+    input.files = [auditFile(typeof value === 'string' ? value : JSON.stringify(value))];
+    vm.runInContext('invalidateReferenceTransitionReplay()', app.context);
+    await vm.runInContext('verifySavedReferenceTransition()', app.context);
+    return output.textContent;
+  };
+  assert.match(await compare(capture), /TRANSITION CAPTURE MATCH: 2 verdict changes.*A: 2 MATCH, 0 DIFFER, 1 FAIL.*B: 0 MATCH, 2 DIFFER, 1 FAIL.*including any DIFFER or FAIL/);
+  assert.match(await compare({...capture, changed_receipts: []}), /DIFFER: The saved transition capture does not reproduce/);
+  assert.match(await compare({...capture, capture_b: {...capture.capture_b,
+    receipts: [{...capture.capture_b.receipts[0], verdict: 'MATCH'}, ...capture.capture_b.receipts.slice(1)]}}), /DIFFER:/);
+  assert.match(await compare({...capture, extra: 'never disclose'}), /DIFFER:/);
+  assert.match(await compare({...capture, capture_a: {...capture.capture_a, version: 1}}), /DIFFER:/);
+  assert.match(await compare('{'), /FAIL: Saved transition capture is not valid JSON/);
+  assert.match(await compare({...capture, version: 2}), /FAIL: Unsupported transition capture format or version/);
+  assert.doesNotMatch(output.textContent, /never disclose/);
+  assert.equal(JSON.stringify([...app.saved]), savedState);
+
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  input.files = [{name: 'slow.json', size: 1, arrayBuffer: async () => {
+    await waiting; return auditFile(JSON.stringify(capture)).arrayBuffer();
+  }}];
+  vm.runInContext('invalidateReferenceTransitionReplay()', app.context);
+  const checking = vm.runInContext('verifySavedReferenceTransition()', app.context);
+  await new Promise(resolve => setImmediate(resolve));
+  input.files = [auditFile(JSON.stringify(capture))];
+  vm.runInContext('invalidateReferenceTransitionReplay()', app.context);
+  release();
+  await checking;
+  assert.match(output.textContent, /Saved transition capture selection changed/);
+  assert.match(await compare(capture), /TRANSITION CAPTURE MATCH/);
+
+  app.context.document.getElementById('audit-receipts').files = [auditFile(excerpt)];
+  vm.runInContext('invalidateEvidenceBatchAudit()', app.context);
+  assert.equal(app.elements.get('transition-capture-download').disabled, true);
+  assert.equal(app.elements.get('transition-capture-verify').disabled, true);
+  vm.runInContext('downloadReferenceTransitionCapture()', app.context);
+  assert.equal(app.exports.length, 1, 'old report cannot be downloaded after a new selection');
+});
+
+test('transition capture distinguishes identical text from identical bytes, including a UTF-8 BOM', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const reference = fixture('example-evidence-reference-baseline.json');
+  const receipt = fixture('example-evidence-excerpt.json');
+  const app = boot();
+  await traceSavedReferences(app, reference, reference,
+    [auditFile(receipt), auditFile('\uFEFF' + receipt), auditFile(receipt)]);
+  vm.runInContext('downloadReferenceTransitionCapture()', app.context);
+  const capture = JSON.parse(await app.exports[0].text());
+  assert.deepEqual(capture.capture_a.receipts.map(row => row.duplicate_of), [null, null, 1]);
+  assert.deepEqual(capture.capture_b.receipts.map(row => row.verdict), ['MATCH', 'MATCH', 'MATCH']);
+  assert.equal(capture.capture_a.totals.identical_copies, 1);
+  assert.notEqual(capture.capture_a.receipts[0].sha256, capture.capture_a.receipts[1].sha256);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aru-transition-bom-'));
+  try {
+    const save = (name, data) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, data);
+      return file;
+    };
+    const baseline = save('reference.json', reference);
+    const files = [save('plain.json', receipt), save('bom.json', '\uFEFF' + receipt),
+      save('repeat.json', receipt)];
+    const saved = save('transition.json', JSON.stringify(capture));
+    for (const [executable, script] of [[process.execPath, 'audit-evidence-batch.cjs'],
+      ['python3', 'independent-evidence-batch.py']]) {
+      const replay = spawnSync(executable, [path.join(__dirname, '..', 'tools', script),
+        baseline, ...files, '--reference-b', baseline, '--check-transition', saved],
+      {encoding: 'utf8'});
+      assert.equal(replay.status, 0, `${script}: ${replay.stderr}`);
+      assert.match(replay.stdout, /A: 3 MATCH, 0 DIFFER, 0 FAIL.*B: 3 MATCH, 0 DIFFER, 0 FAIL/s);
+    }
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});
+
+test('transition trace remains visible if a receipt cannot be captured or browser hashing is unavailable', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const a = fixture('example-evidence-reference-baseline.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const invalid = boot();
+  const unread = {name: 'bad.json', size: 1, arrayBuffer: async () => Uint8Array.from([0xff]).buffer};
+  const output = await traceSavedReferences(invalid, a, a, [unread]);
+  assert.match(output.children[0].textContent, /1 could not replay/);
+  assert.match(invalid.elements.get('transition-capture-status').textContent, /every selected receipt must be readable UTF-8/);
+  assert.equal(invalid.elements.get('transition-capture-download').disabled, true);
+
+  const noHash = boot({}, {crypto: {}});
+  const traced = await traceSavedReferences(noHash, a, a, [auditFile(excerpt)]);
+  assert.match(traced.children[0].textContent, /0 verdict changes, 1 unchanged/);
+  assert.match(noHash.elements.get('transition-capture-status').textContent, /secure hashing/);
+  assert.equal(noHash.elements.get('transition-capture-download').disabled, true);
+});
+
 test('batch audit checks each receipt against one saved reference and flags repeated text', async () => {
   const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
   const excerpt = fixture('example-evidence-excerpt.json');

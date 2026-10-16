@@ -215,7 +215,9 @@ def matches_reference(receipt, reference):
 def parse(data):
     def reject_constant(value):
         raise ValueError("invalid JSON constant")
-    return json.loads(data.decode("utf-8", errors="strict"), parse_constant=reject_constant)
+    # TextDecoder in the browser and Node discards an initial UTF-8 BOM.
+    # Preserve raw bytes for hashes and duplicate checks, but match that parse rule.
+    return json.loads(data.decode("utf-8-sig", errors="strict"), parse_constant=reject_constant)
 
 
 def read_limited(file, label):
@@ -294,16 +296,60 @@ def capture_from_report(report, version):
                          for row in report["receipts"]], "totals": report["totals"]}
 
 
+def transition_from_reports(a_report, b_report):
+    a = capture_from_report(a_report, 2)
+    b = capture_from_report(b_report, 2)
+    require(a["browser_script_sha256"] == b["browser_script_sha256"] and
+            len(a["receipts"]) == len(b["receipts"]) and
+            all(left["sha256"] == right["sha256"] and
+                left["duplicate_of"] == right["duplicate_of"]
+                for left, right in zip(a["receipts"], b["receipts"])),
+            "transition sides must use the same verifier and ordered receipt bytes")
+    return {"format": "aru-evidence-reference-transition-capture", "version": 1,
+            "capture_a": a, "capture_b": b,
+            "changed_receipts": [row["index"] for row, other in zip(a["receipts"], b["receipts"])
+                                 if row["verdict"] != other["verdict"]]}
+
+
 def run(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("reference")
     parser.add_argument("receipts", nargs="+")
     parser.add_argument("--checkpoint")
+    parser.add_argument("--reference-b")
+    parser.add_argument("--checkpoint-b")
+    parser.add_argument("--check-transition")
     parser.add_argument("--check-capture")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
+        require(not (args.checkpoint_b or args.check_transition) or args.reference_b,
+                "--checkpoint-b and --check-transition require --reference-b")
+        require(not args.reference_b or not args.check_capture,
+                "use --check-transition instead of --check-capture with --reference-b")
         report = audit(args.reference, args.receipts, args.checkpoint)
+        if args.reference_b:
+            other = audit(args.reference_b, args.receipts, args.checkpoint_b)
+            transition = transition_from_reports(report, other)
+            if args.check_transition:
+                expected = parse(read_limited(args.check_transition, "Transition capture"))
+                require(same(expected, transition),
+                        "transition capture differs from independently recomputed files, outcomes, or browser script")
+            if args.json:
+                print(json.dumps(transition, indent=2, ensure_ascii=False))
+            else:
+                for label, side in (("A", report), ("B", other)):
+                    totals = side["totals"]
+                    print(f"{label}: {totals['match']} MATCH, {totals['differ']} DIFFER, "
+                          f"{totals['fail']} FAIL.")
+                print(f"{len(transition['changed_receipts'])} changed receipt verdicts.")
+                if args.check_transition:
+                    print("TRANSITION CAPTURE MATCH: independent Python replay agrees. "
+                          "Inspect A and B counts independently.")
+                print("A and B are labels, not verified dates; consistency does not prove "
+                      "origin, completeness, or factual truth.")
+            return 0 if args.check_transition or not any(
+                side["totals"][key] for side in (report, other) for key in ("differ", "fail")) else 1
         if args.check_capture:
             expected = parse(read_limited(args.check_capture, "Capture"))
             version = expected.get("version") if type(expected) is dict else None
