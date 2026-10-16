@@ -486,6 +486,19 @@
     </div>
     <p id="local-receipt-comparison" role="status" aria-live="polite">Verify a question, excerpt, or brief before comparing it with this browser's evidence.</p>
     <p>A full receipt or brief must match this browser's entire ordered ledger. An excerpt can match its answer and cited records while unrelated local entries remain private. A matching local copy still cannot establish who recorded the assertions or whether they are true.</p>
+    <section class="evidence-question">
+      <h2>Compare with a saved reference</h2>
+      <p>After a question, excerpt, or brief passes above, choose a reference ledger file. Add a checkpoint you preserved separately to check that the reference has not changed. These files are read on this device, are not imported, and are not uploaded by this app.</p>
+      <label for="reference-file">Reference ledger JSON (up to 1 MiB)</label>
+      <input id="reference-file" type="file" accept=".json,application/json" onchange="invalidateReferenceComparison()">
+      <label for="checkpoint-file">Prior checkpoint JSON (optional, up to 1 MiB)</label>
+      <input id="checkpoint-file" type="file" accept=".json,application/json" onchange="invalidateReferenceComparison()">
+      <div class="ledger-actions">
+        <button type="button" id="reference-receipt-check" onclick="compareVerifiedEvidenceToReference()" disabled>Compare receipt and reference</button>
+      </div>
+      <p id="reference-receipt-comparison" role="status" aria-live="polite">Verify a question, excerpt, or brief first.</p>
+      <p>A match depends on the reference you supplied. A checkpoint adds evidence only if you kept it independently before receiving the later files; it does not prove when it was made, who recorded the facts, or that they are true.</p>
+    </section>
     <div class="ledger-actions">
       <button type="button" id="incoming-correction-preview-button" onclick="previewIncomingCorrection()" disabled>Preview applying correction here</button>
       <button type="button" id="incoming-correction-apply" onclick="applyIncomingCorrection()" disabled>Apply reviewed receipt here</button>
@@ -1819,6 +1832,7 @@ let receiptVerificationRequest = 0;
 let verifiedIncomingCorrection = null;
 let pendingIncomingCorrection = null;
 let verifiedEvidenceForCrossCheck = null;
+let referenceComparisonRequest = 0;
 let chainBuildRequest = 0;
 let lastCorrectionChain = null;
 let lastCorrectionPacket = null;
@@ -1925,6 +1939,8 @@ async function replayCorrectionPacket(packet, records, counter) {
 async function verifyEvidenceFile() {
   const request = ++receiptVerificationRequest;
   verifiedEvidenceForCrossCheck = null;
+  invalidateReferenceComparison("Verify a question, excerpt, or brief before comparing a saved reference.");
+  document.getElementById("reference-receipt-check").disabled = true;
   document.getElementById("local-receipt-check").disabled = true;
   document.getElementById("local-receipt-comparison").textContent = "Verify a question, excerpt, or brief before comparing it with this browser's evidence.";
   invalidateIncomingCorrection("Choose a verified correction receipt to preview its local application.");
@@ -1969,6 +1985,7 @@ async function verifyEvidenceFile() {
     if (result.brief) {
       verifiedEvidenceForCrossCheck = receipt;
       document.getElementById("local-receipt-check").disabled = false;
+      document.getElementById("reference-receipt-check").disabled = false;
       const known = result.brief.filter(item => item.answer.kind === "known").length;
       output.textContent = `PASS: ${result.brief.length} names; ${known} sourced answer${known === 1 ? "" : "s"}, ${result.brief.length - known} refusal${result.brief.length - known === 1 ? "" : "s"}; ${result.recordCount} supplied records; scope: ${result.scope}. Consistent with the supplied records, not independently verified as true or complete.`;
       return;
@@ -1976,6 +1993,7 @@ async function verifyEvidenceFile() {
     const answer = result.answer;
     verifiedEvidenceForCrossCheck = receipt;
     document.getElementById("local-receipt-check").disabled = false;
+    document.getElementById("reference-receipt-check").disabled = false;
     const sources = answer.sources?.length ? answer.sources.map(id => `#${id}`).join(", ") : "none";
     const finding = answer.kind === "known" ? `Recorded answer: “${answer.value}”.` : `No answer (${answer.kind}).`;
     output.textContent = `PASS: ${answer.kind}; ${result.recordCount} supplied records; source IDs: ${sources}; scope: ${result.scope}. Question: “${receipt.question}”. ${finding} Consistent with the supplied records, not independently verified as true.`;
@@ -2017,9 +2035,104 @@ function compareVerifiedEvidenceToLocal() {
   output.textContent = `MATCH: All ${Field.claims.length} supplied records exactly match this browser's current ordered ledger. This does not establish origin or factual truth.`;
 }
 
+function invalidateReferenceComparison(message = "File selection changed. Compare again to check the selected files.") {
+  ++referenceComparisonRequest;
+  document.getElementById("reference-receipt-comparison").textContent = message;
+}
+
+async function readEvidenceComparisonFile(file, label) {
+  if (file.size > 1024 * 1024) throw new Error(`${label} exceeds the 1 MiB limit.`);
+  const raw = await file.text();
+  if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error(`${label} exceeds the 1 MiB limit.`);
+  try { return JSON.parse(raw); }
+  catch (_) { throw new Error(`${label} is not valid JSON.`); }
+}
+
+function validateEvidenceReference(baseline) {
+  const fields = ["format", "version", "records", "next_source_id"];
+  if (!baseline || typeof baseline !== "object" || Array.isArray(baseline) ||
+      Object.keys(baseline).length !== fields.length ||
+      !fields.every(key => Object.prototype.hasOwnProperty.call(baseline, key)) ||
+      baseline.format !== "aru-evidence-ledger-baseline" || baseline.version !== 1 ||
+      !Array.isArray(baseline.records) || !Number.isSafeInteger(baseline.next_source_id) ||
+      baseline.next_source_id < 1 || baseline.next_source_id > 1e9 + 1) {
+    throw new Error("Choose a reference ledger export with records and next_source_id.");
+  }
+  try { canonicalLedgerCommitment(baseline.records); }
+  catch (_) { throw new Error("Invalid or duplicate reference ledger source."); }
+  if (baseline.records.some(record => record.id >= baseline.next_source_id)) {
+    throw new Error("Reference next source ID must exceed every record ID.");
+  }
+}
+
+function compareEvidenceToReference(receipt, records) {
+  if (receipt.format === "aru-evidence-answer-excerpt") {
+    const expected = evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, records));
+    if (!sameEvidenceAnswer(receipt.answer, expected)) {
+      return {match: false, detail: "The reference ledger gives a different answer or citations; the excerpt may omit a source."};
+    }
+    if (receipt.records.some(record => {
+      const candidate = records.find(item => item.id === record.id);
+      return !candidate || !sameFactLedger([record], [candidate]);
+    })) return {match: false, detail: "A cited source differs from the reference ledger."};
+    return {match: true, detail: `The answer and all ${receipt.records.length} cited record${receipt.records.length === 1 ? "" : "s"} agree with the reference; unrelated reference records were not disclosed by the excerpt.`};
+  }
+  if (!sameFactLedger(receipt.records, records)) {
+    return {match: false, detail: "The supplied full snapshot differs from the reference ledger."};
+  }
+  return {match: true, detail: `All ${records.length} supplied records exactly match the reference ledger.`};
+}
+
+async function compareVerifiedEvidenceToReference() {
+  const request = ++referenceComparisonRequest;
+  const receiptRequest = receiptVerificationRequest;
+  const receipt = verifiedEvidenceForCrossCheck;
+  const output = document.getElementById("reference-receipt-comparison");
+  const referenceInput = document.getElementById("reference-file");
+  const checkpointInput = document.getElementById("checkpoint-file");
+  const referenceFile = referenceInput.files?.[0];
+  const checkpointFile = checkpointInput.files?.[0];
+  if (!receipt) { output.textContent = "Verify a question, excerpt, or brief first."; return; }
+  if (!referenceFile) { output.textContent = "Choose a reference ledger JSON file."; return; }
+  const stillCurrent = () => request === referenceComparisonRequest &&
+    receiptRequest === receiptVerificationRequest && verifiedEvidenceForCrossCheck === receipt &&
+    referenceInput.files?.[0] === referenceFile && checkpointInput.files?.[0] === checkpointFile;
+  output.textContent = "Checking selected files on this device…";
+  try {
+    const [baseline, checkpoint] = await Promise.all([
+      readEvidenceComparisonFile(referenceFile, "Reference ledger"),
+      checkpointFile ? readEvidenceComparisonFile(checkpointFile, "Checkpoint") : null]);
+    if (!stillCurrent()) return;
+    validateEvidenceReference(baseline);
+    if (checkpointFile) {
+      const fields = ["format", "version", "encoding", "sha256"];
+      if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint) ||
+          Object.keys(checkpoint).length !== fields.length ||
+          !fields.every(key => Object.prototype.hasOwnProperty.call(checkpoint, key)) ||
+          checkpoint.format !== "aru-evidence-ledger-checkpoint" || checkpoint.version !== 1 ||
+          checkpoint.encoding !== "aru-evidence-ledger-checkpoint-1" ||
+          typeof checkpoint.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(checkpoint.sha256)) {
+        throw new Error("Unsupported checkpoint format, encoding, or digest.");
+      }
+      const digest = await ledgerCheckpointSHA256(baseline.records, baseline.next_source_id);
+      if (!stillCurrent()) return;
+      if (checkpoint.sha256 !== digest) {
+        output.textContent = "DIFFER: The reference ledger differs from the selected checkpoint. No receipt comparison was accepted.";
+        return;
+      }
+    }
+    const outcome = compareEvidenceToReference(receipt, baseline.records);
+    if (!stillCurrent()) return;
+    output.textContent = `${outcome.match ? "MATCH" : "DIFFER"}: ${checkpointFile ? "Checkpoint agrees with the reference. " : "No checkpoint supplied. "}${outcome.detail} This does not establish origin or factual truth.`;
+  } catch (error) {
+    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not compare the selected files."}`;
+  }
+}
+
 function invalidateBuiltChain() {
   ++chainBuildRequest;
   ++receiptVerificationRequest;
+  invalidateReferenceComparison("Selection changed. Verify the receipt again before comparing a saved reference.");
   lastCorrectionChain = null;
   lastCorrectionPacket = null;
   document.getElementById("chain-download").disabled = true;
