@@ -509,12 +509,16 @@
       <p id="reference-receipt-comparison" role="status" aria-live="polite">Verify a question, excerpt, or brief first.</p>
       <p>A match depends on the reference you supplied. A checkpoint adds evidence only if you kept it independently before receiving the later files; it does not prove when it was made, who recorded the facts, or that they are true.</p>
       <h2>Audit a set of shared answers</h2>
-      <p>Use the reference and optional checkpoint selected above. Check up to 20 question, excerpt, or brief receipts together. Every file gets its own replay and reference comparison; identical text is flagged as a repeat.</p>
+      <p>Use the reference and optional checkpoint selected above. Check up to 20 question, excerpt, or brief receipts together. Every file gets its own replay and reference comparison; identical file bytes are flagged as a repeat.</p>
       <label for="audit-receipts">Answer receipt JSON files (1–20, up to 1 MiB each and 4 MiB combined)</label>
       <input id="audit-receipts" type="file" accept=".json,application/json" multiple onchange="invalidateEvidenceBatchAudit()">
-      <div class="ledger-actions"><button type="button" onclick="runEvidenceBatchAudit()">Audit selected receipts</button></div>
+      <div class="ledger-actions">
+        <button type="button" onclick="runEvidenceBatchAudit()">Audit selected receipts</button>
+        <button type="button" id="audit-capture-download" onclick="downloadEvidenceBatchCapture()" disabled>Download audit capture</button>
+      </div>
       <div id="audit-result" role="status" aria-live="polite">Choose a reference and answer receipts to run a local audit.</div>
-      <p>Results cover only the files selected here. A repeated text file is not a new independent source. No files are uploaded or imported.</p>
+      <p id="audit-capture-status" role="status" aria-live="polite">Run the audit before downloading a capture.</p>
+      <p>Results cover only the files selected here. A repeated file is not a new independent source. The capture contains hashes and outcomes, not record values or filenames. No files are uploaded or imported.</p>
     </section>
     <div class="ledger-actions">
       <button type="button" id="incoming-correction-preview-button" onclick="previewIncomingCorrection()" disabled>Preview applying correction here</button>
@@ -2248,13 +2252,55 @@ async function compareVerifiedEvidenceToReference() {
 }
 
 let evidenceBatchAuditRequest = 0;
+let lastEvidenceBatchCapture = null;
+function invalidateEvidenceBatchCapture(message) {
+  lastEvidenceBatchCapture = null;
+  document.getElementById("audit-capture-download").disabled = true;
+  document.getElementById("audit-capture-status").textContent = message;
+}
+
 function invalidateEvidenceBatchAudit(message = "Receipt selection changed. Audit the selected files again.") {
   ++evidenceBatchAuditRequest;
   document.getElementById("audit-result").textContent = message;
+  invalidateEvidenceBatchCapture("Selection changed. Run the audit again before downloading a capture.");
+}
+
+async function readEvidenceAuditBytes(file, label) {
+  if (file.size > 1024 * 1024) throw new Error(`${label} exceeds the 1 MiB limit.`);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.byteLength > 1024 * 1024) throw new Error(`${label} exceeds the 1 MiB limit.`);
+  try { return {bytes, raw: new TextDecoder("utf-8", {fatal: true}).decode(bytes)}; }
+  catch (_) { throw new Error(`${label} is not valid UTF-8.`); }
+}
+
+function parseEvidenceAuditJSON(raw, label) {
+  try { return JSON.parse(raw); }
+  catch (_) { throw new Error(`${label} is not valid JSON.`); }
+}
+
+async function evidenceAuditSHA256(bytes) {
+  if (!globalThis.crypto?.subtle) throw new Error("Secure browser hashing is unavailable here.");
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function downloadEvidenceBatchCapture() {
+  const capture = lastEvidenceBatchCapture;
+  if (!capture) return;
+  const receiptInput = document.getElementById("audit-receipts");
+  if (document.getElementById("reference-file").files?.[0] !== capture.referenceFile ||
+      document.getElementById("checkpoint-file").files?.[0] !== capture.checkpointFile ||
+      receiptInput.files?.length !== capture.files.length ||
+      !capture.files.every((file, index) => receiptInput.files[index] === file)) {
+    invalidateEvidenceBatchAudit("Selection changed. Audit the selected files again.");
+    return;
+  }
+  downloadJSON(capture.payload, "aru-evidence-browser-batch-capture.json");
 }
 
 async function runEvidenceBatchAudit() {
   const request = ++evidenceBatchAuditRequest;
+  invalidateEvidenceBatchCapture("Checking files before a capture can be downloaded…");
   const output = document.getElementById("audit-result");
   const referenceInput = document.getElementById("reference-file");
   const checkpointInput = document.getElementById("checkpoint-file");
@@ -2262,12 +2308,20 @@ async function runEvidenceBatchAudit() {
   const referenceFile = referenceInput.files?.[0];
   const checkpointFile = checkpointInput.files?.[0];
   const files = Array.from(receiptInput.files || []);
-  if (!referenceFile) { output.textContent = "Choose a reference ledger JSON file above."; return; }
+  if (!referenceFile) {
+    output.textContent = "Choose a reference ledger JSON file above.";
+    document.getElementById("audit-capture-status").textContent = "Choose a reference before creating a capture.";
+    return;
+  }
   if (files.length < 1 || files.length > 20) {
-    output.textContent = "Choose 1–20 question, excerpt, or brief receipt files."; return;
+    output.textContent = "Choose 1–20 question, excerpt, or brief receipt files.";
+    document.getElementById("audit-capture-status").textContent = "Choose 1–20 receipts before creating a capture.";
+    return;
   }
   if (files.reduce((sum, file) => sum + file.size, 0) > 4 * 1024 * 1024) {
-    output.textContent = "FAIL: The selected receipts exceed the 4 MiB combined limit."; return;
+    output.textContent = "FAIL: The selected receipts exceed the 4 MiB combined limit.";
+    document.getElementById("audit-capture-status").textContent = "Capture unavailable: selected receipts exceed the combined limit.";
+    return;
   }
   const stillCurrent = () => request === evidenceBatchAuditRequest &&
     referenceInput.files?.[0] === referenceFile && checkpointInput.files?.[0] === checkpointFile &&
@@ -2275,10 +2329,12 @@ async function runEvidenceBatchAudit() {
     files.every((file, index) => receiptInput.files[index] === file);
   output.textContent = "Auditing selected files on this device…";
   try {
-    const [baseline, checkpoint] = await Promise.all([
-      readEvidenceComparisonFile(referenceFile, "Reference ledger"),
-      checkpointFile ? readEvidenceComparisonFile(checkpointFile, "Checkpoint") : null]);
+    const [referenceData, checkpointData] = await Promise.all([
+      readEvidenceAuditBytes(referenceFile, "Reference ledger"),
+      checkpointFile ? readEvidenceAuditBytes(checkpointFile, "Checkpoint") : null]);
     if (!stillCurrent()) return;
+    const baseline = parseEvidenceAuditJSON(referenceData.raw, "Reference ledger");
+    const checkpoint = checkpointData ? parseEvidenceAuditJSON(checkpointData.raw, "Checkpoint") : null;
     validateEvidenceReference(baseline);
     if (checkpointFile) {
       validateEvidenceCheckpoint(checkpoint);
@@ -2286,11 +2342,15 @@ async function runEvidenceBatchAudit() {
       if (!stillCurrent()) return;
       if (checkpoint.sha256 !== digest) {
         output.textContent = "DIFFER: The reference ledger differs from the selected checkpoint. No receipts were audited.";
+        document.getElementById("audit-capture-status").textContent =
+          "Capture unavailable: the checkpoint differs from the reference.";
         return;
       }
     }
     const seenText = new Map();
     const rows = [];
+    const receiptBytes = [];
+    let capturable = true;
     const totals = {MATCH: 0, DIFFER: 0, FAIL: 0};
     let repeats = 0;
     for (const [index, file] of files.entries()) {
@@ -2298,14 +2358,13 @@ async function runEvidenceBatchAudit() {
       let detail;
       let duplicateOf;
       try {
-        const raw = await readEvidenceComparisonText(file, `Receipt #${index + 1}`);
+        const {bytes, raw} = await readEvidenceAuditBytes(file, `Receipt #${index + 1}`);
         if (!stillCurrent()) return;
+        receiptBytes.push(bytes);
         duplicateOf = seenText.get(raw);
         if (duplicateOf === undefined) seenText.set(raw, index + 1);
         else repeats++;
-        let receipt;
-        try { receipt = JSON.parse(raw); }
-        catch (_) { throw new Error("File is not valid JSON."); }
+        const receipt = parseEvidenceAuditJSON(raw, "File");
         if (!["aru-evidence-question-receipt", "aru-evidence-answer-excerpt",
               "aru-evidence-brief-receipt"].includes(receipt?.format)) {
           throw new Error("Only question, excerpt, or brief receipts can be audited.");
@@ -2316,6 +2375,7 @@ async function runEvidenceBatchAudit() {
         detail = outcome.detail;
       } catch (error) {
         if (!stillCurrent()) return;
+        if (receiptBytes.length !== index + 1) capturable = false;
         detail = error.message || "Could not check this receipt.";
       }
       totals[verdict]++;
@@ -2324,7 +2384,7 @@ async function runEvidenceBatchAudit() {
     }
     if (!stillCurrent()) return;
     const summary = document.createElement("p");
-    summary.textContent = `${files.length} selected: ${totals.MATCH} MATCH, ${totals.DIFFER} DIFFER, ${totals.FAIL} FAIL; ${repeats} identical-text repeat${repeats === 1 ? "" : "s"}. ${checkpointFile ? "Checkpoint agrees with reference." : "No checkpoint supplied."}`;
+    summary.textContent = `${files.length} selected: ${totals.MATCH} MATCH, ${totals.DIFFER} DIFFER, ${totals.FAIL} FAIL; ${repeats} identical-byte repeat${repeats === 1 ? "" : "s"}. ${checkpointFile ? "Checkpoint agrees with reference." : "No checkpoint supplied."}`;
     const scroller = document.createElement("div");
     scroller.className = "trajectory-scroll";
     const table = document.createElement("table");
@@ -2341,7 +2401,7 @@ async function runEvidenceBatchAudit() {
     for (const row of rows) {
       const line = document.createElement("tr");
       for (const value of [String(row.number), row.name, row.verdict,
-        `${row.detail}${row.duplicateOf === undefined ? "" : ` Identical text to #${row.duplicateOf}; not an independent file.`}`]) {
+        `${row.detail}${row.duplicateOf === undefined ? "" : ` Identical bytes to #${row.duplicateOf}; not an independent file.`}`]) {
         const cell = document.createElement("td");
         cell.textContent = value;
         line.appendChild(cell);
@@ -2354,8 +2414,44 @@ async function runEvidenceBatchAudit() {
     output.replaceChildren();
     output.appendChild(summary);
     output.appendChild(scroller);
+    if (!capturable) {
+      document.getElementById("audit-capture-status").textContent =
+        "Capture unavailable: every selected file must be readable and at most 1 MiB. The audit results remain visible above.";
+      return;
+    }
+    if (!globalThis.crypto?.subtle) {
+      document.getElementById("audit-capture-status").textContent =
+        "Capture unavailable: secure browser hashing is required. The audit results remain visible above.";
+      return;
+    }
+    try {
+      const [referenceSHA, checkpointSHA, ...receiptSHAs] = await Promise.all([
+        evidenceAuditSHA256(referenceData.bytes),
+        checkpointData ? evidenceAuditSHA256(checkpointData.bytes) : null,
+        ...receiptBytes.map(evidenceAuditSHA256)]);
+      if (!stillCurrent()) return;
+      const payload = {
+        format: "aru-evidence-browser-batch-capture", version: 1,
+        reference_sha256: referenceSHA, checkpoint_sha256: checkpointSHA,
+        receipts: rows.map((row, index) => ({index: row.number, sha256: receiptSHAs[index],
+          verdict: row.verdict, duplicate_of: row.duplicateOf ?? null})),
+        totals: {match: totals.MATCH, differ: totals.DIFFER, fail: totals.FAIL,
+          identical_copies: repeats}
+      };
+      lastEvidenceBatchCapture = {payload, referenceFile, checkpointFile, files};
+      document.getElementById("audit-capture-download").disabled = false;
+      document.getElementById("audit-capture-status").textContent =
+        "Capture ready. Keep the original files in this order to recheck it with the command-line auditor.";
+    } catch (error) {
+      if (stillCurrent()) document.getElementById("audit-capture-status").textContent =
+        `Capture unavailable: ${error.message || "Could not hash the selected files."}`;
+    }
   } catch (error) {
-    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not audit the selected files."}`;
+    if (stillCurrent()) {
+      output.textContent = `FAIL: ${error.message || "Could not audit the selected files."}`;
+      document.getElementById("audit-capture-status").textContent =
+        "Capture unavailable: fix the reference or checkpoint and audit again.";
+    }
   }
 }
 

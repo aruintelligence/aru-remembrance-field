@@ -100,22 +100,37 @@ function auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile} = {}) 
   };
 }
 
+function browserCaptureFromReport(report) {
+  return {
+    format: "aru-evidence-browser-batch-capture", version: 1,
+    reference_sha256: report.reference_sha256,
+    checkpoint_sha256: report.checkpoint_sha256,
+    receipts: report.receipts.map(item => ({index: item.index, sha256: item.sha256,
+      verdict: item.verdict, duplicate_of: item.duplicate_of})),
+    totals: report.totals
+  };
+}
+
 function parseArgs(args) {
   let checkpointFile;
   let reportFile;
+  let captureFile;
   let json = false;
   const files = [];
   for (let index = 0; index < args.length; index++) {
     const item = args[index];
-    if (item === "--checkpoint" || item === "--check-report") {
+    if (item === "--checkpoint" || item === "--check-report" || item === "--check-capture") {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error(`${item} requires a file`);
       if (item === "--checkpoint") {
         if (checkpointFile !== undefined) throw new Error("Duplicate --checkpoint option");
         checkpointFile = value;
-      } else {
+      } else if (item === "--check-report") {
         if (reportFile !== undefined) throw new Error("Duplicate --check-report option");
         reportFile = value;
+      } else {
+        if (captureFile !== undefined) throw new Error("Duplicate --check-capture option");
+        captureFile = value;
       }
     } else if (item === "--json") {
       if (json) throw new Error("Duplicate --json option");
@@ -123,17 +138,22 @@ function parseArgs(args) {
     } else if (item.startsWith("--")) throw new Error(`Unknown option ${item}`);
     else files.push(item);
   }
-  if (files.length < 2) throw new Error("Usage: node tools/audit-evidence-batch.cjs <reference.json> <receipt.json>... [--checkpoint prior.json] [--json] [--check-report saved-report.json]");
-  return {referenceFile: files[0], receiptFiles: files.slice(1), checkpointFile, reportFile, json};
+  if (files.length < 2) throw new Error("Usage: node tools/audit-evidence-batch.cjs <reference.json> <receipt.json>... [--checkpoint prior.json] [--json] [--check-report saved-report.json] [--check-capture browser-capture.json]");
+  return {referenceFile: files[0], receiptFiles: files.slice(1), checkpointFile, reportFile, captureFile, json};
 }
 
 function run(args = process.argv.slice(2)) {
-  const {referenceFile, receiptFiles, checkpointFile, reportFile, json} = parseArgs(args);
+  const {referenceFile, receiptFiles, checkpointFile, reportFile, captureFile, json} = parseArgs(args);
   const report = auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile});
   if (reportFile !== undefined) {
     const expected = parseJSON(readLimited(reportFile, "Saved report"), "Saved report");
     try { assert.deepStrictEqual(report, expected); }
     catch (_) { throw new Error("Saved report differs from the recomputed audit or ordered input bytes"); }
+  }
+  if (captureFile !== undefined) {
+    const expected = parseJSON(readLimited(captureFile, "Browser capture"), "Browser capture");
+    try { assert.deepStrictEqual(browserCaptureFromReport(report), expected); }
+    catch (_) { throw new Error("Browser capture differs from the recomputed audit or ordered input bytes"); }
   }
   if (json) console.log(JSON.stringify(report, null, 2));
   else {
@@ -142,9 +162,11 @@ function run(args = process.argv.slice(2)) {
       console.log(`#${item.index} ${item.verdict}${item.reason ? ` (${item.reason})` : ""}${item.duplicate_of === null ? "" : `; identical to #${item.duplicate_of}`}`);
     }
     if (reportFile !== undefined) console.log("REPORT MATCH: the saved report was reproduced from the ordered files and current verifier bytes.");
+    if (captureFile !== undefined) console.log("CAPTURE MATCH: the browser's file hashes and verdicts were reproduced from the ordered files.");
     console.log("Hashes bind these supplied file bytes; they do not prove origin, time, factual truth, independence, or completeness.");
   }
-  if (reportFile === undefined && (report.totals.differ || report.totals.fail)) process.exitCode = 1;
+  if (reportFile === undefined && captureFile === undefined &&
+      (report.totals.differ || report.totals.fail)) process.exitCode = 1;
   return report;
 }
 
@@ -153,4 +175,4 @@ if (require.main === module) {
   catch (error) { console.error(`FAIL: ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = {auditEvidenceBatch, run};
+module.exports = {auditEvidenceBatch, browserCaptureFromReport, run};
