@@ -2009,6 +2009,17 @@ async function chooseReceiptFile(app, text, size = Buffer.byteLength(text)) {
   return app.elements.get('receipt-verification').textContent;
 }
 
+async function compareSavedReferenceFiles(app, reference, checkpoint = null) {
+  const referenceInput = app.context.document.getElementById('reference-file');
+  const checkpointInput = app.context.document.getElementById('checkpoint-file');
+  referenceInput.files = [{size: Buffer.byteLength(reference), text: async () => reference}];
+  checkpointInput.files = checkpoint === null ? [] :
+    [{size: Buffer.byteLength(checkpoint), text: async () => checkpoint}];
+  vm.runInContext('invalidateReferenceComparison()', app.context);
+  await vm.runInContext('compareVerifiedEvidenceToReference()', app.context);
+  return app.elements.get('reference-receipt-comparison').textContent;
+}
+
 test('a reference ledger detects an omitted conflict that a self-consistent excerpt cannot', async () => {
   const excerpt = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
   const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
@@ -2225,6 +2236,120 @@ test('reference and checkpoint exports refuse stale snapshots and changed state 
   await vm.runInContext('downloadLedgerCheckpoint()', noHash.context);
   assert.equal(noHash.exports.length, 0);
   assert.match(noHash.elements.get('reference-export-result').textContent, /Secure browser hashing is unavailable/);
+});
+
+test('browser checks a saved reference and checkpoint without importing or exposing unrelated records', async () => {
+  const excerpt = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8');
+  const reference = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8');
+  const checkpoint = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-checkpoint.json'), 'utf8');
+  const app = boot();
+  app.fact('private note', 'do not overwrite');
+  const before = JSON.stringify([...app.saved]);
+  assert.match(await chooseReceiptFile(app, excerpt), /PASS: known/);
+  assert.equal(app.elements.get('reference-receipt-check').disabled, false);
+  assert.match(await compareSavedReferenceFiles(app, reference, checkpoint),
+    /MATCH: Checkpoint agrees with the reference. The answer and all 1 cited record/);
+  assert.equal(JSON.stringify([...app.saved]), before, 'saved reference comparison is read-only');
+  assert.equal(app.field.claims.length, 1);
+  assert.equal(app.field.claims[0].key, 'private note');
+  assert.doesNotMatch(app.elements.get('reference-receipt-comparison').textContent, /do not overwrite/);
+  assert.match(await compareSavedReferenceFiles(app, reference), /MATCH: No checkpoint supplied/);
+
+  const full = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-receipt.json'), 'utf8');
+  assert.match(await chooseReceiptFile(app, full), /PASS: known/);
+  assert.match(await compareSavedReferenceFiles(app, reference, checkpoint),
+    /MATCH: Checkpoint agrees with the reference. All 1 supplied records exactly match/);
+  const brief = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-brief.json'), 'utf8');
+  assert.match(await chooseReceiptFile(app, brief), /PASS: 4 names/);
+  assert.match(await compareSavedReferenceFiles(app, reference, checkpoint),
+    /DIFFER: Checkpoint agrees with the reference. The supplied full snapshot differs/);
+  const briefRecords = JSON.parse(brief).records;
+  const briefReference = {format: 'aru-evidence-ledger-baseline', version: 1,
+    records: briefRecords, next_source_id: 7};
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify(briefReference)),
+    /MATCH: No checkpoint supplied. All 6 supplied records exactly match/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify({...briefReference,
+    records: [...briefRecords].reverse()})), /DIFFER: No checkpoint supplied. The supplied full snapshot differs/);
+  assert.equal(JSON.stringify([...app.saved]), before);
+});
+
+test('saved checkpoint exposes a forged matching pair and reference exposes omitted conflicts', async () => {
+  const excerpt = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
+  const checkpoint = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-checkpoint.json'), 'utf8');
+  const app = boot();
+  const forged = structuredClone(excerpt);
+  forged.records[0].value = 'amber';
+  forged.answer.value = 'amber';
+  const forgedReference = {...reference, records: forged.records};
+  assert.match(await chooseReceiptFile(app, JSON.stringify(forged)), /PASS: known/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify(forgedReference)), /MATCH: No checkpoint supplied/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify(forgedReference), checkpoint),
+    /DIFFER: The reference ledger differs from the selected checkpoint/);
+
+  const conflicted = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-baseline.json'), 'utf8'));
+  assert.match(await chooseReceiptFile(app, JSON.stringify(excerpt)), /PASS: known/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify(conflicted)),
+    /DIFFER: No checkpoint supplied. The reference ledger gives a different answer or citations/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify(reference), checkpoint), /MATCH: Checkpoint agrees/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify({...reference,
+    records: [{...reference.records[0], time: reference.records[0].time + 1}]})),
+    /DIFFER: No checkpoint supplied. A cited source differs/);
+});
+
+test('saved reference comparison rejects malformed files, large files, and unsupported receipts', async () => {
+  const excerpt = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8');
+  const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-checkpoint.json'), 'utf8'));
+  const app = boot();
+  assert.match(await chooseReceiptFile(app, excerpt), /PASS:/);
+  assert.match(await compareSavedReferenceFiles(app, '{'), /FAIL: Reference ledger is not valid JSON/);
+  assert.match(await compareSavedReferenceFiles(app, 'null'), /FAIL: Choose a reference ledger export/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify({...reference, next_source_id: 1})),
+    /FAIL: Reference next source ID must exceed/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify({...reference,
+    records: [...reference.records, {...reference.records[0]}]})), /FAIL: Invalid or duplicate reference/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify(reference), 'null'),
+    /FAIL: Unsupported checkpoint format/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify(reference), JSON.stringify({...checkpoint, extra: 1})),
+    /FAIL: Unsupported checkpoint format/);
+  assert.match(await compareSavedReferenceFiles(app, JSON.stringify(reference), '{'),
+    /FAIL: Checkpoint is not valid JSON/);
+  const input = app.context.document.getElementById('reference-file');
+  input.files = [{size: 1024 * 1024 + 1, text: async () => JSON.stringify(reference)}];
+  await vm.runInContext('compareVerifiedEvidenceToReference()', app.context);
+  assert.match(app.elements.get('reference-receipt-comparison').textContent, /FAIL: Reference ledger exceeds the 1 MiB limit/);
+  assert.equal(app.field.claims.length, 0);
+  assert.equal(app.saved.size, 0);
+  const correction = applicableCorrectionFixture();
+  assert.match(await chooseReceiptFile(app, JSON.stringify(correction)), /PASS: correction/);
+  assert.equal(app.elements.get('reference-receipt-check').disabled, true);
+  await vm.runInContext('compareVerifiedEvidenceToReference()', app.context);
+  assert.match(app.elements.get('reference-receipt-comparison').textContent, /Verify a question, excerpt, or brief first/);
+});
+
+test('a slow saved reference comparison cannot replace a newer selection or receipt', async () => {
+  const excerpt = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8');
+  const reference = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8');
+  const checkpoint = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-checkpoint.json'), 'utf8');
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const crypto = {subtle: {digest: async (...args) => { await waiting; return webcrypto.subtle.digest(...args); }}};
+  const app = boot({}, {crypto});
+  await chooseReceiptFile(app, excerpt);
+  app.context.document.getElementById('reference-file').files =
+    [{size: Buffer.byteLength(reference), text: async () => reference}];
+  app.context.document.getElementById('checkpoint-file').files =
+    [{size: Buffer.byteLength(checkpoint), text: async () => checkpoint}];
+  const checking = vm.runInContext('compareVerifiedEvidenceToReference()', app.context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(await compareSavedReferenceFiles(app, reference), /MATCH: No checkpoint supplied/);
+  release();
+  await checking;
+  assert.match(app.elements.get('reference-receipt-comparison').textContent, /MATCH: No checkpoint supplied/);
+  assert.match(await chooseReceiptFile(app, '{}'), /FAIL:/);
+  assert.equal(app.elements.get('reference-receipt-check').disabled, true);
+  assert.match(app.elements.get('reference-receipt-comparison').textContent, /Verify a question, excerpt, or brief/);
 });
 
 test('local cross-check refuses a tab whose saved reference changed after file verification', async () => {
