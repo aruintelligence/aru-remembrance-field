@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { webcrypto } = require('node:crypto');
 const { verifyProof, loadEvaluator } = require('../tools/verify-proof.cjs');
 const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
 const { verifyMemoryChallenge } = require('../tools/verify-memory-challenge.cjs');
@@ -71,7 +72,7 @@ function boot(values = {}, options = {}) {
     removeItem(key) { saved.delete(key); }
   };
   const context = vm.createContext({
-    document, window, localStorage, console, Blob, TextEncoder,
+    document, window, localStorage, console, Blob, TextEncoder, crypto: options.crypto || webcrypto,
     URL: {
       createObjectURL(blob) { exports.push(blob); return 'blob:test-export'; },
       revokeObjectURL() {}
@@ -1148,6 +1149,171 @@ test('changing chain files cancels an older read and invalidates an earlier revi
   input.files = [{size: 1024 * 1024 + 1, text: async () => ''}, {size: 1, text: async () => ''}];
   assert.match(await vm.runInContext('buildCorrectionChain()', app.context).then(() => app.elements.get('chain-result').textContent), /combined correction files exceed/);
   assert.equal(app.elements.get('incoming-correction-preview-button').disabled, true);
+});
+
+test('a compact packet omits prior and unrelated values, then replays against a matching browser and CLI baseline', async () => {
+  const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-packet.json'), 'utf8'));
+  const baseline = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-baseline.json'), 'utf8'));
+  const builder = boot({aru_fact_claims: JSON.stringify(baseline.records), aru_fact_counter: '5'});
+  await chooseChainFiles(builder, [...chain.receipts].reverse());
+  assert.equal(builder.elements.get('packet-download').disabled, false);
+  await vm.runInContext('downloadCorrectionPacket()', builder.context);
+  const packet = JSON.parse(await builder.exports[0].text());
+  assert.deepEqual(packet, fixture, 'browser SHA-256 commitments agree with the independent Node fixture');
+  const raw = JSON.stringify(packet);
+  for (const privateValue of ['teal', 'purple', 'red', 'private example']) {
+    assert.ok(!raw.includes(JSON.stringify(privateValue)), `packet must omit ${privateValue}`);
+  }
+  assert.ok(Buffer.byteLength(raw) < Buffer.byteLength(JSON.stringify(chain)) / 2);
+  assert.deepEqual(verifyEvidenceReceipt(packet, undefined, baseline).steps, [5, 6]);
+  assert.throws(() => verifyEvidenceReceipt(packet), /matching baseline JSON/);
+  const copy = boot({aru_fact_claims: JSON.stringify(baseline.records), aru_fact_counter: '5'});
+  const originalStorage = JSON.stringify([...copy.saved]);
+  assert.match(await chooseReceiptFile(copy, raw), /MATCH: 2 compact corrections.*6 resulting records/);
+  assert.equal(JSON.stringify([...copy.saved]), originalStorage, 'checking has no storage write');
+  assert.equal(copy.elements.get('incoming-correction-apply').disabled, true);
+  await vm.runInContext('previewIncomingCorrection()', copy.context);
+  const preview = copy.elements.get('incoming-correction-preview');
+  assert.match(preview.children[1].textContent, /#1 = teal.*#3 = purple.*#5 = amber/);
+  assert.match(preview.children[2].textContent, /#2 = private example.*#6 = shared example/);
+  assert.equal(preview.children[1].innerHTML, '');
+  assert.equal(JSON.stringify([...copy.saved]), originalStorage, 'review has no storage write');
+  await vm.runInContext('applyIncomingCorrection()', copy.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(copy.field.claims)), chain.receipts[1].after_records);
+  assert.equal(copy.field.claimCounter, 7);
+  assert.equal(copy.field.coherence, 0.64);
+  assert.match(preview.textContent, /Applied 2 compact corrections.*Saved/);
+  assert.equal(boot(Object.fromEntries(copy.saved)).field.claims[5].value, 'shared example');
+});
+
+test('compact replay rejects mismatched baselines, altered steps, gaps, and unreviewed application', async () => {
+  const packet = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-packet.json'), 'utf8'));
+  const baseline = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-baseline.json'), 'utf8'));
+  const prior = {aru_fact_claims: JSON.stringify(baseline.records), aru_fact_counter: '5'};
+  const changedBaseline = structuredClone(baseline);
+  changedBaseline.records[1].value = 'locally different';
+  assert.throws(() => verifyEvidenceReceipt(packet, undefined, changedBaseline), /starting ledger commitment differs/);
+  const diverged = boot({aru_fact_claims: JSON.stringify(changedBaseline.records), aru_fact_counter: '5'});
+  assert.match(await chooseReceiptFile(diverged, JSON.stringify(packet)), /FAIL: Starting ledger commitment/);
+  assert.equal(diverged.elements.get('incoming-correction-preview-button').disabled, true);
+  const wrongCounter = boot({...prior, aru_fact_counter: '6'});
+  assert.match(await chooseReceiptFile(wrongCounter, JSON.stringify(packet)), /FAIL: A compact correction source ID differs/);
+  const variants = [];
+  const revised = structuredClone(packet); revised.steps[1].value = 'invented'; variants.push(revised);
+  const missing = structuredClone(packet); missing.steps[1].new_source_id = 7; variants.push(missing);
+  const swapped = structuredClone(packet); swapped.steps.reverse(); variants.push(swapped);
+  const altered = structuredClone(packet); altered.steps[1].after_sha256 = '0'.repeat(64); variants.push(altered);
+  const extra = structuredClone(packet); extra.steps[0].hidden = 'surprise'; variants.push(extra);
+  for (const variant of variants) {
+    assert.throws(() => verifyEvidenceReceipt(variant, undefined, baseline));
+    const app = boot(prior);
+    assert.match(await chooseReceiptFile(app, JSON.stringify(variant)), /FAIL:/);
+    assert.equal(app.field.claims.length, 4);
+    assert.equal(app.elements.get('incoming-correction-preview-button').disabled, true);
+  }
+  const app = boot(prior);
+  await chooseReceiptFile(app, JSON.stringify(packet));
+  await vm.runInContext('previewIncomingCorrection()', app.context);
+  app.fact('extra name', 'extra');
+  assert.equal(app.elements.get('incoming-correction-apply').disabled, true);
+  await vm.runInContext('applyIncomingCorrection()', app.context);
+  assert.equal(app.field.claims.length, 5);
+});
+
+test('compact application rolls back a storage failure and respects Session-only mode', async () => {
+  const packet = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-packet.json'), 'utf8'));
+  const baseline = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-baseline.json'), 'utf8'));
+  const prior = {aru_fact_claims: JSON.stringify(baseline.records), aru_fact_counter: '5'};
+  const app = boot(prior);
+  await chooseReceiptFile(app, JSON.stringify(packet));
+  await vm.runInContext('previewIncomingCorrection()', app.context);
+  const saved = JSON.stringify([...app.saved]);
+  const setItem = app.context.localStorage.setItem.bind(app.context.localStorage);
+  let fail = true;
+  app.context.localStorage.setItem = (key, value) => {
+    if (key === 'aru_fact_counter' && fail) { fail = false; throw new Error('quota'); }
+    setItem(key, value);
+  };
+  await vm.runInContext('applyIncomingCorrection()', app.context);
+  assert.match(app.elements.get('incoming-correction-preview').textContent, /Browser storage rejected/);
+  assert.equal(app.field.claims.length, 4);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+  const ephemeral = boot(prior);
+  vm.runInContext('toggleSessionOnly()', ephemeral.context);
+  const original = JSON.stringify([...ephemeral.saved]);
+  await chooseReceiptFile(ephemeral, JSON.stringify(packet));
+  await vm.runInContext('previewIncomingCorrection()', ephemeral.context);
+  await vm.runInContext('applyIncomingCorrection()', ephemeral.context);
+  assert.equal(ephemeral.field.claims.length, 6);
+  assert.equal(JSON.stringify([...ephemeral.saved]), original);
+  assert.match(ephemeral.elements.get('incoming-correction-preview').textContent, /Session-only mode/);
+});
+
+test('compact export omits an untouched private source even though commitments cover it', async () => {
+  const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
+  const model = require('../tools/benchmark-evidence.cjs').loadModel();
+  chain.receipts[0].before_records.push({id: 5, key: 'vault code', value: 'sequoia 742',
+    time: 1700000000004, status: 'active', imported: false});
+  chain.receipts[0].new_source_id = 6;
+  chain.receipts[0].after_records = model.correct(chain.receipts[0].name, chain.receipts[0].value,
+    chain.receipts[0].before_records, 6, chain.receipts[0].applied_at);
+  chain.receipts[1].before_records = structuredClone(chain.receipts[0].after_records);
+  chain.receipts[1].new_source_id = 7;
+  chain.receipts[1].after_records = model.correct(chain.receipts[1].name, chain.receipts[1].value,
+    chain.receipts[1].before_records, 7, chain.receipts[1].applied_at);
+  const app = boot();
+  await chooseChainFiles(app, chain.receipts);
+  assert.equal(app.elements.get('packet-download').disabled, false);
+  await vm.runInContext('downloadCorrectionPacket()', app.context);
+  const packet = JSON.parse(await app.exports[0].text());
+  assert.ok(!JSON.stringify(packet).includes('vault code'));
+  assert.ok(!JSON.stringify(packet).includes('sequoia 742'));
+  const baseline = {format: 'aru-evidence-ledger-baseline', version: 1,
+    records: chain.receipts[0].before_records, next_source_id: 6};
+  assert.deepEqual(verifyEvidenceReceipt(packet, undefined, baseline).steps, [6, 7]);
+  const target = boot({aru_fact_claims: JSON.stringify(baseline.records), aru_fact_counter: '6'});
+  assert.match(await chooseReceiptFile(target, JSON.stringify(packet)), /MATCH: 2 compact corrections/);
+  await vm.runInContext('previewIncomingCorrection()', target.context);
+  await vm.runInContext('applyIncomingCorrection()', target.context);
+  assert.equal(target.field.claims[4].value, 'sequoia 742');
+  const changed = boot({aru_fact_claims: JSON.stringify(baseline.records.map(record =>
+    record.id === 5 ? {...record, value: 'changed private fact'} : record)), aru_fact_counter: '6'});
+  assert.match(await chooseReceiptFile(changed, JSON.stringify(packet)), /FAIL: Starting ledger commitment/);
+});
+
+test('an in-flight compact verification cannot authorize a ledger that changed during hashing', async () => {
+  const packet = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-packet.json'), 'utf8'));
+  const baseline = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-baseline.json'), 'utf8'));
+  let release;
+  let calls = 0;
+  const crypto = {subtle: {digest: (...args) => {
+    if (++calls !== 1) return webcrypto.subtle.digest(...args);
+    return new Promise(resolve => { release = () => webcrypto.subtle.digest(...args).then(resolve); });
+  }}};
+  const app = boot({aru_fact_claims: JSON.stringify(baseline.records), aru_fact_counter: '5'}, {crypto});
+  const raw = JSON.stringify(packet);
+  const input = app.context.document.getElementById('receipt-file');
+  input.files = [{size: Buffer.byteLength(raw), text: async () => raw}];
+  const checking = vm.runInContext('verifyEvidenceFile()', app.context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(typeof release, 'function');
+  app.fact('extra name', 'extra value');
+  release();
+  await checking;
+  assert.match(app.elements.get('receipt-verification').textContent, /FAIL: The local ledger changed while checking/);
+  assert.equal(app.elements.get('incoming-correction-preview-button').disabled, true);
+  assert.equal(app.field.claims.length, 5);
+});
+
+test('the full chain remains usable when secure browser hashing is unavailable', async () => {
+  const chain = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-correction-chain.json'), 'utf8'));
+  const app = boot({}, {crypto: {}});
+  assert.match(await chooseChainFiles(app, chain.receipts), /Compact packet unavailable: Secure browser hashing is unavailable/);
+  assert.equal(app.elements.get('chain-download').disabled, false);
+  assert.equal(app.elements.get('packet-download').disabled, true);
+  vm.runInContext('downloadCorrectionChain()', app.context);
+  assert.deepEqual(JSON.parse(await app.exports[0].text()), chain);
 });
 
 test('evidence brief keeps sourced answers beside distinct refusals and exports a replayable snapshot', async () => {
