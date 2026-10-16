@@ -7,14 +7,48 @@ const { loadModel } = require("./benchmark-evidence.cjs");
 
 const MAX_BYTES = 1024 * 1024;
 const MODEL_REVISION = "aru-evidence-questions-1";
+const BRIEF_REVISION = "aru-evidence-briefs-1";
 const CLAIM_FIELDS = new Set(["id", "key", "value", "time", "status", "imported"]);
 
 function requireValid(condition, message) {
   if (!condition) throw new Error(`Invalid receipt: ${message}`);
 }
 
+function verifyBriefReceipt(receipt, model) {
+  const keys = ["format", "version", "model_revision", "names", "records", "results"];
+  requireValid(keys.every(key => Object.hasOwn(receipt, key)) &&
+    Object.keys(receipt).every(key => keys.includes(key)) &&
+    receipt.version === 1 && receipt.model_revision === BRIEF_REVISION,
+    "unsupported brief format or model revision");
+  requireValid(Array.isArray(receipt.names) && receipt.names.length >= 2 && receipt.names.length <= 8,
+    "brief requires 2–8 names");
+  const normalized = new Set();
+  for (const name of receipt.names) {
+    requireValid(typeof name === "string" && !!name.trim() && name === name.trim() &&
+      name.length <= 120 && !/[\r\n]/.test(name), "invalid brief name");
+    const key = name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+    requireValid(!normalized.has(key), "duplicate brief name");
+    normalized.add(key);
+  }
+  requireValid(Array.isArray(receipt.records) && receipt.records.length <= 100,
+    "invalid brief record count");
+  const ids = new Set();
+  for (const record of receipt.records) {
+    requireValid(model.validClaim(record) && Object.keys(record).every(key => CLAIM_FIELDS.has(key)) &&
+      (record.imported === undefined || typeof record.imported === "boolean") && !ids.has(record.id),
+      "invalid or duplicate record");
+    ids.add(record.id);
+  }
+  const computed = model.brief(receipt.names, receipt.records);
+  try { assert.deepStrictEqual(receipt.results, computed); }
+  catch (_) { requireValid(false, "brief results or citations do not match the local model and supplied records"); }
+  return {kind: "brief", names: computed.length, known: computed.filter(item => item.answer.kind === "known").length,
+    records: ids.size, scope: "full-supplied-snapshot", model_sha256: model.hash};
+}
+
 function verifyEvidenceReceipt(receipt, model = loadModel()) {
   requireValid(receipt && typeof receipt === "object" && !Array.isArray(receipt), "object expected");
+  if (receipt.format === "aru-evidence-brief-receipt") return verifyBriefReceipt(receipt, model);
   const excerpt = receipt.format === "aru-evidence-answer-excerpt";
   const keys = ["format", "version", "model_revision", "question", "records", "answer",
     ...(excerpt ? ["scope"] : [])];
@@ -70,7 +104,11 @@ if (require.main === module) {
     try { receipt = JSON.parse(readLimited(process.argv[2])); }
     catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid receipt: file is not valid JSON"); throw error; }
     const result = verifyEvidenceReceipt(receipt);
-    console.log(`PASS: ${result.kind}; ${result.records} supplied records; ${result.sources.length} cited sources; scope ${result.scope}`);
+    if (result.kind === "brief") {
+      console.log(`PASS: ${result.names} names; ${result.known} sourced answer${result.known === 1 ? "" : "s"}; ${result.names - result.known} refusal${result.names - result.known === 1 ? "" : "s"}; ${result.records} supplied records; scope ${result.scope}`);
+    } else {
+      console.log(`PASS: ${result.kind}; ${result.records} supplied records; ${result.sources.length} cited sources; scope ${result.scope}`);
+    }
     console.log(`Local model SHA-256: ${result.model_sha256}`);
     console.log("This checks the answer against supplied records, not omitted ledger entries, origin, or factual truth.");
   } catch (error) {

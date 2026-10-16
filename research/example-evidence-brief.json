@@ -1,0 +1,20 @@
+{
+  "format": "aru-evidence-brief-receipt",
+  "version": 1,
+  "model_revision": "aru-evidence-briefs-1",
+  "names": ["favorite color", "city", "plan", "pet"],
+  "records": [
+    {"id": 1, "key": "favorite color", "value": "teal", "time": 1700000000000, "status": "active"},
+    {"id": 2, "key": "FAVORITE  COLOR", "value": "teal", "time": 1700000000001, "status": "active"},
+    {"id": 3, "key": "city", "value": "Portland", "time": 1700000000002, "status": "active"},
+    {"id": 4, "key": "city", "value": "Denver", "time": 1700000000003, "status": "active"},
+    {"id": 5, "key": "plan", "value": "old", "time": 1700000000004, "status": "superseded"},
+    {"id": 6, "key": "unrelated private note", "value": "synthetic placeholder", "time": 1700000000005, "status": "active"}
+  ],
+  "results": [
+    {"name": "favorite color", "answer": {"kind": "known", "value": "teal", "sources": [1, 2]}},
+    {"name": "city", "answer": {"kind": "conflict", "sources": [3, 4]}},
+    {"name": "plan", "answer": {"kind": "historical", "sources": [5]}},
+    {"name": "pet", "answer": {"kind": "missing"}}
+  ]
+}

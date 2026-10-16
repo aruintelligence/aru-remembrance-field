@@ -36,6 +36,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A portable one-step proof capsule that can be recomputed from a local checkout
 - A browser-side checker for current-model transition proofs, including the no-history control and every score term
 - A separate evidence ledger for exact-name fact recall, source IDs, conflicts, explicit resolution, and shareable cited-answer excerpts
+- A multi-fact evidence brief that displays sourced values and explicit refusals together, with a replayable full-snapshot receipt
 - Composer actions for recording a `name: value` assertion and asking recorded facts with sources, without changing the simulation score
 - A browser-side verifier for shared answer receipts and excerpts, with no import or command-line setup
 
@@ -135,6 +136,8 @@ The verifiers recalculate every score term and reject mismatches. This checks **
 ## Evidence memory: recall with sources
 
 Open **Evidence memory**, enter a fact name such as `favorite color` and a value such as `teal`, then select **Record fact**. Entering `FAVORITE  COLOR` and selecting **Recall by name** retrieves the recorded value and its local source number. Matching ignores case, repeated spaces, and Unicode compatibility forms in the *name*; it does not infer synonyms or the meaning of prose.
+
+For a small set of facts, enter 2–8 names on separate lines under **Evidence brief** and select **Build evidence brief**. Each row independently shows a cited user assertion or an explicit missing, conflicting, or historical refusal. A conflict on one name never turns another name into a guessed answer. **Download brief receipt JSON** captures the names, results, and full ledger snapshot for replay in the browser's **Verify a shared answer receipt** panel or with `node tools/verify-evidence-receipt.cjs /path/to/aru-evidence-brief-receipt.json`. Editing the names or ledger disables the old download. The [brief protocol](research/evidence-brief-protocol.md) includes a public four-name example and an independent Python differential challenge. The full snapshot can contain unrelated private facts; inspect it before sharing.
 
 The **Ask what is recorded** box also accepts the narrow forms `What is favorite color?` and `What is my favorite color?` (including `What's`). It removes the question wrapper and looks for exact normalized names in the ledger. If both `favorite color` and `my favorite color` are recorded, the second question is ambiguous and returns no answer. Unknown names, unsupported wording, conflicting current values, and names with only superseded sources also return no answer. A successful answer cites the local source number and labels the value as a user assertion. Asking does not change the modeled score, messages, or storage; changing the ledger clears the old answer. The [question challenge](research/evidence-question-protocol.md) lists reproducible cases.
 

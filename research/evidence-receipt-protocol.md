@@ -1,6 +1,6 @@
 # Portable evidence question receipts and answer excerpts
 
-The browser offers two replayable exports in **Evidence memory**:
+The browser offers single-question receipts and cited excerpts in **Evidence memory**. The [multi-fact evidence brief](evidence-brief-protocol.md) adds a third full-snapshot receipt for 2–8 names:
 
 | Export | Available for | Included records | What a replay checks |
 | --- | --- | --- | --- |
@@ -20,6 +20,8 @@ The excerpt limits disclosure of unrelated facts. Neither format proves that oth
 For no-private-data examples, run `node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json` and `node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json`.
 
 Both files contain the exact question, answer kind, any value and source IDs, and their supplied records. The excerpt also declares `scope: "cited-assertions-only"`. The verifier validates records, runs the repository's actual `resolveEvidenceQuestion` and `evidenceAnswerSummary` functions against them, and rejects a mismatch. An excerpt must contain **all and only** its cited active assertions within the file. The verifier rejects duplicate or malformed records and files over 1 MiB, and reports a SHA-256 hash of the local extracted question code. The hash identifies code bytes, not the origin of either receipt.
+
+The same browser panel and CLI also replay `aru-evidence-brief-receipt` files with their ordered names, results, and complete supplied records. The [synthetic brief](example-evidence-brief.json) contains one sourced answer and three distinct refusals. It does not replace the privacy-limited cited answer excerpt for a single known fact.
 
 Changing the question clears the displayed answer and disables both exports. Recording, importing, selecting, or deleting a ledger entry also invalidates the old answer and exports. A refusal cannot produce a cited answer excerpt. The app keeps the snapshot in memory only until another question or edit; it does not add either file to local storage. Downloading is an explicit action.
 
