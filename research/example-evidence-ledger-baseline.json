@@ -1,0 +1,39 @@
+{
+  "format": "aru-evidence-ledger-baseline",
+  "version": 1,
+  "records": [
+    {
+      "id": 1,
+      "key": "favorite color",
+      "value": "teal",
+      "time": 1700000000000,
+      "status": "active",
+      "imported": false
+    },
+    {
+      "id": 2,
+      "key": "unrelated note",
+      "value": "private example",
+      "time": 1700000000001,
+      "status": "active",
+      "imported": false
+    },
+    {
+      "id": 3,
+      "key": "FAVORITE COLOR",
+      "value": "purple",
+      "time": 1700000000002,
+      "status": "active",
+      "imported": true
+    },
+    {
+      "id": 4,
+      "key": "favorite color",
+      "value": "red",
+      "time": 1700000000003,
+      "status": "superseded",
+      "imported": false
+    }
+  ],
+  "next_source_id": 5
+}

@@ -464,7 +464,7 @@
 
   <details class="ledger" id="receipt-verifier">
     <summary>Verify a shared answer receipt</summary>
-    <p>Choose a question, brief, correction, or correction-chain receipt JSON. This browser recalculates the answer or ledger change from the records in that file. The file is read on this device and is not uploaded by this app.</p>
+    <p>Choose a question, brief, correction, correction-chain, or compact correction packet JSON. This browser replays the supplied change; a compact packet is checked against this browser's own ledger. The file is read on this device and is not uploaded by this app.</p>
     <label for="receipt-file">Receipt JSON (up to 1 MiB)</label>
     <input id="receipt-file" type="file" accept=".json,application/json" onchange="verifyEvidenceFile()">
     <p id="receipt-verification" role="status" aria-live="polite">No receipt checked yet.</p>
@@ -476,16 +476,17 @@
     <p>A correction can be applied only to the exact starting ledger with the same next source ID. Review its current sources and replacement first. Diverged browsers must be reconciled separately; this action never silently merges them.</p>
     <section class="evidence-question">
       <h2>Bundle consecutive corrections</h2>
-      <p>Select 2–8 correction receipts in any file order. This device checks each step and their exact continuity, then prepares the chain for review here. Download the bundle to carry it to another matching browser. Each step repeats the full ledger, including unrelated private facts.</p>
+      <p>Select 2–8 correction receipts in any file order. This device checks their exact continuity. Download the full chain for an independently replayable record, or a compact packet for a matching browser. The compact packet includes changed names and values plus ledger hashes, without unrelated names and values; it requires the original ledger to verify.</p>
       <label for="chain-files">Correction receipt JSON files (combined limit 1 MiB)</label>
       <input id="chain-files" type="file" accept=".json,application/json" multiple onchange="invalidateBuiltChain()">
       <div class="ledger-actions">
         <button type="button" onclick="buildCorrectionChain()">Verify and bundle sequence</button>
         <button type="button" id="chain-download" onclick="downloadCorrectionChain()" disabled>Download chain JSON</button>
+        <button type="button" id="packet-download" onclick="downloadCorrectionPacket()" disabled>Download compact packet</button>
       </div>
       <p id="chain-result" role="status" aria-live="polite"></p>
     </section>
-    <p>A pass checks consistency with supplied records only. It cannot authenticate their author, confirm the facts, or detect records omitted before the file was made.</p>
+    <p>A pass checks consistency with supplied records or the matching local ledger. It cannot authenticate their author or confirm the facts. A compact packet's hash is not encryption or proof that an event happened.</p>
   </details>
 
   <details class="ledger" id="ledger">
@@ -1681,8 +1682,11 @@ let verifiedIncomingCorrection = null;
 let pendingIncomingCorrection = null;
 let chainBuildRequest = 0;
 let lastCorrectionChain = null;
+let lastCorrectionPacket = null;
+let packetPreviewRequest = 0;
 
 function invalidateIncomingCorrection(message = "The ledger changed. Choose the receipt again to review it against this browser.") {
+  ++packetPreviewRequest;
   if (!verifiedIncomingCorrection && !pendingIncomingCorrection) return;
   verifiedIncomingCorrection = null;
   pendingIncomingCorrection = null;
@@ -1700,6 +1704,74 @@ function sameFactLedger(actual, expected) {
         Object.prototype.hasOwnProperty.call(expected[index], field) && Object.is(record[field], expected[index][field])));
 }
 
+function canonicalLedgerCommitment(records) {
+  if (!Array.isArray(records) || records.length > 100) throw new Error("Invalid ledger size for a compact packet.");
+  const fields = new Set(["id", "key", "value", "time", "status", "imported"]);
+  const seen = new Set();
+  return JSON.stringify(["aru-ledger-commitment-1", records.map(record => {
+    if (!validFactClaim(record) || Object.keys(record).some(key => !fields.has(key)) ||
+        (Object.prototype.hasOwnProperty.call(record, "imported") && typeof record.imported !== "boolean") ||
+        seen.has(record.id)) throw new Error("Invalid or duplicate ledger source in a compact packet.");
+    seen.add(record.id);
+    return [record.id, record.key, record.value, record.time, record.status,
+      Object.prototype.hasOwnProperty.call(record, "imported") ? [record.imported] : []];
+  })]);
+}
+
+async function ledgerSHA256(records) {
+  if (!globalThis.crypto?.subtle) throw new Error("Secure browser hashing is unavailable here; use the full chain JSON.");
+  const bytes = new TextEncoder().encode(canonicalLedgerCommitment(records));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function validateCorrectionPacket(packet) {
+  const fields = ["format", "version", "model_revision", "start_sha256", "steps"];
+  if (!packet || typeof packet !== "object" || Array.isArray(packet) ||
+      Object.keys(packet).length !== fields.length ||
+      !fields.every(key => Object.prototype.hasOwnProperty.call(packet, key)) ||
+      packet.format !== "aru-evidence-correction-packet" || packet.version !== 1 ||
+      packet.model_revision !== "aru-evidence-correction-packet-1" ||
+      !/^[0-9a-f]{64}$/.test(packet.start_sha256) ||
+      !Array.isArray(packet.steps) || packet.steps.length < 2 || packet.steps.length > 8) {
+    throw new Error("Unsupported compact packet format, commitment, or step count (2–8).");
+  }
+  const stepFields = ["name", "value", "new_source_id", "applied_at", "after_sha256"];
+  for (const step of packet.steps) {
+    if (!step || typeof step !== "object" || Array.isArray(step) ||
+        Object.keys(step).length !== stepFields.length ||
+        !stepFields.every(key => Object.prototype.hasOwnProperty.call(step, key)) ||
+        !/^[0-9a-f]{64}$/.test(step.after_sha256)) {
+      throw new Error("Invalid compact correction step or commitment.");
+    }
+  }
+}
+
+async function replayCorrectionPacket(packet, records, counter) {
+  validateCorrectionPacket(packet);
+  let ledger = JSON.parse(JSON.stringify(records));
+  if (await ledgerSHA256(ledger) !== packet.start_sha256) {
+    throw new Error("Starting ledger commitment does not match this browser. Nothing was changed.");
+  }
+  const previews = [];
+  let nextCounter = counter;
+  for (const step of packet.steps) {
+    const allocated = Math.max(nextCounter, 1, ...ledger.map(record => record.id + 1));
+    if (step.new_source_id !== allocated) {
+      throw new Error("A compact correction source ID differs from this browser's next source ID.");
+    }
+    const active = ledger.filter(record => normalizeFactKey(record.key) === normalizeFactKey(step.name) &&
+      record.status === "active").map(record => ({id: record.id, value: record.value}));
+    ledger = computeEvidenceCorrection(step.name, step.value, ledger, step.new_source_id, step.applied_at);
+    if (await ledgerSHA256(ledger) !== step.after_sha256) {
+      throw new Error("A resulting ledger commitment does not match the compact packet. Nothing was changed.");
+    }
+    previews.push({id: step.new_source_id, name: step.name, value: step.value, active});
+    nextCounter = step.new_source_id + 1;
+  }
+  return {previews, after: ledger, nextCounter};
+}
+
 async function verifyEvidenceFile() {
   const request = ++receiptVerificationRequest;
   invalidateIncomingCorrection("Choose a verified correction receipt to preview its local application.");
@@ -1708,7 +1780,7 @@ async function verifyEvidenceFile() {
   document.getElementById("incoming-correction-preview").replaceChildren();
   const file = document.getElementById("receipt-file").files?.[0];
   const output = document.getElementById("receipt-verification");
-  if (!file) { output.textContent = "Choose an answer receipt JSON file."; return; }
+  if (!file) { output.textContent = "Choose a receipt or compact packet JSON file."; return; }
   if (file.size > 1024 * 1024) { output.textContent = "FAIL: File exceeds the 1 MiB limit."; return; }
   output.textContent = "Checking receipt on this device…";
   try {
@@ -1716,6 +1788,18 @@ async function verifyEvidenceFile() {
     if (request !== receiptVerificationRequest) return;
     if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error("File exceeds the 1 MiB limit.");
     const receipt = JSON.parse(raw);
+    if (receipt?.format === "aru-evidence-correction-packet") {
+      const baseline = JSON.stringify([Field.claims, Field.claimCounter]);
+      const result = await replayCorrectionPacket(receipt, Field.claims, Field.claimCounter);
+      if (request !== receiptVerificationRequest) return;
+      if (baseline !== JSON.stringify([Field.claims, Field.claimCounter])) {
+        throw new Error("The local ledger changed while checking the compact packet. Choose it again.");
+      }
+      verifiedIncomingCorrection = receipt;
+      document.getElementById("incoming-correction-preview-button").disabled = false;
+      output.textContent = `MATCH: ${result.previews.length} compact corrections replay on this browser's ledger; ${result.after.length} resulting records. Review before applying. This does not authenticate the sender or establish factual truth.`;
+      return;
+    }
     const result = verifyEvidenceBundle(receipt);
     if (result.chain) {
       verifiedIncomingCorrection = receipt;
@@ -1749,7 +1833,9 @@ function invalidateBuiltChain() {
   ++chainBuildRequest;
   ++receiptVerificationRequest;
   lastCorrectionChain = null;
+  lastCorrectionPacket = null;
   document.getElementById("chain-download").disabled = true;
+  document.getElementById("packet-download").disabled = true;
   document.getElementById("chain-result").textContent = "Selection changed. Verify the new sequence before downloading or applying it.";
   document.getElementById("receipt-verification").textContent = "Selection changed. No correction sequence is ready to apply.";
   invalidateIncomingCorrection("Selection changed. Verify the new sequence before reviewing it.");
@@ -1759,7 +1845,9 @@ async function buildCorrectionChain() {
   const request = ++receiptVerificationRequest;
   const buildRequest = ++chainBuildRequest;
   lastCorrectionChain = null;
+  lastCorrectionPacket = null;
   document.getElementById("chain-download").disabled = true;
+  document.getElementById("packet-download").disabled = true;
   invalidateIncomingCorrection("Checking the selected correction sequence…");
   document.getElementById("receipt-verification").textContent = "Checking correction sequence on this device…";
   const output = document.getElementById("chain-result");
@@ -1800,10 +1888,56 @@ async function buildCorrectionChain() {
     document.getElementById("incoming-correction-preview-button").disabled = false;
     document.getElementById("receipt-verification").textContent = `PASS: ${checked.chain.steps.length} consecutive corrections; ${checked.recordCount} resulting records. Review before applying to a matching ledger.`;
     output.textContent = `Verified ${checked.chain.steps.length} consecutive corrections (sources ${checked.chain.steps.map(step => `#${step.id}`).join(" → ")}). Download the chain JSON or preview applying it here.`;
+    try {
+      const packet = await deriveCorrectionPacket(chain);
+      if (request !== receiptVerificationRequest || buildRequest !== chainBuildRequest) return;
+      lastCorrectionPacket = packet;
+      document.getElementById("packet-download").disabled = false;
+      output.textContent += " Compact packet ready; it requires the initial ledger for verification.";
+    } catch (error) {
+      if (request === receiptVerificationRequest && buildRequest === chainBuildRequest) {
+        output.textContent += ` Compact packet unavailable: ${error.message}`;
+      }
+    }
   } catch (error) {
     if (request === receiptVerificationRequest && buildRequest === chainBuildRequest) {
       output.textContent = `FAIL: ${error instanceof SyntaxError ? "A selected file is not valid JSON." : error.message || "Could not check the sequence."}`;
       document.getElementById("receipt-verification").textContent = "No correction sequence is ready to apply.";
+    }
+  }
+}
+
+async function deriveCorrectionPacket(chain) {
+  verifyEvidenceBundle(chain);
+  const packet = {format: "aru-evidence-correction-packet", version: 1,
+    model_revision: "aru-evidence-correction-packet-1",
+    start_sha256: await ledgerSHA256(chain.receipts[0].before_records), steps: []};
+  for (const receipt of chain.receipts) {
+    packet.steps.push({name: receipt.name, value: receipt.value,
+      new_source_id: receipt.new_source_id, applied_at: receipt.applied_at,
+      after_sha256: await ledgerSHA256(receipt.after_records)});
+  }
+  if (new TextEncoder().encode(JSON.stringify(packet, null, 2)).length > 1024 * 1024) {
+    throw new Error("The compact packet exceeds the 1 MiB limit.");
+  }
+  return packet;
+}
+
+async function downloadCorrectionPacket() {
+  if (!lastCorrectionChain || !lastCorrectionPacket) return;
+  const request = chainBuildRequest;
+  const output = document.getElementById("chain-result");
+  document.getElementById("packet-download").disabled = true;
+  try {
+    const packet = await deriveCorrectionPacket(lastCorrectionChain);
+    if (request !== chainBuildRequest) return;
+    if (JSON.stringify(packet) !== JSON.stringify(lastCorrectionPacket)) throw new Error("The compact packet changed.");
+    downloadJSON(packet, "aru-evidence-correction-packet.json");
+    document.getElementById("packet-download").disabled = false;
+  } catch (error) {
+    if (request === chainBuildRequest) {
+      lastCorrectionPacket = null;
+      output.textContent = `Compact packet unavailable: ${error.message} Verify the sequence again.`;
     }
   }
 }
@@ -1821,11 +1955,15 @@ function downloadCorrectionChain() {
 }
 
 function previewIncomingCorrection() {
+  const previewRequest = ++packetPreviewRequest;
   pendingIncomingCorrection = null;
   document.getElementById("incoming-correction-apply").disabled = true;
   const output = document.getElementById("incoming-correction-preview");
   const bundle = verifiedIncomingCorrection;
-  if (!bundle) { output.textContent = "Verify a correction receipt or chain first."; return; }
+  if (!bundle) { output.textContent = "Verify a correction receipt, chain, or compact packet first."; return; }
+  if (bundle.format === "aru-evidence-correction-packet") {
+    return previewCorrectionPacket(bundle, previewRequest);
+  }
   try {
     if (Field.busy) throw new Error("Wait for the simulation to finish before reviewing a correction.");
     verifyEvidenceBundle(bundle);
@@ -1876,6 +2014,36 @@ function previewIncomingCorrection() {
   }
 }
 
+async function previewCorrectionPacket(packet, previewRequest) {
+  const output = document.getElementById("incoming-correction-preview");
+  const baseline = JSON.stringify([Field.claims, Field.claimCounter]);
+  const request = receiptVerificationRequest;
+  output.textContent = "Replaying compact corrections against this browser's ledger…";
+  try {
+    if (Field.busy) throw new Error("Wait for the simulation to finish before reviewing a correction.");
+    const result = await replayCorrectionPacket(packet, Field.claims, Field.claimCounter);
+    if (previewRequest !== packetPreviewRequest || request !== receiptVerificationRequest ||
+        verifiedIncomingCorrection !== packet ||
+        baseline !== JSON.stringify([Field.claims, Field.claimCounter])) return;
+    output.replaceChildren();
+    const summary = document.createElement("p");
+    summary.textContent = `Review ${result.previews.length} compact corrections, from source #${result.previews[0].id} to #${result.previews[result.previews.length - 1].id}. The starting ledger has ${Field.claims.length} records; the resulting ledger will have ${result.after.length}.`;
+    output.appendChild(summary);
+    result.previews.forEach((step, index) => {
+      const row = document.createElement("div");
+      row.className = "ledger-entry";
+      row.textContent = `Step ${index + 1}: “${step.name}” · ${step.active.map(record => `#${record.id} = ${record.value}`).join(" · ")} → #${step.id} = ${step.value}`;
+      output.appendChild(row);
+    });
+    pendingIncomingCorrection = {receipt: packet, request, baseline};
+    document.getElementById("incoming-correction-apply").disabled = false;
+  } catch (error) {
+    if (previewRequest === packetPreviewRequest && request === receiptVerificationRequest) {
+      output.textContent = error.message || "The compact packet cannot be applied here.";
+    }
+  }
+}
+
 function persistIncomingCorrection(after, nextId) {
   if (sessionOnly) return;
   const keys = [STORAGE_KEYS.claims, STORAGE_KEYS.claimCounter];
@@ -1903,6 +2071,7 @@ function persistIncomingCorrection(after, nextId) {
 function applyIncomingCorrection() {
   const plan = pendingIncomingCorrection;
   if (!plan) return;
+  if (plan.receipt.format === "aru-evidence-correction-packet") return applyCorrectionPacket(plan);
   const output = document.getElementById("incoming-correction-preview");
   try {
     if (Field.busy) throw new Error("Wait for the simulation to finish before applying a correction.");
@@ -1943,6 +2112,37 @@ function applyIncomingCorrection() {
     pendingIncomingCorrection = null;
     document.getElementById("incoming-correction-apply").disabled = true;
     output.textContent = error.message || "The receipt cannot be applied here.";
+  }
+}
+
+async function applyCorrectionPacket(plan) {
+  const output = document.getElementById("incoming-correction-preview");
+  pendingIncomingCorrection = null;
+  document.getElementById("incoming-correction-apply").disabled = true;
+  try {
+    if (Field.busy) throw new Error("Wait for the simulation to finish before applying a correction.");
+    if (plan.request !== receiptVerificationRequest ||
+        plan.baseline !== JSON.stringify([Field.claims, Field.claimCounter])) {
+      throw new Error("The local ledger changed after preview. Verify and review the packet again.");
+    }
+    const result = await replayCorrectionPacket(plan.receipt, Field.claims, Field.claimCounter);
+    if (plan.request !== receiptVerificationRequest ||
+        plan.baseline !== JSON.stringify([Field.claims, Field.claimCounter])) {
+      throw new Error("The local ledger changed during application. Nothing was changed.");
+    }
+    persistIncomingCorrection(result.after, result.nextCounter);
+    invalidateFactImport();
+    Field.claims = result.after;
+    Field.claimCounter = result.nextCounter;
+    invalidateEvidenceAnswer();
+    renderLedger();
+    const last = result.previews[result.previews.length - 1];
+    showFactResult(last.name, `Applied reviewed compact packet through source #${last.id}. `);
+    const storage = sessionOnly ? "Session-only mode: the change disappears when you leave."
+      : Field.storageAvailable ? "Saved in this browser." : "Browser storage is unavailable; this change lasts only for this session.";
+    output.textContent = `Applied ${result.previews.length} compact corrections through source #${last.id}; ${storage}`;
+  } catch (error) {
+    output.textContent = error.message || "The compact packet cannot be applied here.";
   }
 }
 

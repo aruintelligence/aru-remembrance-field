@@ -29,6 +29,8 @@ For a correction receipt, the browser also offers a separate **Preview applying 
 
 An `aru-evidence-correction-chain` file wraps 2–8 individual correction receipts. The same browser panel and CLI verify each receipt and every exact before/after link; the browser can bundle selected files and apply a reviewed chain as one local operation to a matching starting ledger. See the [chain protocol](evidence-correction-chain-protocol.md) and [synthetic example](example-evidence-correction-chain.json). It carries repeated full snapshots and may reveal unrelated values.
 
+The builder can also derive a [compact correction packet](evidence-correction-packet-protocol.md) from a checked chain. It carries changed names and new values with SHA-256 commitments instead of full snapshots. The browser checks it against its own starting ledger; the CLI requires a separate matching baseline file. A packet alone cannot be independently replayed.
+
 Changing the question clears the displayed answer and disables both exports. Recording, importing, selecting, or deleting a ledger entry also invalidates the old answer and exports. A refusal cannot produce a cited answer excerpt. The app keeps the snapshot in memory only until another question or edit; it does not add either file to local storage. Downloading is an explicit action.
 
 **Privacy:** An excerpt omits unrelated ledger facts but includes the question and cited values, which can still be sensitive. A full receipt may include sensitive facts unrelated to the question. Inspect either JSON before sharing it. Neither format is an evidence ledger import file.

@@ -1,0 +1,22 @@
+{
+  "format": "aru-evidence-correction-packet",
+  "version": 1,
+  "model_revision": "aru-evidence-correction-packet-1",
+  "start_sha256": "02a196ff695d00efe2388398c8b98f3797aefb56073692964b8fc5f7e2bdf49e",
+  "steps": [
+    {
+      "name": "favorite color",
+      "value": "amber",
+      "new_source_id": 5,
+      "applied_at": 1700000001000,
+      "after_sha256": "f6c42ec935d83e52c6614a624d544027265cdc99b726f37d768b3aab7a65d681"
+    },
+    {
+      "name": "unrelated note",
+      "value": "shared example",
+      "new_source_id": 6,
+      "applied_at": 1700000002000,
+      "after_sha256": "2b02e080c9d4e714022894dd12aab127daf93d3e5bda8af335944616d63113a4"
+    }
+  ]
+}
