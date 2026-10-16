@@ -47,6 +47,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - An optional reference-ledger comparison that detects omitted conflicts in an excerpt when the checker already holds the relevant sources
 - A one-click synthetic trust lab that contrasts internal replay, reference comparison, and earlier checkpoint matching across five controls
 - A bounded, local batch audit for up to 20 shared answer receipts against one saved reference and optional prior checkpoint, with per-file results and repeated-text flags
+- A command-line batch audit report that binds the ordered files and verifier bytes with SHA-256 and can be recomputed against the originals
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -180,6 +181,15 @@ To inspect a shared answer without installing Node.js, open **Verify a shared an
 
 To review several shared answers, select the saved reference and optional prior checkpoint in that same panel, then choose **Answer receipt JSON files** and **Audit selected receipts**. The browser checks each selected question, excerpt, or brief independently against the one reference and reports `MATCH`, `DIFFER`, or `FAIL` per file. It flags exact repeats of decoded file text; a repeated file is not independent evidence. The checkpoint must match the reference before any receipts are audited. The audit is local, read-only, and limited to 20 receipts, 1 MiB each, and 4 MiB combined. See the [batch audit protocol](research/evidence-batch-audit-protocol.md) for interpretation and limits.
 
+To preserve a batch result for reproduction, run the [command-line batch auditor](tools/audit-evidence-batch.cjs) with the same ordered files and save its JSON report:
+
+```bash
+node tools/audit-evidence-batch.cjs reference.json answer-1.json answer-2.json --checkpoint earlier-checkpoint.json --json > batch-report.json
+node tools/audit-evidence-batch.cjs reference.json answer-1.json answer-2.json --checkpoint earlier-checkpoint.json --check-report batch-report.json
+```
+
+The second command recomputes outcomes and exact input byte hashes, then checks the saved report, including hashes of the verifier and auditor code. It requires the original reference, optional checkpoint, and receipts in the same order. A report contains hashes, results, and counts, not names or fact values. It is reproducible evidence of what these deterministic rules returned for those files, not proof of who created them, when they existed, whether the set is complete, or whether the assertions are true. A nonmatching receipt gives the first command a nonzero exit status while still writing the JSON report. A successful `--check-report` means even reported failures were reproduced; inspect the verdict counts.
+
 The [seeded falsification lab](research/evidence-falsification-protocol.md) probes the same rules with generated Unicode names, conflicting and superseded sources, irrelevant additions, changed record order, ambiguous questions, and refusals:
 
 ```bash
@@ -206,6 +216,7 @@ Run the small regression suite with Node.js:
 
 ```bash
 node tests/field.test.cjs
+node tests/evidence-batch-audit.test.cjs
 node tests/benchmark.test.cjs
 node tests/falsifier.test.cjs
 node tests/blind-analyzer.test.cjs

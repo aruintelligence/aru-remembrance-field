@@ -16,6 +16,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: node tests/field.test.cjs
+      - run: node tests/evidence-batch-audit.test.cjs
       - run: node tests/benchmark.test.cjs
       - run: node tests/falsifier.test.cjs
       - run: node tests/blind-analyzer.test.cjs
@@ -26,6 +27,7 @@ jobs:
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json research/example-evidence-reference-baseline.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json research/example-evidence-reference-baseline.json research/example-evidence-ledger-checkpoint.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json research/example-evidence-reference-baseline.json
+      - run: node tools/audit-evidence-batch.cjs research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --check-report research/example-evidence-batch-audit-report.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-brief.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction-chain.json

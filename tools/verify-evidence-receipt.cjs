@@ -183,8 +183,7 @@ function verifyBriefReceipt(receipt, model) {
     records: ids.size, scope: "full-supplied-snapshot", model_sha256: model.hash};
 }
 
-function compareWithReference(receipt, model, baseline, result) {
-  if (baseline === null) return result;
+function verifyLedgerBaseline(baseline, model = loadModel()) {
   requireValid(baseline && typeof baseline === "object" && !Array.isArray(baseline) &&
     Object.keys(baseline).length === 4 &&
     ["format", "version", "records", "next_source_id"].every(key => Object.hasOwn(baseline, key)) &&
@@ -195,6 +194,12 @@ function compareWithReference(receipt, model, baseline, result) {
   ledgerSHA256(baseline.records, model);
   requireValid(baseline.records.every(record => record.id < baseline.next_source_id),
     "reference next source ID must exceed every record ID");
+  return true;
+}
+
+function compareWithReference(receipt, model, baseline, result) {
+  if (baseline === null) return result;
+  verifyLedgerBaseline(baseline, model);
   if (receipt.format === "aru-evidence-answer-excerpt") {
     const expected = model.resolve(receipt.question, baseline.records);
     try { assert.deepStrictEqual(receipt.answer, expected); }
@@ -312,4 +317,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { verifyEvidenceReceipt, verifyLedgerCheckpoint };
+module.exports = { verifyEvidenceReceipt, verifyLedgerCheckpoint, verifyLedgerBaseline };
