@@ -24,6 +24,7 @@ jobs:
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json research/example-evidence-reference-baseline.json
+      - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json research/example-evidence-reference-baseline.json research/example-evidence-ledger-checkpoint.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json research/example-evidence-reference-baseline.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-brief.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction.json

@@ -88,6 +88,30 @@ function ledgerSHA256(records, model) {
   return createHash("sha256").update(JSON.stringify(["aru-ledger-commitment-1", canonical])).digest("hex");
 }
 
+function verifyLedgerCheckpoint(baseline, checkpoint, model = loadModel()) {
+  requireValid(baseline && typeof baseline === "object" && !Array.isArray(baseline) &&
+    Object.keys(baseline).length === 4 &&
+    ["format", "version", "records", "next_source_id"].every(key => Object.hasOwn(baseline, key)) &&
+    baseline.format === "aru-evidence-ledger-baseline" && baseline.version === 1 &&
+    Array.isArray(baseline.records) && Number.isSafeInteger(baseline.next_source_id) &&
+    baseline.next_source_id >= 1 && baseline.next_source_id <= 1e9 + 1,
+    "checkpoint requires a reference ledger baseline with records and next_source_id");
+  const ledgerDigest = ledgerSHA256(baseline.records, model);
+  requireValid(baseline.records.every(record => record.id < baseline.next_source_id),
+    "reference next source ID must exceed every record ID");
+  requireValid(checkpoint && typeof checkpoint === "object" && !Array.isArray(checkpoint) &&
+    Object.keys(checkpoint).length === 4 &&
+    ["format", "version", "encoding", "sha256"].every(key => Object.hasOwn(checkpoint, key)) &&
+    checkpoint.format === "aru-evidence-ledger-checkpoint" && checkpoint.version === 1 &&
+    checkpoint.encoding === "aru-evidence-ledger-checkpoint-1" &&
+    typeof checkpoint.sha256 === "string" && /^[0-9a-f]{64}$/.test(checkpoint.sha256),
+    "unsupported checkpoint format, encoding, or digest");
+  const expected = createHash("sha256").update(JSON.stringify([
+    "aru-evidence-ledger-checkpoint-1", ledgerDigest, baseline.next_source_id])).digest("hex");
+  requireValid(checkpoint.sha256 === expected, "checkpoint differs from supplied reference ledger");
+  return true;
+}
+
 function verifyCorrectionPacket(packet, model, baseline) {
   const keys = ["format", "version", "model_revision", "start_sha256", "steps"];
   requireValid(keys.every(key => Object.hasOwn(packet, key)) &&
@@ -187,7 +211,8 @@ function compareWithReference(receipt, model, baseline, result) {
   return {...result, reference_match: true, reference_scope: "exact-full-snapshot"};
 }
 
-function verifyEvidenceReceipt(receipt, model = loadModel(), baseline = null) {
+function verifyEvidenceReceipt(receipt, model = loadModel(), baseline = null, checkpoint = null) {
+  if (checkpoint !== null) verifyLedgerCheckpoint(baseline, checkpoint, model);
   requireValid(receipt && typeof receipt === "object" && !Array.isArray(receipt), "object expected");
   if (receipt.format === "aru-evidence-correction-packet") return verifyCorrectionPacket(receipt, model, baseline);
   if (receipt.format === "aru-evidence-correction-chain" || receipt.format === "aru-evidence-correction-receipt") {
@@ -249,8 +274,8 @@ function readLimited(file) {
 
 if (require.main === module) {
   try {
-    if (process.argv.length !== 3 && process.argv.length !== 4) {
-      throw new Error("Usage: node tools/verify-evidence-receipt.cjs <receipt.json> [matching-baseline.json]");
+    if (process.argv.length < 3 || process.argv.length > 5) {
+      throw new Error("Usage: node tools/verify-evidence-receipt.cjs <receipt.json> [matching-baseline.json] [prior-checkpoint.json]");
     }
     let receipt;
     try { receipt = JSON.parse(readLimited(process.argv[2])); }
@@ -260,7 +285,13 @@ if (require.main === module) {
       try { baseline = JSON.parse(readLimited(process.argv[3])); }
       catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid baseline: file is not valid JSON"); throw error; }
     }
-    const result = verifyEvidenceReceipt(receipt, loadModel(), baseline);
+    let checkpoint = null;
+    if (process.argv[4]) {
+      try { checkpoint = JSON.parse(readLimited(process.argv[4])); }
+      catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid checkpoint: file is not valid JSON"); throw error; }
+      requireValid(checkpoint !== null, "unsupported checkpoint format, encoding, or digest");
+    }
+    const result = verifyEvidenceReceipt(receipt, loadModel(), baseline, checkpoint);
     if (result.kind === "packet") {
       console.log(`MATCH: ${result.steps.length} compact corrections; sources ${result.steps.map(id => `#${id}`).join(" → ")}; ${result.records} resulting records; scope ${result.scope}`);
     } else if (result.kind === "chain") {
@@ -272,6 +303,7 @@ if (require.main === module) {
     } else {
       console.log(`${result.reference_match ? "MATCH" : "PASS"}: ${result.kind}; ${result.records} supplied records; ${result.sources.length} cited sources; scope ${result.scope}${result.reference_match ? `; reference ${result.reference_scope}` : ""}`);
     }
+    if (process.argv[4]) console.log("CHECKPOINT MATCH: the supplied reference ledger matches the separately provided digest.");
     console.log(`Local model SHA-256: ${result.model_sha256}`);
     console.log("This checks supplied records or the explicit matching baseline, not their origin or factual truth.");
   } catch (error) {
@@ -280,4 +312,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { verifyEvidenceReceipt };
+module.exports = { verifyEvidenceReceipt, verifyLedgerCheckpoint };

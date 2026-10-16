@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const {spawnSync} = require('node:child_process');
@@ -8,7 +9,7 @@ const { webcrypto } = require('node:crypto');
 const { verifyProof, loadEvaluator } = require('../tools/verify-proof.cjs');
 const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
 const { verifyMemoryChallenge } = require('../tools/verify-memory-challenge.cjs');
-const { verifyEvidenceReceipt } = require('../tools/verify-evidence-receipt.cjs');
+const { verifyEvidenceReceipt, verifyLedgerCheckpoint } = require('../tools/verify-evidence-receipt.cjs');
 const { verifyBlindTrial } = require('../tools/verify-blind-trial.cjs');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -2120,6 +2121,110 @@ test('the CLI accepts a matching reference and rejects an omitted local conflict
   const fail = spawnSync(process.execPath, [tool, excerpt, conflicted], {encoding: 'utf8'});
   assert.equal(fail.status, 1);
   assert.match(fail.stderr, /reference ledger gives a different answer or citations/);
+});
+
+test('reference export is directly usable by the verifier and preserves the next source ID', async () => {
+  const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
+  const excerpt = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  const app = boot({aru_fact_claims: JSON.stringify(reference.records), aru_fact_counter: '9'});
+  const before = JSON.stringify([...app.saved]);
+  vm.runInContext('downloadReferenceLedger()', app.context);
+  const exported = JSON.parse(await app.exports[0].text());
+  assert.deepEqual(exported, {...reference, next_source_id: 9});
+  assert.equal(verifyEvidenceReceipt(excerpt, undefined, exported).reference_match, true);
+  assert.equal(JSON.stringify([...app.saved]), before, 'export does not change browser storage');
+  assert.match(app.elements.get('reference-export-result').textContent, /full private ledger/);
+});
+
+test('browser and CLI agree on a prior checkpoint, including the next ID and optional field presence', async () => {
+  const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
+  const excerpt = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8'));
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-ledger-checkpoint.json'), 'utf8'));
+  const app = boot({aru_fact_claims: JSON.stringify(reference.records), aru_fact_counter: '2'});
+  const before = JSON.stringify([...app.saved]);
+  await vm.runInContext('downloadLedgerCheckpoint()', app.context);
+  const downloaded = JSON.parse(await app.exports[0].text());
+  assert.deepEqual(downloaded, fixture);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  assert.equal(JSON.stringify(downloaded).includes('teal'), false, 'checkpoint omits ledger values');
+  assert.equal(verifyLedgerCheckpoint(reference, downloaded), true);
+  assert.equal(verifyEvidenceReceipt(excerpt, undefined, reference, downloaded).reference_match, true);
+  for (const changed of [
+    {...reference, next_source_id: 3},
+    {...reference, records: [{...reference.records[0], value: 'amber'}]},
+    {...reference, records: [{...reference.records[0], time: reference.records[0].time + 1}]},
+    {...reference, records: [{...reference.records[0], imported: true}]},
+    {...reference, records: [{...reference.records[0], status: 'superseded'}]},
+    {...reference, records: [{id: 2, ...Object.fromEntries(Object.entries(reference.records[0]).filter(([key]) => key !== 'id'))}], next_source_id: 3}
+  ]) assert.throws(() => verifyLedgerCheckpoint(changed, downloaded), /checkpoint differs/);
+  const absentFlag = {...reference, records: [Object.fromEntries(Object.entries(reference.records[0]).filter(([key]) => key !== 'imported'))]};
+  assert.throws(() => verifyLedgerCheckpoint(absentFlag, downloaded), /checkpoint differs/);
+  assert.throws(() => verifyLedgerCheckpoint(reference, {...downloaded, sha256: '0'.repeat(64)}), /checkpoint differs/);
+  assert.throws(() => verifyLedgerCheckpoint(reference, {...downloaded, extra: 1}), /unsupported checkpoint/);
+  assert.throws(() => verifyLedgerCheckpoint({...reference, next_source_id: 1}, downloaded), /next source ID must exceed/);
+});
+
+test('a forged matching receipt and reference cannot match a previously held checkpoint', () => {
+  const tool = path.join(__dirname, '..', 'tools', 'verify-evidence-receipt.cjs');
+  const excerptPath = path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json');
+  const referencePath = path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json');
+  const checkpointPath = path.join(__dirname, '..', 'research', 'example-evidence-ledger-checkpoint.json');
+  const pass = spawnSync(process.execPath, [tool, excerptPath, referencePath, checkpointPath], {encoding: 'utf8'});
+  assert.equal(pass.status, 0, pass.stderr);
+  assert.match(pass.stdout, /MATCH: known.*reference answer-and-cited-records/);
+  assert.match(pass.stdout, /CHECKPOINT MATCH:/);
+
+  const excerpt = JSON.parse(fs.readFileSync(excerptPath, 'utf8'));
+  const reference = JSON.parse(fs.readFileSync(referencePath, 'utf8'));
+  const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
+  const forged = structuredClone(excerpt);
+  forged.records[0].value = 'amber';
+  forged.answer.value = 'amber';
+  const forgedReference = {...reference, records: forged.records};
+  assert.equal(verifyEvidenceReceipt(forged, undefined, forgedReference).reference_match, true);
+  assert.throws(() => verifyEvidenceReceipt(forged, undefined, forgedReference, checkpoint), /checkpoint differs/);
+  const fail = spawnSync(process.execPath, [tool, excerptPath, referencePath,
+    path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json')], {encoding: 'utf8'});
+  assert.equal(fail.status, 1);
+  assert.match(fail.stderr, /unsupported checkpoint/);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aru-checkpoint-'));
+  try {
+    const nullFile = path.join(temp, 'null.json');
+    fs.writeFileSync(nullFile, 'null\n');
+    const nullCheckpoint = spawnSync(process.execPath,
+      [tool, excerptPath, referencePath, nullFile], {encoding: 'utf8'});
+    assert.equal(nullCheckpoint.status, 1, 'a supplied null checkpoint cannot silently skip the check');
+    assert.match(nullCheckpoint.stderr, /unsupported checkpoint/);
+  } finally { fs.rmSync(temp, {recursive: true, force: true}); }
+});
+
+test('reference and checkpoint exports refuse stale snapshots and changed state during hashing', async () => {
+  const sharedSaved = new Map();
+  const seed = boot({}, {sharedSaved});
+  seed.fact('color', 'teal');
+  const old = boot({}, {sharedSaved});
+  const writer = boot({}, {sharedSaved});
+  writer.fact('city', 'Corvallis');
+  vm.runInContext('downloadReferenceLedger()', old.context);
+  await vm.runInContext('downloadLedgerCheckpoint()', old.context);
+  assert.equal(old.exports.length, 0);
+  assert.match(old.elements.get('reference-export-result').textContent, /saved ledger is unreadable or changed/);
+
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const crypto = {subtle: {digest: async (...args) => { await waiting; return webcrypto.subtle.digest(...args); }}};
+  const app = boot({}, {crypto});
+  app.fact('color', 'teal');
+  const checking = vm.runInContext('downloadLedgerCheckpoint()', app.context);
+  app.fact('color', 'amber');
+  release();
+  await checking;
+  assert.equal(app.exports.length, 0);
+  assert.match(app.elements.get('reference-export-result').textContent, /ledger changed while hashing/);
+  const noHash = boot({}, {crypto: {}});
+  await vm.runInContext('downloadLedgerCheckpoint()', noHash.context);
+  assert.equal(noHash.exports.length, 0);
+  assert.match(noHash.elements.get('reference-export-result').textContent, /Secure browser hashing is unavailable/);
 });
 
 test('local cross-check refuses a tab whose saved reference changed after file verification', async () => {

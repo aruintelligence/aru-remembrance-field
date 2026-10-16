@@ -557,6 +557,16 @@
     <div class="ledger-actions">
       <button type="button" onclick="downloadFactLedger()">Download evidence JSON</button>
     </div>
+    <section class="evidence-question">
+      <h2>Preserve a reference for later checks</h2>
+      <p>Download a reference ledger to compare shared receipts in the command-line verifier. It includes all records and the next source ID, so keep it private. Save a compact checkpoint separately before receiving a later reference: its digest can detect changes to that reference without revealing its records directly.</p>
+      <div class="ledger-actions">
+        <button type="button" onclick="downloadReferenceLedger()">Download reference ledger JSON</button>
+        <button type="button" onclick="downloadLedgerCheckpoint()">Download checkpoint JSON</button>
+      </div>
+      <p id="reference-export-result" role="status" aria-live="polite"></p>
+      <p>A checkpoint is not a timestamp, signature, encryption, or proof of a fact. A guessable ledger can be tested against its digest. Keep the checkpoint independently of any later files you check.</p>
+    </section>
     <label for="fact-import">Import evidence JSON from this device</label>
     <input id="fact-import" type="file" accept=".json,application/json" onchange="previewFactImport()">
     <p>Review every entry and its new local source number before applying. Incoming current claims can create conflicts; nothing is silently replaced.</p>
@@ -1854,6 +1864,17 @@ async function ledgerSHA256(records) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function ledgerCheckpointSHA256(records, nextSourceId) {
+  if (!Number.isSafeInteger(nextSourceId) || nextSourceId < 1 || nextSourceId > 1e9 + 1 ||
+      records.some(record => record.id >= nextSourceId)) throw new Error("Invalid next source ID for checkpoint.");
+  if (!globalThis.crypto?.subtle) throw new Error("Secure browser hashing is unavailable here.");
+  const ledgerDigest = await ledgerSHA256(records);
+  const bytes = new TextEncoder().encode(JSON.stringify([
+    "aru-evidence-ledger-checkpoint-1", ledgerDigest, nextSourceId]));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function validateCorrectionPacket(packet) {
   const fields = ["format", "version", "model_revision", "start_sha256", "steps"];
   if (!packet || typeof packet !== "object" || Array.isArray(packet) ||
@@ -2374,6 +2395,50 @@ function downloadFactLedger() {
     records: Field.claims.map(({id, key, value, time, status, imported}) =>
       ({id, key, value, time, status, imported: imported === true}))
   }, "aru-evidence-ledger.json");
+}
+
+function referenceLedgerForExport(output) {
+  if ((!sessionOnly && initialLedger?.invalid) || !ledgerStillCurrent()) {
+    output.textContent = "The saved ledger is unreadable or changed. Reload or restore it before preserving a reference.";
+    return null;
+  }
+  const records = Field.claims.map(record => ({...record}));
+  canonicalLedgerCommitment(records);
+  const nextSourceId = Field.claimCounter;
+  if (!Number.isSafeInteger(nextSourceId) || nextSourceId < 1 || nextSourceId > 1e9 + 1 ||
+      records.some(record => record.id >= nextSourceId)) {
+    throw new Error("The next source ID is invalid; no reference was downloaded.");
+  }
+  return {format: "aru-evidence-ledger-baseline", version: 1,
+    records, next_source_id: nextSourceId};
+}
+
+function downloadReferenceLedger() {
+  const output = document.getElementById("reference-export-result");
+  try {
+    const baseline = referenceLedgerForExport(output);
+    if (!baseline) return;
+    downloadJSON(baseline, "aru-evidence-ledger-baseline.json");
+    output.textContent = "Reference downloaded. It includes the full private ledger and next source ID; keep it separately from any later receipt.";
+  } catch (error) { output.textContent = error.message || "Could not export the reference."; }
+}
+
+async function downloadLedgerCheckpoint() {
+  const output = document.getElementById("reference-export-result");
+  try {
+    const baseline = referenceLedgerForExport(output);
+    if (!baseline) return;
+    const sha256 = await ledgerCheckpointSHA256(baseline.records, baseline.next_source_id);
+    if ((!sessionOnly && initialLedger?.invalid) || !ledgerStillCurrent() ||
+        !sameFactLedger(baseline.records, Field.claims) ||
+        baseline.next_source_id !== Field.claimCounter) {
+      output.textContent = "The ledger changed while hashing. No checkpoint was downloaded; try again after reloading.";
+      return;
+    }
+    downloadJSON({format: "aru-evidence-ledger-checkpoint", version: 1,
+      encoding: "aru-evidence-ledger-checkpoint-1", sha256}, "aru-evidence-ledger-checkpoint.json");
+    output.textContent = "Checkpoint downloaded. Preserve it independently before relying on a later reference ledger.";
+  } catch (error) { output.textContent = error.message || "Could not export the checkpoint."; }
 }
 
 function planFactImport(text, existing = Field.claims, counter = Field.claimCounter) {
