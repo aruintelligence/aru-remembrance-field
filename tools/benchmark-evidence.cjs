@@ -47,6 +47,12 @@ function loadModel() {
       context.claims = claims;
       const result = vm.runInContext("evidenceAnswerSummary(resolveEvidenceQuestion(question, claims))", context, { timeout: 1000 });
       return JSON.parse(JSON.stringify(result));
+    },
+    brief(names, claims) {
+      context.names = names;
+      context.claims = claims;
+      const result = vm.runInContext("evaluateEvidenceBrief(names, claims)", context, { timeout: 1000 });
+      return JSON.parse(JSON.stringify(result));
     }
   };
 }

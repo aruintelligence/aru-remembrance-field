@@ -459,12 +459,12 @@
     <label for="score-proof-file">Transition proof JSON (up to 16 MiB)</label>
     <input id="score-proof-file" type="file" accept=".json,application/json" onchange="verifyScoreProofFile()">
     <p id="score-proof-verification" role="status" aria-live="polite">No score proof checked yet.</p>
-    <p>Older v1 files require the repository's command-line verifier. A pass checks this scripted model's arithmetic, not who made the file or whether μ measures anything in the world.</p>
+    <p>Older v1 and v2 files require the repository's command-line verifier. A pass checks this scripted model's arithmetic, not who made the file or whether μ measures anything in the world.</p>
   </details>
 
   <details class="ledger" id="receipt-verifier">
     <summary>Verify a shared answer receipt</summary>
-    <p>Choose a question receipt or cited answer excerpt JSON. This browser recalculates the answer from the records in that file. The file is read on this device; it is not imported into your ledger or uploaded by this app.</p>
+    <p>Choose a question receipt, cited answer excerpt, or multi-fact brief receipt JSON. This browser recalculates the answer or brief from the records in that file. The file is read on this device; it is not imported into your ledger or uploaded by this app.</p>
     <label for="receipt-file">Answer receipt JSON (up to 1 MiB)</label>
     <input id="receipt-file" type="file" accept=".json,application/json" onchange="verifyEvidenceFile()">
     <p id="receipt-verification" role="status" aria-live="polite">No receipt checked yet.</p>
@@ -474,6 +474,18 @@
   <details class="ledger" id="ledger">
     <summary>Evidence memory · <span id="ledger-count">0 records</span></summary>
     <p>Record a fact under a name, then recall it with a source. Questions use two narrow templates and exact stored names; this ledger does not interpret the freeform conversation or verify assertions against the world.</p>
+    <section class="evidence-question">
+      <h2>Evidence brief · several facts at once</h2>
+      <p>Enter 2–8 exact fact names, one per line. The brief gives each a sourced value or an explicit refusal. It leaves your ledger and modeled score alone.</p>
+      <label for="brief-names">Fact names</label>
+      <textarea id="brief-names" rows="4" maxlength="1000" placeholder="favorite color&#10;city&#10;favorite food" oninput="invalidateEvidenceBrief()"></textarea>
+      <div class="ledger-actions">
+        <button type="button" onclick="runEvidenceBrief()">Build evidence brief</button>
+        <button type="button" id="brief-download" onclick="downloadEvidenceBrief()" disabled>Download brief receipt JSON</button>
+      </div>
+      <div id="brief-result" role="status" aria-live="polite"></div>
+      <p>Brief receipts include the full ledger snapshot, including unrelated facts. Review the JSON before sharing it. Verification checks the supplied records, not their completeness or truth.</p>
+    </section>
     <section class="evidence-question">
       <h2>Ask what is recorded</h2>
       <label for="fact-question">Question</label>
@@ -1224,6 +1236,7 @@ function renderInspector() {
 let pendingFactImport = null;
 let factImportRequest = 0;
 let lastEvidenceAnswer = null;
+let lastEvidenceBrief = null;
 let composerEvidence = null;
 
 function lookupFact(key, claims = Field.claims) {
@@ -1268,6 +1281,28 @@ function evidenceAnswerSummary(result) {
   return {kind: result.kind};
 }
 
+function validateBriefNames(names) {
+  if (!Array.isArray(names) || names.length < 2 || names.length > 8) {
+    throw new Error("Enter 2–8 fact names, one per line.");
+  }
+  const seen = new Set();
+  for (const name of names) {
+    if (typeof name !== "string" || !name.trim() || name !== name.trim() ||
+        name.length > 120 || /[\r\n]/.test(name)) {
+      throw new Error("Each fact name must be a single line of 1–120 characters without surrounding spaces.");
+    }
+    const normalized = normalizeFactKey(name);
+    if (seen.has(normalized)) throw new Error("Enter each fact name only once, even if the spelling or case differs.");
+    seen.add(normalized);
+  }
+  return names;
+}
+
+function evaluateEvidenceBrief(names, claims = Field.claims) {
+  validateBriefNames(names);
+  return names.map(name => ({name, answer: evidenceAnswerSummary(lookupFact(name, claims))}));
+}
+
 function askEvidence() {
   const question = document.getElementById("fact-question").value;
   const result = resolveEvidenceQuestion(question);
@@ -1286,6 +1321,52 @@ function describeEvidenceQuestion(result) {
   if (result.kind === "historical") return `Only superseded records exist for “${result.name}”. No answer given. Select a source explicitly.`;
   if (result.kind === "conflict") return `Conflicting current records for “${result.name}” (${result.records.map(claim => `#${claim.id}`).join(", ")}). No answer given. Select a source explicitly.`;
   return `Recorded answer for “${result.name}”: ${result.value}. Source ${result.sources.map(id => `#${id}`).join(", ")}. This is a user assertion, not an independently verified fact.`;
+}
+
+function invalidateEvidenceBrief(message = "Names changed. Build the brief again for a current result.") {
+  lastEvidenceBrief = null;
+  document.getElementById("brief-download").disabled = true;
+  document.getElementById("brief-result").textContent = message;
+}
+
+function runEvidenceBrief() {
+  const output = document.getElementById("brief-result");
+  invalidateEvidenceBrief();
+  const names = document.getElementById("brief-names").value.split(/\r?\n/)
+    .map(line => line.trim()).filter(Boolean);
+  try {
+    const results = evaluateEvidenceBrief(names);
+    const snapshot = JSON.stringify(Field.claims);
+    output.replaceChildren();
+    for (const item of results) {
+      const row = document.createElement("div");
+      row.className = "ledger-entry";
+      const answer = item.answer;
+      row.textContent = answer.kind === "known"
+        ? `${item.name}: ${answer.value}. Source ${answer.sources.map(id => `#${id}`).join(", ")}. User assertion.`
+        : `${item.name}: no answer (${answer.kind})${answer.sources ? `; sources ${answer.sources.map(id => `#${id}`).join(", ")}` : ""}.`;
+      output.appendChild(row);
+    }
+    lastEvidenceBrief = {input: document.getElementById("brief-names").value, names, snapshot, results};
+    document.getElementById("brief-download").disabled = false;
+  } catch (error) {
+    output.textContent = error.message;
+  }
+}
+
+function downloadEvidenceBrief() {
+  const current = lastEvidenceBrief;
+  if (!current) return;
+  if (current.input !== document.getElementById("brief-names").value ||
+      current.snapshot !== JSON.stringify(Field.claims)) {
+    invalidateEvidenceBrief("Names or ledger changed. Build the brief again before downloading.");
+    return;
+  }
+  downloadJSON({
+    format: "aru-evidence-brief-receipt", version: 1,
+    model_revision: "aru-evidence-briefs-1", names: current.names,
+    records: JSON.parse(current.snapshot), results: current.results
+  }, "aru-evidence-brief-receipt.json");
 }
 
 function clearComposerEvidence() {
@@ -1354,6 +1435,7 @@ function reviewComposerEvidence() {
 function invalidateEvidenceAnswer() {
   clearComposerEvidence();
   lastEvidenceAnswer = null;
+  invalidateEvidenceBrief("The ledger changed. Build the brief again for current sources.");
   document.getElementById("evidence-receipt-download").disabled = true;
   document.getElementById("evidence-excerpt-download").disabled = true;
   document.getElementById("fact-answer").textContent = "The ledger changed. Ask again for a current sourced answer.";
@@ -1418,6 +1500,33 @@ function sameEvidenceAnswer(actual, computed) {
 
 function verifyEvidenceBundle(receipt) {
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new Error("Expected a receipt object.");
+  if (receipt.format === "aru-evidence-brief-receipt") {
+    const fields = ["format", "version", "model_revision", "names", "records", "results"];
+    if (receipt.version !== 1 || receipt.model_revision !== "aru-evidence-briefs-1" ||
+        Object.keys(receipt).length !== fields.length ||
+        !fields.every(key => Object.prototype.hasOwnProperty.call(receipt, key))) {
+      throw new Error("Unsupported brief format, model revision, or fields.");
+    }
+    validateBriefNames(receipt.names);
+    if (!Array.isArray(receipt.records) || receipt.records.length > 100) throw new Error("Invalid brief record count.");
+    const ids = new Set();
+    const claimFields = new Set(["id", "key", "value", "time", "status", "imported"]);
+    for (const record of receipt.records) {
+      if (!validFactClaim(record) || Object.keys(record).some(key => !claimFields.has(key)) ||
+          (record.imported !== undefined && typeof record.imported !== "boolean") || ids.has(record.id)) {
+        throw new Error("Invalid or duplicate source record.");
+      }
+      ids.add(record.id);
+    }
+    const computed = evaluateEvidenceBrief(receipt.names, receipt.records);
+    if (!Array.isArray(receipt.results) || receipt.results.length !== computed.length ||
+        !receipt.results.every((item, index) => item && typeof item === "object" &&
+          !Array.isArray(item) && Object.keys(item).length === 2 &&
+          item.name === computed[index].name && sameEvidenceAnswer(item.answer, computed[index].answer))) {
+      throw new Error("The brief results or citations disagree with the supplied records.");
+    }
+    return {brief: computed, recordCount: ids.size, scope: "full supplied snapshot"};
+  }
   const excerpt = receipt.format === "aru-evidence-answer-excerpt";
   const fields = ["format", "version", "model_revision", "question", "records", "answer",
     ...(excerpt ? ["scope"] : [])];
@@ -1467,6 +1576,11 @@ async function verifyEvidenceFile() {
     if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error("File exceeds the 1 MiB limit.");
     const receipt = JSON.parse(raw);
     const result = verifyEvidenceBundle(receipt);
+    if (result.brief) {
+      const known = result.brief.filter(item => item.answer.kind === "known").length;
+      output.textContent = `PASS: ${result.brief.length} names; ${known} sourced answer${known === 1 ? "" : "s"}, ${result.brief.length - known} refusal${result.brief.length - known === 1 ? "" : "s"}; ${result.recordCount} supplied records; scope: ${result.scope}. Consistent with the supplied records, not independently verified as true or complete.`;
+      return;
+    }
     const answer = result.answer;
     const sources = answer.sources?.length ? answer.sources.map(id => `#${id}`).join(", ") : "none";
     const finding = answer.kind === "known" ? `Recorded answer: “${answer.value}”.` : `No answer (${answer.kind}).`;

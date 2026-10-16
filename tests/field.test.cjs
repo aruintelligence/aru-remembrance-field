@@ -761,6 +761,91 @@ test('exact-key evidence recall cites user sources and survives reload without c
   assert.equal(reloaded.field.claimCounter, 2);
 });
 
+test('evidence brief keeps sourced answers beside distinct refusals and exports a replayable snapshot', async () => {
+  const app = boot();
+  app.fact('favorite color', '<img src=x onerror=alert(1)>');
+  app.fact('FAVORITE  COLOR', '<img src=x onerror=alert(1)>');
+  app.fact('city', 'Portland');
+  app.fact('city', 'Denver');
+  app.fact('plan', 'old');
+  vm.runInContext('selectFact(3)', app.context);
+  vm.runInContext('deleteFact(3)', app.context);
+  vm.runInContext('selectFact(5)', app.context);
+  app.fact('plan', 'new');
+  vm.runInContext('selectFact(6)', app.context);
+  vm.runInContext('deleteFact(6)', app.context);
+  const input = app.context.document.getElementById('brief-names');
+  input.value = 'favorite color\ncity\nplan\npet';
+  const before = JSON.stringify([...app.saved]);
+  vm.runInContext('runEvidenceBrief()', app.context);
+  const rows = app.elements.get('brief-result').children;
+  assert.equal(rows.length, 4);
+  assert.match(rows[0].textContent, /favorite color: <img src=x onerror=alert\(1\)>.*#1, #2/);
+  assert.equal(rows[0].innerHTML, '');
+  assert.match(rows[1].textContent, /city:.*historical.*#4/);
+  assert.match(rows[2].textContent, /plan:.*historical.*#5/);
+  assert.match(rows[3].textContent, /pet:.*missing/);
+  assert.equal(JSON.stringify([...app.saved]), before);
+  assert.equal(app.field.coherence, 0.64);
+  assert.equal(app.field.messages.length, 0);
+  vm.runInContext('downloadEvidenceBrief()', app.context);
+  const receipt = JSON.parse(await app.exports[0].text());
+  assert.deepEqual(receipt.results.map(item => item.answer.kind), ['known', 'historical', 'historical', 'missing']);
+  assert.equal(verifyEvidenceReceipt(receipt).known, 1);
+  const visitor = boot();
+  assert.match(await chooseReceiptFile(visitor, JSON.stringify(receipt)), /PASS: 4 names; 1 sourced answer, 3 refusals/);
+  assert.equal(visitor.saved.size, 0);
+  assert.equal(visitor.field.claims.length, 0);
+});
+
+test('brief receipts detect changed citations, omitted conflicts, repeated names, and stale exports', async () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-brief.json'), 'utf8'));
+  assert.equal(verifyEvidenceReceipt(fixture).known, 1);
+  const app = boot();
+  assert.match(await chooseReceiptFile(app, JSON.stringify(fixture)), /PASS: 4 names; 1 sourced answer, 3 refusals; 6 supplied records/);
+  const altered = structuredClone(fixture);
+  altered.results[0].answer.sources.pop();
+  assert.throws(() => verifyEvidenceReceipt(altered), /brief results or citations/);
+  assert.match(await chooseReceiptFile(app, JSON.stringify(altered)), /FAIL: The brief results or citations disagree/);
+  const hiddenConflict = structuredClone(fixture);
+  hiddenConflict.records[3].status = 'superseded';
+  assert.throws(() => verifyEvidenceReceipt(hiddenConflict), /brief results or citations/);
+  const omitted = structuredClone(fixture);
+  omitted.records = omitted.records.filter(record => record.id !== 4);
+  omitted.results = require('../tools/benchmark-evidence.cjs').loadModel().brief(omitted.names, omitted.records);
+  assert.equal(verifyEvidenceReceipt(omitted).kind, 'brief',
+    'a self-consistent receipt cannot establish that no conflicting source was omitted');
+  const duplicate = structuredClone(fixture);
+  duplicate.names[1] = 'ＦＡＶＯＲＩＴＥ　ＣＯＬＯＲ';
+  assert.throws(() => verifyEvidenceReceipt(duplicate), /duplicate brief name/);
+  assert.match(await chooseReceiptFile(app, JSON.stringify(duplicate)), /FAIL: Enter each fact name only once/);
+  const reordered = structuredClone(fixture);
+  reordered.results.reverse();
+  assert.throws(() => verifyEvidenceReceipt(reordered), /brief results or citations/);
+  const extra = structuredClone(fixture);
+  extra.results[0].explanation = 'invented';
+  assert.throws(() => verifyEvidenceReceipt(extra), /brief results or citations/);
+
+  const input = app.context.document.getElementById('brief-names');
+  input.value = 'one\nONE';
+  vm.runInContext('runEvidenceBrief()', app.context);
+  assert.match(app.elements.get('brief-result').textContent, /only once/);
+  assert.equal(app.elements.get('brief-download').disabled, true);
+  input.value = 'one\ntwo';
+  vm.runInContext('runEvidenceBrief()', app.context);
+  assert.equal(app.elements.get('brief-download').disabled, false);
+  input.value = 'one\nthree';
+  vm.runInContext('downloadEvidenceBrief()', app.context);
+  assert.equal(app.exports.length, 0);
+  assert.equal(app.elements.get('brief-download').disabled, true);
+  input.value = 'one\ntwo';
+  vm.runInContext('runEvidenceBrief()', app.context);
+  app.fact('one', 'new');
+  assert.equal(app.elements.get('brief-download').disabled, true);
+  vm.runInContext('downloadEvidenceBrief()', app.context);
+  assert.equal(app.exports.length, 0);
+});
+
 test('constrained questions return recorded values with sources without scoring the question', () => {
   const app = boot();
   app.fact(' Favorite   Color ', 'teal');

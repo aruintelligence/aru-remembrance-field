@@ -1,0 +1,12 @@
+{
+  "format": "aru-brief-differential-report",
+  "model_revision": "aru-evidence-briefs-1",
+  "seed": 20261015,
+  "fixed_cases": 8,
+  "generated_cases": 2000,
+  "checked": 2008,
+  "mutation_probe": "detected",
+  "result": "pass",
+  "javascript_model_sha256": "7c70707e9018ba147392d692de5f475bd60ddfc60cc688799e1b7ac44441b549",
+  "python_reference_sha256": "73e3fe6af7d3ae2340115486e6fd9e930d6268d9375b2945424f098d255836fe"
+}
