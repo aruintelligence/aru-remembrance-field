@@ -13,6 +13,8 @@ python3 tools/differential-brief.py --seed 20261015 --runs 2000
 
 The receipt declares `format: "aru-evidence-brief-receipt"`, `version: 1`, and `model_revision: "aru-evidence-briefs-1"`. It contains the ordered names, all supplied ledger records (up to 100), and the ordered results. The browser and CLI reject changed result values, source IDs, order, duplicate names or records, and invalid shapes. The browser reads the JSON locally without importing it into the visitor's ledger. Editing names or ledger data invalidates the current download until a new brief is built. Older single-question receipts and cited answer excerpts remain verifiable.
 
+After replaying a brief, **Compare with this browser's ledger** can check that its entire ordered snapshot equals a separately held local copy. The CLI accepts an optional `aru-evidence-ledger-baseline` file for the same exact comparison. See the [receipt protocol](evidence-receipt-protocol.md) for its scope and privacy boundary.
+
 The separately written Python oracle compares exact-name results with the extracted JavaScript browser model across 8 fixed and 2,000 seeded generated cases. The generator varies normalized spelling, duplicate active assertions, conflicting values, superseded sources, missing names, irrelevant records, and record order. A deliberately changed result verifies that the comparator detects disagreement. The [committed differential report](example-brief-differential-report.json) pins the seed and local source hashes; CI regenerates it. Agreement on these synthetic cases checks software behavior, not broad language understanding.
 
 ## Proof boundary

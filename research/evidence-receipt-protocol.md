@@ -19,6 +19,19 @@ The excerpt limits disclosure of unrelated facts. Neither format proves that oth
 
 For no-private-data examples, run `node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json` and `node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json`.
 
+## Compare with a separately held ledger
+
+After a receipt passes its own replay, select **Compare with this browser's ledger**. The browser does not import the file or alter its saved state. A full question receipt or brief must match every record in the browser's current ordered ledger, including unrelated records. A cited excerpt instead recomputes the answer on the browser's whole ledger, requires the same answer and source list, and checks every cited record's exact ID, name, value, time, status, and optional imported field. Unrelated records remain local. If an omitted conflicting source is present locally, the comparison says `DIFFER` even though the excerpt passed its own replay. A changed saved ledger must be reloaded before comparison; Session-only comparisons use the current in-memory ledger.
+
+The CLI accepts a second `aru-evidence-ledger-baseline` JSON file for question receipts, cited excerpts, and briefs. It validates the baseline records and next source ID and prints `MATCH` only if the same comparison succeeds. For example:
+
+```bash
+node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json research/example-evidence-reference-baseline.json
+node tools/verify-evidence-receipt.cjs research/example-evidence-receipt.json research/example-evidence-reference-baseline.json
+```
+
+The [synthetic reference ledger](example-evidence-reference-baseline.json) contains the same one source as those receipts. The [compact packet baseline](example-evidence-ledger-baseline.json) adds a conflicting current source and makes the excerpt comparison fail. The receipt formats do not carry `next_source_id`; the baseline's counter is validated but cannot be compared with a counter in the receipt. The reference must be held independently of the receipt to add evidence. Keep private baseline files on your own device; the browser's comparison does not upload them or disclose unrelated local records. A matching copy does not prove its origin, completeness, truth, or that the sender used that copy. A sender could fabricate a receipt and a matching baseline together.
+
 Both files contain the exact question, answer kind, any value and source IDs, and their supplied records. The excerpt also declares `scope: "cited-assertions-only"`. The verifier validates records, runs the repository's actual `resolveEvidenceQuestion` and `evidenceAnswerSummary` functions against them, and rejects a mismatch. An excerpt must contain **all and only** its cited active assertions within the file. The verifier rejects duplicate or malformed records and files over 1 MiB, and reports a SHA-256 hash of the local extracted question code. The hash identifies code bytes, not the origin of either receipt.
 
 The same browser panel and CLI also replay `aru-evidence-brief-receipt` files with their ordered names, results, and complete supplied records. The [synthetic brief](example-evidence-brief.json) contains one sourced answer and three distinct refusals. It does not replace the privacy-limited cited answer excerpt for a single known fact.
@@ -35,4 +48,4 @@ Changing the question clears the displayed answer and disables both exports. Rec
 
 **Privacy:** An excerpt omits unrelated ledger facts but includes the question and cited values, which can still be sensitive. A full receipt may include sensitive facts unrelated to the question. Inspect either JSON before sharing it. Neither format is an evidence ledger import file.
 
-**What a pass means:** The answer matches the records **in the supplied file** under the checked-out code. For example, an excerpt citing `teal` can pass even if an omitted current assertion says `amber`; the full ledger would then refuse to choose one. This is an explicit counterexample in `tests/field.test.cjs`. A pass does not prove completeness, origin, authorship, factual truth, or general question-answering ability. A person can edit the supplied records and answer and create another internally consistent file.
+**What a pass means:** `PASS` checks records **in the supplied file** under the checked-out code. An excerpt citing `teal` can pass if an omitted current assertion says `amber`; a separately held reference with `amber` produces `DIFFER` in the browser or a failed `MATCH` in the CLI. This is an explicit counterexample in `tests/field.test.cjs`. A pass or match does not prove completeness of the reference, origin, authorship, factual truth, or general question-answering ability. A person can edit the supplied records and answer and create another internally consistent file.
