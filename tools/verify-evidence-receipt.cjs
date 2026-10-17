@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const { loadModel } = require("./benchmark-evidence.cjs");
+const {parseUnambiguousJSON} = require("./unambiguous-json.cjs");
 
 const MAX_BYTES = 1024 * 1024;
 const MODEL_REVISION = "aru-evidence-questions-1";
@@ -273,7 +274,7 @@ function readLimited(file) {
       length += n;
     }
     requireValid(length <= MAX_BYTES, "file exceeds 1 MiB");
-    return buffer.subarray(0, length).toString("utf8");
+    return new TextDecoder("utf-8", {fatal: true}).decode(buffer.subarray(0, length));
   } finally { fs.closeSync(fd); }
 }
 
@@ -282,18 +283,24 @@ if (require.main === module) {
     if (process.argv.length < 3 || process.argv.length > 5) {
       throw new Error("Usage: node tools/verify-evidence-receipt.cjs <receipt.json> [matching-baseline.json] [prior-checkpoint.json]");
     }
-    let receipt;
-    try { receipt = JSON.parse(readLimited(process.argv[2])); }
-    catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid receipt: file is not valid JSON"); throw error; }
+    const readJSON = (file, label) => {
+      try { return parseUnambiguousJSON(readLimited(file)); }
+      catch (error) {
+        if (error.message === "Duplicate JSON object name") {
+          throw new Error(`Invalid ${label}: duplicate JSON object name`);
+        }
+        if (error instanceof SyntaxError || error instanceof TypeError) {
+          throw new Error(`Invalid ${label}: file is not valid unambiguous UTF-8 JSON`);
+        }
+        throw error;
+      }
+    };
+    const receipt = readJSON(process.argv[2], "receipt");
     let baseline = null;
-    if (process.argv[3]) {
-      try { baseline = JSON.parse(readLimited(process.argv[3])); }
-      catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid baseline: file is not valid JSON"); throw error; }
-    }
+    if (process.argv[3]) baseline = readJSON(process.argv[3], "baseline");
     let checkpoint = null;
     if (process.argv[4]) {
-      try { checkpoint = JSON.parse(readLimited(process.argv[4])); }
-      catch (error) { if (error instanceof SyntaxError) throw new Error("Invalid checkpoint: file is not valid JSON"); throw error; }
+      checkpoint = readJSON(process.argv[4], "checkpoint");
       requireValid(checkpoint !== null, "unsupported checkpoint format, encoding, or digest");
     }
     const result = verifyEvidenceReceipt(receipt, loadModel(), baseline, checkpoint);

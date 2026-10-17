@@ -525,7 +525,7 @@
       <p id="reference-receipt-comparison" role="status" aria-live="polite">Verify a question, excerpt, or brief first.</p>
       <p>A match depends on the reference you supplied. A checkpoint adds evidence only if you kept it independently before receiving the later files; it does not prove when it was made, who recorded the facts, or that they are true.</p>
       <h2>Audit a set of shared answers</h2>
-      <p>Use the reference and optional checkpoint selected above. Check up to 20 question, excerpt, or brief receipts together. Every file gets its own replay and reference comparison; identical file bytes are flagged as a repeat.</p>
+      <p>Use the reference and optional checkpoint selected above. Check up to 20 question, excerpt, or brief receipts together. Every file gets its own replay and reference comparison; identical file bytes are flagged as a repeat. A JSON file with repeated object names is ambiguous and fails instead of silently choosing one value.</p>
       <label for="audit-receipts">Answer receipt JSON files (1–20, up to 1 MiB each and 4 MiB combined)</label>
       <input id="audit-receipts" type="file" accept=".json,application/json" multiple onchange="invalidateEvidenceBatchAudit()">
       <div class="ledger-actions">
@@ -780,7 +780,7 @@ function storedLedger(raw) {
   }
   if (raw === null) return null;
   try {
-    const bundle = JSON.parse(raw);
+    const bundle = parseUnambiguousEvidenceJSON(raw);
     if (!bundle || Array.isArray(bundle) || Object.keys(bundle).length !== 3 ||
         bundle.version !== 1 || !Array.isArray(bundle.claims) || bundle.claims.length > 100 ||
         !Number.isSafeInteger(bundle.next_source_id) || bundle.next_source_id < 1 ||
@@ -1376,7 +1376,7 @@ async function verifyScoreProofFile() {
     const raw = await file.text();
     if (request !== scoreProofVerificationRequest) return;
     if (new TextEncoder().encode(raw).length > 16 * 1024 * 1024) throw new Error("Proof exceeds the 16 MiB limit.");
-    const proof = JSON.parse(raw);
+    const proof = parseUnambiguousEvidenceJSON(raw);
     const result = verifyScoreProof(proof);
     const inputPreview = proof.input.length > 160 ? `${proof.input.slice(0, 160)}…` : proof.input;
     output.textContent = `PASS: input “${inputPreview}”. With history μ ${result.withHistory.toFixed(5)}; no-history control μ ${result.withoutHistory.toFixed(5)}; immediate effect ${result.effect >= 0 ? "+" : ""}${result.effect.toFixed(5)}. Recomputed under the current scripted rules, not authenticated or scientifically validated.`;
@@ -2035,7 +2035,7 @@ async function verifyEvidenceFile() {
     const raw = await file.text();
     if (request !== receiptVerificationRequest) return;
     if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error("File exceeds the 1 MiB limit.");
-    const receipt = JSON.parse(raw);
+    const receipt = parseUnambiguousEvidenceJSON(raw);
     if (receipt?.format === "aru-evidence-correction-packet") {
       const baseline = JSON.stringify([Field.claims, Field.claimCounter]);
       const result = await replayCorrectionPacket(receipt, Field.claims, Field.claimCounter);
@@ -2078,7 +2078,10 @@ async function verifyEvidenceFile() {
     output.textContent = `PASS: ${answer.kind}; ${result.recordCount} supplied records; source IDs: ${sources}; scope: ${result.scope}. Question: “${receipt.question}”. ${finding} Consistent with the supplied records, not independently verified as true.`;
   } catch (error) {
     if (request === receiptVerificationRequest) {
-      output.textContent = `FAIL: ${error instanceof SyntaxError ? "File is not valid JSON." : error.message || "Could not check the receipt."}`;
+      output.textContent = `FAIL: ${error.message === "Duplicate JSON object name" ?
+        "File has duplicate JSON object names; no verdict can be trusted." :
+        error instanceof SyntaxError ? "File is not valid JSON." :
+          error.message || "Could not check the receipt."}`;
     }
   }
 }
@@ -2129,8 +2132,7 @@ async function readEvidenceComparisonText(file, label) {
 
 async function readEvidenceComparisonFile(file, label) {
   const raw = await readEvidenceComparisonText(file, label);
-  try { return JSON.parse(raw); }
-  catch (_) { throw new Error(`${label} is not valid JSON.`); }
+  return parseEvidenceAuditJSON(raw, label);
 }
 
 function validateEvidenceReference(baseline) {
@@ -2398,8 +2400,59 @@ function firstIdenticalReceipt(seen, raw, bytes, index) {
 }
 
 function parseEvidenceAuditJSON(raw, label) {
-  try { return JSON.parse(raw); }
-  catch (_) { throw new Error(`${label} is not valid JSON.`); }
+  try { return parseUnambiguousEvidenceJSON(raw); }
+  catch (error) {
+    if (error.message === "Duplicate JSON object name") {
+      throw new Error(`${label} has a duplicate JSON object name.`);
+    }
+    throw new Error(`${label} is not valid JSON.`);
+  }
+}
+
+// JSON.parse discards earlier members with the same name. Inspect the original
+// text after syntax validation, decoding escaped names before comparing them.
+function parseUnambiguousEvidenceJSON(text) {
+  const parsed = JSON.parse(text);
+  let offset = 0;
+  let depth = 0;
+  const white = () => { while (/\s/.test(text[offset] || "") && offset < text.length) offset++; };
+  const string = () => {
+    const start = offset++;
+    while (offset < text.length) {
+      const char = text[offset++];
+      if (char === "\\") offset++;
+      else if (char === '"') break;
+    }
+    return JSON.parse(text.slice(start, offset));
+  };
+  const value = () => {
+    white();
+    if (++depth > 128) throw new SyntaxError("JSON nesting exceeds 128 levels");
+    if (text[offset] === '"') string();
+    else if (text[offset] === "{" || text[offset] === "[") {
+      const object = text[offset++] === "{";
+      const seen = object ? new Set() : null;
+      white();
+      const closing = object ? "}" : "]";
+      while (text[offset] !== closing) {
+        if (object) {
+          const name = string();
+          if (seen.has(name)) throw new SyntaxError("Duplicate JSON object name");
+          seen.add(name);
+          white(); offset++; // ':'; syntax was validated by JSON.parse.
+        }
+        value();
+        white();
+        if (text[offset] === ",") { offset++; white(); }
+      }
+      offset++;
+    } else {
+      while (offset < text.length && !/[\s,\]}]/.test(text[offset])) offset++;
+    }
+    depth--;
+  };
+  value();
+  return parsed;
 }
 
 async function evidenceAuditSHA256(bytes) {
@@ -2818,7 +2871,7 @@ async function traceReferenceTransition() {
         if (!stillCurrent()) return;
         if (stage === "read") capturable = false;
         const descriptions = {read: "Unreadable, invalid UTF-8, or oversized receipt.",
-          parse: "Receipt is not valid JSON.", format: "Unsupported answer receipt format.",
+          parse: "Receipt is not valid JSON or has repeated object names.", format: "Unsupported answer receipt format.",
           replay: "Receipt failed its own rule replay."};
         rows.push({index: index + 1, before: "FAIL", after: "FAIL", duplicateOf,
           detail: `${descriptions[stage]} No reference verdict can be inferred.`});
@@ -3276,7 +3329,7 @@ async function buildCorrectionChain() {
       if (request !== receiptVerificationRequest || buildRequest !== chainBuildRequest) return;
       bytes += new TextEncoder().encode(raw).length;
       if (bytes > 1024 * 1024) throw new Error("The combined correction files exceed the 1 MiB limit.");
-      receipts.push(JSON.parse(raw));
+      receipts.push(parseUnambiguousEvidenceJSON(raw));
     }
     receipts.sort((a, b) => a.new_source_id - b.new_source_id);
     const chain = {format: "aru-evidence-correction-chain", version: 1,
@@ -3660,7 +3713,8 @@ async function downloadLedgerCheckpoint() {
 function planFactImport(text, existing = Field.claims, counter = Field.claimCounter) {
   if (typeof text !== "string" || text.length > 262144) throw new Error("Evidence file exceeds the 256 KiB limit.");
   let bundle;
-  try { bundle = JSON.parse(text); } catch (_) { throw new Error("Evidence file is not valid JSON."); }
+  try { bundle = parseUnambiguousEvidenceJSON(text); }
+  catch (_) { throw new Error("Evidence file is not valid JSON or has duplicate object names."); }
   if (!bundle || bundle.format !== "aru-evidence-ledger" || bundle.version !== 1 || !Array.isArray(bundle.records)) {
     throw new Error("Choose an evidence ledger export (format aru-evidence-ledger, version 1). The full state export is not importable here.");
   }
@@ -3992,7 +4046,7 @@ async function loadBlindTrialPlan() {
     const raw = await file.text();
     if (request !== blindPlanRead) return;
     if (new TextEncoder().encode(raw).length > 1024 * 1024) throw new Error("Plan exceeds 1 MiB.");
-    const plan = JSON.parse(raw);
+    const plan = parseUnambiguousEvidenceJSON(raw);
     const expected = validateBlindTrialPlan(plan);
     selector.replaceChildren();
     const prompt = document.createElement("option");
@@ -4375,7 +4429,8 @@ function validStateTime(value) {
 function planStateImport(text) {
   if (typeof text !== "string" || text.length > STATE_IMPORT_LIMIT) throw new Error("State file exceeds the 4 MiB limit.");
   let bundle;
-  try { bundle = JSON.parse(text); } catch (_) { throw new Error("State file is not valid JSON."); }
+  try { bundle = parseUnambiguousEvidenceJSON(text); }
+  catch (_) { throw new Error("State file is not valid JSON or has duplicate object names."); }
   if (!bundle || Array.isArray(bundle) || bundle.schema_version !== 1 ||
       bundle.scope !== "browser-local symbolic simulation" ||
       !Array.isArray(bundle.memory) || !Array.isArray(bundle.messages) ||

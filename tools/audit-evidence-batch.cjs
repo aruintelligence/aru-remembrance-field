@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {isDeepStrictEqual} = require("node:util");
 const {loadModel} = require("./benchmark-evidence.cjs");
+const {parseUnambiguousJSON} = require("./unambiguous-json.cjs");
 const {verifyEvidenceReceipt, verifyLedgerBaseline, verifyLedgerCheckpoint} =
   require("./verify-evidence-receipt.cjs");
 
@@ -42,8 +43,13 @@ function readLimited(file, label) {
 }
 
 function parseJSON(bytes, label) {
-  try { return JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(bytes)); }
-  catch (_) { throw new Error(`${label} is not valid UTF-8 JSON`); }
+  try { return parseUnambiguousJSON(new TextDecoder("utf-8", {fatal: true}).decode(bytes)); }
+  catch (error) {
+    if (error.message === "Duplicate JSON object name") {
+      throw new Error(`${label} has a duplicate JSON object name`);
+    }
+    throw new Error(`${label} is not valid unambiguous UTF-8 JSON`);
+  }
 }
 
 function auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile} = {}) {

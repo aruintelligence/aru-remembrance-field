@@ -4,12 +4,14 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const {createHash} = require("node:crypto");
+const {parseUnambiguousJSON} = require("./unambiguous-json.cjs");
 
 const MAX_CAPTURE_BYTES = 1024 * 1024;
 const MAX_CODE_BYTES = 2 * 1024 * 1024;
 const CODE_FILES = [
   "index.html",
   "tools/audit-evidence-batch.cjs",
+  "tools/unambiguous-json.cjs",
   "tools/benchmark-evidence.cjs",
   "tools/verify-evidence-receipt.cjs",
   "tools/independent-evidence-batch.py",
@@ -105,7 +107,7 @@ function browserCaptureHash(capture) {
 function captureScriptHash(file) {
   const bytes = regularBytes(file, MAX_CAPTURE_BYTES, "Capture");
   let capture;
-  try { capture = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(bytes)); }
+  try { capture = parseUnambiguousJSON(new TextDecoder("utf-8", {fatal: true}).decode(bytes)); }
   catch (_) { throw new Error("Capture is not valid UTF-8 JSON"); }
   if (capture?.format === "aru-evidence-sealed-reference-transition-capture") {
     return sealedCaptureHash(capture);
@@ -202,7 +204,7 @@ function checkKit(folder, captureFile) {
   }
   const manifestBytes = regularBytes(path.join(root, "manifest.json"), MAX_CAPTURE_BYTES, "Manifest");
   let manifest;
-  try { manifest = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(manifestBytes)); }
+  try { manifest = parseUnambiguousJSON(new TextDecoder("utf-8", {fatal: true}).decode(manifestBytes)); }
   catch (_) { throw new Error("Manifest is not valid UTF-8 JSON"); }
   if (!exactly(manifest, ["format", "version", "browser_script_sha256", "files"]) ||
       manifest.format !== "aru-offline-verifier-kit" || manifest.version !== 1 ||

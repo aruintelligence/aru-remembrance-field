@@ -216,9 +216,16 @@ def matches_reference(receipt, reference):
 def parse(data):
     def reject_constant(value):
         raise ValueError("invalid JSON constant")
+    def unique_object(pairs):
+        result = {}
+        for name, value in pairs:
+            require(name not in result, "duplicate JSON object name")
+            result[name] = value
+        return result
     # TextDecoder in the browser and Node discards an initial UTF-8 BOM.
     # Preserve raw bytes for hashes and duplicate checks, but match that parse rule.
-    return json.loads(data.decode("utf-8-sig", errors="strict"), parse_constant=reject_constant)
+    return json.loads(data.decode("utf-8-sig", errors="strict"),
+                      parse_constant=reject_constant, object_pairs_hook=unique_object)
 
 
 def read_limited(file, label):
