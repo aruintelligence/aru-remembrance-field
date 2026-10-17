@@ -128,9 +128,9 @@ test('CLI reports differences with nonzero status but can reproduce that exact r
 test('CLI replays a minimal browser capture and rejects added fields or altered verdicts', () => temporary(save => {
   const report = auditEvidenceBatch(baseline, [excerpt, full], {checkpointFile: checkpoint});
   const capture = browserCaptureFromReport(report);
-  assert.deepEqual(Object.keys(capture), ['format', 'version', 'browser_script_sha256', 'reference_sha256',
+  assert.deepEqual(Object.keys(capture), ['format', 'version', 'browser_script_sha256', 'normalization_sha256', 'reference_sha256',
     'checkpoint_sha256', 'receipts', 'totals']);
-  assert.equal(capture.version, 2);
+  assert.equal(capture.version, 3);
   const script = fs.readFileSync(path.join(root, 'index.html'), 'utf8')
     .match(/<script>([\s\S]*?)<\/script>/)[1];
   assert.equal(capture.browser_script_sha256, digest(Buffer.from(script, 'utf8')));
@@ -140,7 +140,7 @@ test('CLI replays a minimal browser capture and rejects added fields or altered 
   const pass = spawnSync(process.execPath, args, {encoding: 'utf8'});
   assert.equal(pass.status, 0, pass.stderr);
   assert.match(pass.stdout, /CAPTURE MATCH/);
-  assert.match(pass.stdout, /Browser verifier script fingerprint agrees/);
+  assert.match(pass.stdout, /selected-name normalization profile agree/);
   const changedScript = save('changed-script.json', JSON.stringify({...capture,
     browser_script_sha256: '0'.repeat(64)}));
   const mismatchedScript = spawnSync(process.execPath,

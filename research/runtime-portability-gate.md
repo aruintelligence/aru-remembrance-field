@@ -2,9 +2,11 @@
 
 ## Why this matters
 
+This page preserves the older v2 capture counterexample. The [new selected-name profile protocol](selected-normalization-profile.md) addresses that specific missing binding in new captures.
+
 The browser script hash identifies source code; it does not identify the browser's Unicode tables. This matters for `normalizeFactKey`, which uses the JavaScript runtime's NFKC and lowercase behavior. The independent Python checker uses its runtime's Unicode data. On the tested environment, Node 24 reports Unicode 17.0 and Python 3.12 reports Unicode 15.0.0. For U+A7F1, Node normalizes the character to `s`, while Python retains the original character.
 
-The included [synthetic reference](example-runtime-reference.json), [receipt](example-runtime-receipt.json), and [saved capture](example-runtime-capture.json) each contain a key and question using U+A7F1. Both underlying auditors return one `MATCH` under the tested runtimes: each is self-consistent with that same supplied key. Before the gate, the combined reviewer also returned `replay: "MATCH"` and `all_receipts_match`, even though the two programs interpreted the selected name differently. A different record named `s` could change the browser's answer if it were supplied. The files do not establish that such a record exists or was omitted; this is a semantic portability counterexample, not a factual claim.
+The included [synthetic reference](example-runtime-reference.json), [receipt](example-runtime-receipt.json), and [older v2 saved capture](example-runtime-capture-v2.json) each contain a key and question using U+A7F1. Both underlying auditors return one `MATCH` under the tested runtimes: each is self-consistent with that same supplied key. Before the gate, the combined reviewer also returned `replay: "MATCH"` and `all_receipts_match`, even though the two programs interpreted the selected name differently. A different record named `s` could change the browser's answer if it were supplied. The files do not establish that such a record exists or was omitted; this is a semantic portability counterexample, not a factual claim.
 
 ## What changed
 
@@ -21,16 +23,16 @@ From a current checkout with Node.js and Python 3.12:
 ```bash
 node -p 'process.versions.unicode'
 python3 -c 'import unicodedata; print(unicodedata.unidata_version)'
-node tools/audit-evidence-batch.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture.json --json
-python3 tools/independent-evidence-batch.py research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture.json --json
-node tools/review-evidence.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture.json --json
+node tools/audit-evidence-batch.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture-v2.json --json
+python3 tools/independent-evidence-batch.py research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture-v2.json --json
+node tools/review-evidence.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture-v2.json --json
 ```
 
 Observed here: Node `17.0`, Python `15.0.0`, each individual audit exited 0 with one `MATCH`; the new review exited 1 with `UNCONFIRMED / normalization_disagreement`. With `main` at commit `7073960005e65b040c690e61c89b593c750c9ccb`, the old reviewer exited 0 and reported `MATCH / all_receipts_match` on exactly the same three files. With full Git history, you can compare the old wrapper without changing the working checker:
 
 ```bash
 git show 7073960005e65b040c690e61c89b593c750c9ccb:tools/review-evidence.cjs > tools/review-evidence-before.cjs
-node tools/review-evidence-before.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture.json --json
+node tools/review-evidence-before.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture-v2.json --json
 ```
 
 Remove that temporary `tools/review-evidence-before.cjs` after the comparison. The underlying auditors and the original files are otherwise unchanged. On a Node runtime whose normalization of U+A7F1 matches Python's, the new reviewer can return `MATCH`, with `browser_runtime_normalization: "not_recorded_in_capture"` still explicit.
@@ -53,4 +55,4 @@ The seeded challenge runs 21 fixed controls and generated cases against the live
 
 **Prior art to investigate:** Unicode normalization versioning and stability, confusable-identifier defenses, reproducible execution environments, differential testing, and evidence provenance tools. No novelty or patentability claim is made.
 
-**Unproven:** the Unicode runtime and normalization semantics of the browser that originally created a capture; equivalence for all possible strings or complete receipts; independent custody and factual truth. The next high-value protocol change is to pin a small, versioned normalization profile in a future capture and enforce it in the browser and both offline checkers, while keeping legacy captures explicitly unbound. That needs compatibility research and migration tests before changing the capture format.
+**Unproven for this older v2 capture:** the originating browser's selected-name semantics, full Unicode equivalence, independent custody, and factual truth. The [new capture protocol](selected-normalization-profile.md) now pins a selected-name profile and keeps this older example available as a contrast.

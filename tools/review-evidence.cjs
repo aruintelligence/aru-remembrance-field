@@ -77,10 +77,12 @@ function captureKind(bytes, option) {
     "--check-sealed": "aru-evidence-sealed-reference-transition-capture"
   };
   if (capture?.format !== formats[option] ||
-      (option === "--check-capture" ? ![1, 2].includes(capture.version) : capture.version !== 1)) {
+      (option === "--check-capture" ? ![1, 2, 3].includes(capture.version) :
+        ![1, 2].includes(capture.version))) {
     throw new Error("Capture format or version does not match the review option");
   }
-  return {capture, legacy: option === "--check-capture" && capture.version === 1};
+  return {capture, legacy: option === "--check-capture" && capture.version === 1,
+    profileBound: option === "--check-capture" ? capture.version === 3 : capture.version === 2};
 }
 
 function auditProjection(report, format) {
@@ -177,7 +179,7 @@ function normalizationCompatible(selection, snapshot) {
 function review(argv, runners = null) {
   const selection = parseArgs(argv);
   const before = captureBytes(selection.captureFile);
-  const {legacy} = captureKind(before, selection.kind);
+  const {legacy, profileBound} = captureKind(before, selection.kind);
   const base = {format: "aru-evidence-review-result", version: 1,
     capture_sha256: sha256(before),
     capture_kind: selection.kind === "--check-capture" ? "batch" :
@@ -223,7 +225,7 @@ function review(argv, runners = null) {
     return {...base, replay: "MATCH", auditors: {node: "matched", python: "matched"},
       script_binding: legacy ? "unavailable_legacy_v1" : "matched",
       selected_name_normalization: "node_python_match",
-      browser_runtime_normalization: "not_recorded_in_capture",
+      browser_runtime_normalization: profileBound ? "selected_profile_matched" : "not_recorded_in_capture",
       receipt_assessment: paired ? {a: verdict(totals.a), b: verdict(totals.b)} : verdict(totals),
       totals, ...(paired ? {changed_receipt_positions: left.changed_receipts} : {}),
       checkpoint_selection: paired ? {a: totals.a &&
@@ -249,7 +251,9 @@ function run(argv = process.argv.slice(2)) {
     if (result.script_binding === "unavailable_legacy_v1") {
       console.log("Legacy v1 capture has no browser script fingerprint.");
     }
-    console.log("Selected names normalize identically under this Node and Python installation; the capture does not pin the original browser's Unicode runtime.");
+    console.log(result.browser_runtime_normalization === "selected_profile_matched" ?
+      "Selected names match the capture's browser normalization profile under Node and Python." :
+      "Selected names normalize identically under Node and Python; this older capture did not record the browser runtime profile.");
     console.log("Capture replay and receipt outcomes are separate. Authorship, independent custody, completeness, and factual truth remain unverified.");
   } else console.error(`REVIEW UNCONFIRMED: ${result.reason}. No receipt conclusion issued.`);
   if (result.replay !== "MATCH") process.exitCode = 1;

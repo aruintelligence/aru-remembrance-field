@@ -116,6 +116,21 @@ function boot(values = {}, options = {}) {
   };
 }
 
+test('browser capture profile agrees with Node for the selected originals', async () => {
+  const app = boot();
+  const root = path.join(__dirname, '..', 'research');
+  const files = ['example-evidence-reference-baseline.json',
+    'example-evidence-excerpt.json', 'example-evidence-receipt.json'];
+  app.context.selectedValuesForTest = files.map(name =>
+    JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')));
+  const browser = await vm.runInContext('evidenceNormalizationProfile(selectedValuesForTest)',
+    app.context);
+  const {auditEvidenceBatch} = require('../tools/audit-evidence-batch.cjs');
+  const node = auditEvidenceBatch(path.join(root, files[0]),
+    files.slice(1).map(name => path.join(root, name)));
+  assert.equal(browser, node.normalization_sha256);
+});
+
 test('first input is evaluated against prior state, with an exact receipt', () => {
   const app = boot();
   app.input('What?');
@@ -2252,7 +2267,8 @@ test('browser downloads and replays a strict paired capture without confusing co
   vm.runInContext('downloadReferenceTransitionCapture()', app.context);
   const capture = JSON.parse(await app.exports[0].text());
   assert.deepEqual(Object.keys(capture), ['format', 'version', 'capture_a', 'capture_b', 'changed_receipts']);
-  assert.equal(capture.version, 1);
+  assert.equal(capture.version, 2);
+  assert.match(capture.capture_a.normalization_sha256, /^[0-9a-f]{64}$/);
   assert.deepEqual(capture.changed_receipts, [1, 2]);
   assert.deepEqual(capture.capture_a.totals, {match: 2, differ: 0, fail: 1, identical_copies: 0});
   assert.deepEqual(capture.capture_b.totals, {match: 0, differ: 2, fail: 1, identical_copies: 0});
@@ -2286,13 +2302,19 @@ test('browser downloads and replays a strict paired capture without confusing co
     return output.textContent;
   };
   assert.match(await compare(capture), /TRANSITION CAPTURE MATCH: 2 verdict changes.*A: 2 MATCH, 0 DIFFER, 1 FAIL.*B: 0 MATCH, 2 DIFFER, 1 FAIL.*including any DIFFER or FAIL/);
+  const olderSide = side => { const {normalization_sha256, ...old} = side; return {...old, version: 2}; };
+  assert.match(await compare({...capture, version: 1,
+    capture_a: olderSide(capture.capture_a), capture_b: olderSide(capture.capture_b)}),
+  /TRANSITION CAPTURE MATCH:.*Older capture: browser runtime was not recorded/);
   assert.match(await compare({...capture, changed_receipts: []}), /DIFFER: The saved transition capture does not reproduce/);
   assert.match(await compare({...capture, capture_b: {...capture.capture_b,
     receipts: [{...capture.capture_b.receipts[0], verdict: 'MATCH'}, ...capture.capture_b.receipts.slice(1)]}}), /DIFFER:/);
+  assert.match(await compare({...capture, capture_a: {...capture.capture_a,
+    normalization_sha256: '0'.repeat(64)}}), /DIFFER:/);
   assert.match(await compare({...capture, extra: 'never disclose'}), /DIFFER:/);
   assert.match(await compare({...capture, capture_a: {...capture.capture_a, version: 1}}), /DIFFER:/);
   assert.match(await compare('{'), /FAIL: Saved transition capture is not valid JSON/);
-  assert.match(await compare({...capture, version: 2}), /FAIL: Unsupported transition capture format or version/);
+  assert.match(await compare({...capture, version: 3}), /FAIL: Unsupported transition capture format or version/);
   assert.doesNotMatch(output.textContent, /never disclose/);
   assert.equal(JSON.stringify([...app.saved]), savedState);
 
@@ -2396,6 +2418,8 @@ test('browser private pair replays in page and both independent CLIs without pub
   const capture = JSON.parse(await app.exports[0].text());
   const opening = JSON.parse(await app.exports[1].text());
   assert.equal(capture.format, 'aru-evidence-sealed-reference-transition-capture');
+  assert.equal(capture.version, 2);
+  assert.match(capture.normalization_a_commitment, /^[0-9a-f]{64}$/);
   assert.match(opening.key_hex, /^[0-9a-f]{64}$/);
   assert.deepEqual(capture.changed_receipts, [1, 2]);
   assert.equal(capture.totals_b.fail, 1);
@@ -2428,6 +2452,15 @@ test('browser private pair replays in page and both independent CLIs without pub
   vm.runInContext('invalidateSealedReplay()', app.context);
   await vm.runInContext('verifySealedTransition()', app.context);
   assert.match(output.textContent, /PRIVATE CAPTURE MATCH: 2 verdict changes.*1 FAIL.*does not prove origin/);
+  const {normalization_a_commitment, normalization_b_commitment, ...oldPrivate} = capture;
+  captureInput.files = [auditFile(JSON.stringify({...oldPrivate, version: 1}))];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  await vm.runInContext('verifySealedTransition()', app.context);
+  assert.match(output.textContent, /PRIVATE CAPTURE MATCH:.*Older private capture: browser runtime was not recorded/);
+  captureInput.files = [auditFile(JSON.stringify(capture))];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  await vm.runInContext('verifySealedTransition()', app.context);
+  assert.match(output.textContent, /PRIVATE CAPTURE MATCH/);
   keyInput.files = [auditFile(JSON.stringify({...opening, key_hex: 'f'.repeat(64)}))];
   vm.runInContext('invalidateSealedReplay()', app.context);
   await vm.runInContext('verifySealedTransition()', app.context);
@@ -2438,6 +2471,10 @@ test('browser private pair replays in page and both independent CLIs without pub
   assert.match(output.textContent, /FAIL: Opening key must be the exact version 1 file/);
   keyInput.files = [auditFile(JSON.stringify(opening))];
   captureInput.files = [auditFile(JSON.stringify({...capture, browser_script_sha256: '0'.repeat(64)}))];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  await vm.runInContext('verifySealedTransition()', app.context);
+  assert.match(output.textContent, /DIFFER:/);
+  captureInput.files = [auditFile(JSON.stringify({...capture, normalization_a_commitment: '0'.repeat(64)}))];
   vm.runInContext('invalidateSealedReplay()', app.context);
   await vm.runInContext('verifySealedTransition()', app.context);
   assert.match(output.textContent, /DIFFER:/);
@@ -2624,7 +2661,8 @@ test('browser capture is byte-bound and the CLI reproduces mixed outcomes withou
   vm.runInContext('downloadEvidenceBatchCapture()', app.context);
   const capture = JSON.parse(await app.exports[0].text());
   assert.equal(capture.format, 'aru-evidence-browser-batch-capture');
-  assert.equal(capture.version, 2);
+  assert.equal(capture.version, 3);
+  assert.match(capture.normalization_sha256, /^[0-9a-f]{64}$/);
   assert.equal(capture.browser_script_sha256,
     createHash('sha256').update(source).digest('hex'));
   assert.deepEqual(capture.receipts.map(row => [row.verdict, row.duplicate_of]),
@@ -2681,15 +2719,17 @@ test('browser replays saved v2 and v1 captures and exposes byte, script, and str
     await vm.runInContext('verifySavedBatchCapture()', app.context);
     return output.textContent;
   };
-  assert.match(await compare(capture), /CAPTURE MATCH: Saved capture reproduced.*1 MATCH, 0 DIFFER, 1 FAIL.*fingerprint agrees.*audit contains DIFFER or FAIL results/);
+  assert.match(await compare(capture), /CAPTURE MATCH: Saved capture reproduced.*1 MATCH, 0 DIFFER, 1 FAIL.*runtime profile agree.*audit contains DIFFER or FAIL results/);
   assert.match(await compare({totals: capture.totals, receipts: capture.receipts,
     checkpoint_sha256: capture.checkpoint_sha256, reference_sha256: capture.reference_sha256,
     browser_script_sha256: capture.browser_script_sha256, version: 2, format: capture.format}),
     /CAPTURE MATCH: Saved capture reproduced/);
-  const {browser_script_sha256, ...old} = capture;
+  const {browser_script_sha256, normalization_sha256, ...old} = capture;
   assert.match(await compare({...old, version: 1}), /CAPTURE MATCH:.*Legacy v1 capture has no browser script fingerprint/);
   assert.match(await compare({...capture, browser_script_sha256: '0'.repeat(64)}),
     /DIFFER:.*browser verifier script fingerprint differs/);
+  assert.match(await compare({...capture, normalization_sha256: '0'.repeat(64)}),
+    /DIFFER:.*evidence names normalize differently/);
   assert.match(await compare({...capture, reference_sha256: '0'.repeat(64)}),
     /DIFFER:.*Reference file bytes differ/);
   assert.match(await compare({...capture, receipts: [{...capture.receipts[0], verdict: 'DIFFER'}, capture.receipts[1]]}),
@@ -2709,7 +2749,7 @@ test('browser replays saved v2 and v1 captures and exposes byte, script, and str
   assert.match(await compare(capture), /CAPTURE MATCH:/);
   assert.equal(output.children.length, 0, 'a new comparison clears older mismatch details');
   assert.match(await compare('{'), /FAIL: Saved capture is not valid JSON/);
-  assert.match(await compare({...capture, version: 3}), /FAIL: Unsupported saved capture format or version/);
+  assert.match(await compare({...capture, version: 4}), /FAIL: Unsupported saved capture format or version/);
   assert.equal(JSON.stringify([...app.saved]), before);
   assert.doesNotMatch(output.textContent, /never show this/);
 

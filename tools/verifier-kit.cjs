@@ -13,6 +13,7 @@ const CODE_FILES = [
   "tools/audit-evidence-batch.cjs",
   "tools/unambiguous-json.cjs",
   "tools/benchmark-evidence.cjs",
+  "tools/normalization-profile.cjs",
   "tools/verify-evidence-receipt.cjs",
   "tools/independent-evidence-batch.py",
   "tools/probe-normalization.py",
@@ -23,7 +24,7 @@ const FILES = [...CODE_FILES, "README.md"];
 const README = `# ĀRU offline verifier kit
 
 This folder preserves the exact browser page and the Node and independent Python
-batch checkers for a version 2 browser audit capture, a paired transition capture,
+batch checkers for a version 2 or 3 browser audit capture, a paired transition capture,
 or a private transition capture. It contains no selected
 reference, checkpoint, receipt, or capture file. Keep those originals separately
 and provide them explicitly when replaying a capture.
@@ -55,7 +56,8 @@ rows, so inspect every outcome. The review command runs both auditors and emits
 one compact result with replay and receipt outcomes as separate fields. It
 also compares selected names under Node and Python, withholds a positive result
 if their Unicode normalization differs, and checks original file bytes again.
-The capture does not record the original browser's Unicode runtime. The kit is
+New captures bind the selected-name normalization profile; older captures do
+not record it. The kit is
 not signed or proof of independent custody. A kit check compares bytes with this folder's
 manifest and the browser script with the capture. The Node and Python commands
 recompute the actual audit from the selected original files. Neither the
@@ -86,14 +88,17 @@ function regularBytes(file, limit, label) {
 
 function browserCaptureHash(capture) {
   const digest = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-  if (!exactly(capture, ["format", "version", "browser_script_sha256", "reference_sha256",
-    "checkpoint_sha256", "receipts", "totals"]) ||
-      capture.format !== "aru-evidence-browser-batch-capture" || capture.version !== 2 ||
+  if (![2, 3].includes(capture?.version) || !exactly(capture,
+    ["format", "version", "browser_script_sha256", "reference_sha256",
+      "checkpoint_sha256", "receipts", "totals",
+      ...(capture.version === 3 ? ["normalization_sha256"] : [])]) ||
+      capture.format !== "aru-evidence-browser-batch-capture" ||
       !digest(capture.browser_script_sha256) || !digest(capture.reference_sha256) ||
+      (capture.version === 3 && !digest(capture.normalization_sha256)) ||
       (capture.checkpoint_sha256 !== null && !digest(capture.checkpoint_sha256)) ||
       !Array.isArray(capture.receipts) || capture.receipts.length < 1 || capture.receipts.length > 20 ||
       !exactly(capture.totals, ["match", "differ", "fail", "identical_copies"])) {
-    throw new Error("Expected a well-formed version 2 browser batch capture");
+    throw new Error("Expected a well-formed version 2 or 3 browser batch capture");
   }
   const counts = {MATCH: 0, DIFFER: 0, FAIL: 0};
   let repeats = 0;
@@ -126,7 +131,9 @@ function captureScriptHash(file) {
     return browserCaptureHash(capture);
   }
   if (!exactly(capture, ["format", "version", "capture_a", "capture_b", "changed_receipts"]) ||
-      capture.version !== 1 || !Array.isArray(capture.changed_receipts)) {
+      ![1, 2].includes(capture.version) || !Array.isArray(capture.changed_receipts) ||
+      capture.capture_a?.version !== (capture.version === 1 ? 2 : 3) ||
+      capture.capture_b?.version !== (capture.version === 1 ? 2 : 3)) {
     throw new Error("Expected a well-formed paired transition capture");
   }
   const aHash = browserCaptureHash(capture.capture_a);
@@ -144,10 +151,13 @@ function captureScriptHash(file) {
 
 function sealedCaptureHash(capture) {
   const digest = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-  if (!exactly(capture, ["format", "version", "browser_script_sha256",
+  if (![1, 2].includes(capture?.version) || !exactly(capture, ["format", "version", "browser_script_sha256",
     "reference_a_commitment", "reference_b_commitment", "checkpoint_a_commitment",
-    "checkpoint_b_commitment", "receipts", "totals_a", "totals_b", "changed_receipts"]) ||
-      capture.version !== 1 || !digest(capture.browser_script_sha256) ||
+    "checkpoint_b_commitment", "receipts", "totals_a", "totals_b", "changed_receipts",
+    ...(capture.version === 2 ? ["normalization_a_commitment", "normalization_b_commitment"] : [])]) ||
+      !digest(capture.browser_script_sha256) ||
+      (capture.version === 2 && (!digest(capture.normalization_a_commitment) ||
+        !digest(capture.normalization_b_commitment))) ||
       !digest(capture.reference_a_commitment) || !digest(capture.reference_b_commitment) ||
       (capture.checkpoint_a_commitment !== null && !digest(capture.checkpoint_a_commitment)) ||
       (capture.checkpoint_b_commitment !== null && !digest(capture.checkpoint_b_commitment)) ||

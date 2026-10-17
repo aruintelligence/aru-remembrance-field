@@ -1,0 +1,34 @@
+# Selected-name runtime profile: capture protocol and invention log
+
+## User path
+
+Run **Audit selected receipts** or **Trace selected receipts** with the original files, then download the new capture. A single audit writes browser capture version 3. A two-reference trace writes transition version 2 with a version 3 capture for each reference. **Prepare private pair** writes private transition version 2. The page uses its actual runtime's evidence-name normalizer while making the capture. Later, reselect the same originals in the same order and compare in the page, or run both CLI auditors and `tools/review-evidence.cjs` from the matching code version. A new positive review reports `browser_runtime_normalization: "selected_profile_matched"`. Old v1/v2 single, v1 paired, and v1 private captures still replay with `not_recorded_in_capture` when accepted by their matching script version.
+
+## Exact mechanism
+
+For each side, visit the validated reference first, then each parseable receipt in selection order, including a parseable receipt whose audit verdict is `FAIL`. Malformed JSON contributes no names. From each object, visit `records[].key` when `records` is an array of at most 100, then `question`, then `names[]` when `names` is an array of at most eight. Include string values of at most 500 UTF-16 code units, deduplicate exact raw strings by first appearance, and limit the list to 2,500 distinct strings. This intentionally follows the same bounded selection used by the reviewer's earlier portability gate. The original byte hashes (or keyed file commitments) bind the source material, including malformed files and omitted long fields.
+
+Normalize every selected string with the live evidence rule: NFKC, JavaScript trim, collapsed JavaScript whitespace, then lowercase. Hash the ASCII domain `aru-selected-normalization-v1\n` followed, for each normalized string in order, by a four-byte unsigned big-endian length and its UTF-8 bytes. JavaScript `TextEncoder` replaces unpaired surrogates with U+FFFD; the Python checker applies the same replacement before encoding. The `normalization_sha256` in a version 3 capture is this digest. Two-reference captures have separate A and B digests because their references may differ. Private version 2 captures commit to each digest with `HMAC-SHA256(opening_key, ASCII("aru-sealed-transition-v1\nnormalization-a\n0\n" + digest))` and the analogous `normalization-b` role. They do not disclose the raw digests. The key must stay separate from a public capture; the holder can test guesses.
+
+The Node checker derives the profile from the selected originals using its live model. The Python checker derives it under its own implementation and runtime. Both require the entire saved capture, including the profile, to equal their recomputed capture. The combined reviewer additionally checks selected names under Node and Python while detecting changed originals; it issues no receipt assessment if either checker rejects. A `MATCH` only means these selected strings, files, rules, and outcomes reproduced under the three participating runtimes. A script hash still requires the matching archived code version.
+
+## Reproduce the contrast
+
+Run from this checkout:
+
+```bash
+node tools/review-evidence.cjs research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --check-capture research/example-evidence-browser-batch-capture.json --json
+node tools/review-evidence.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture-v2.json --json
+node tools/audit-evidence-batch.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture.json
+python3 tools/independent-evidence-batch.py research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture.json
+node tools/review-evidence.cjs research/example-runtime-reference.json research/example-runtime-receipt.json --check-capture research/example-runtime-capture.json --json
+node --test tests/runtime-portability.test.cjs tests/field.test.cjs tests/sealed-transition.test.cjs
+```
+
+On the tested Node 24 / Unicode 17 and Python 3.12 / Unicode 15 combination, the ordinary version 3 fixture returns `MATCH` with `selected_profile_matched`. The older runtime fixture's v2 capture is accepted by both individual auditors but the combined reviewer withholds a positive assessment for U+A7F1 because the two selected-name normalizations differ. For that same input, the version 3 fixture made with the live Node evidence model is accepted by Node and rejected by Python; the combined review is `UNCONFIRMED` and has no receipt assessment. A separate browser test checks its profile against Node on the ordinary fixture. Results can differ on runtimes with different Unicode data. Altering the digest, a byte, order, script, verdict, or private keyed commitment is rejected. The test suite also exercises malformed receipts and a matching replay that still records `DIFFER` or `FAIL`.
+
+## Limits and opportunity
+
+The profile does not name a Unicode release or prove that all possible inputs behave identically. It binds only selected, bounded strings in files the user supplied, and it says nothing about names in absent evidence. Ordinary digests and raw file hashes may enable guessing of predictable assertions; private captures hide these digests behind the opening key but reveal verdicts, counts, repeats, and the script hash. A hash or HMAC does not prove authorship, independent custody, chronology, completeness, or factual truth. The verifier kit is self-consistent, not an authenticated publisher release.
+
+**Problem:** the same script can interpret a selected name differently under another runtime, while two internally consistent auditors can both accept an older capture. **Proposed mechanism:** bind a bounded projection of the originating browser's actual name interpretation, with separate commitments for each side of a private transition and strict independent replay. **Prior art to investigate:** versioned Unicode normalization, reproducible execution, content commitments, cross-runtime differential testing, and provenance receipts. No novelty or patentability claim is made. **Unproven:** real browser and human comprehension across more platforms, selected-name privacy against dictionary attacks, independently authenticated verifier distribution, and factual truth. The next high-value integration is a signed release channel for verifier kits with a separately managed publisher key and a clear revocation story; it should be evaluated independently of evidence truth.
