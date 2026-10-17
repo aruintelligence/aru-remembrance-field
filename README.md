@@ -55,6 +55,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A deterministic offline verifier kit that can preserve the exact browser script and both batch checkers for later local replay, without packing the selected evidence files
 - A local reference transition lens that replays one receipt set against two ledgers and traces changed verdicts to source IDs, field changes, computed answer kinds, and citations without showing fact values
 - A bounded addition-only answer-change test that finds the smallest added-source sets sufficient to reproduce B's computed answer and explicitly declines other changes
+- An optional private transition capture with keyed commitments and a separate opening key, replayable in the page and independently by Node and Python without publishing raw evidence hashes
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -200,6 +201,8 @@ python3 tools/independent-evidence-batch.py research/example-evidence-reference-
 ```
 
 Both commands exit 0 when they reproduce this saved transition, although reference B has two `DIFFER` outcomes. Without `--check-transition`, a normal audit exits 1 for that B result. The [portable capture protocol](research/portable-transition-capture.md) explains privacy and trust limits. The [offline verifier kit](research/verifier-kit-protocol.md) can archive matching code directly from a paired capture for later offline replay. Neither hashes nor independent software establish authorship, independent custody, completeness, or factual truth.
+
+For sharing where the raw file hashes themselves would reveal predictable private assertions, use **Share a private transition capture** after tracing. **Prepare private pair** creates a new 256-bit opening key in the browser; download the private capture and opening key separately. Send the capture to its intended audience and transfer the key only to an intended verifier through a separate private channel. A verifier reselects the originals, traces again, and chooses both saved files under **Compare private capture**, or runs each auditor with `--check-sealed private-capture.json --opening-key opening-key.json` in place of `--check-transition`. The [private sharing protocol](research/private-transition-sharing.md) gives the exact format, CLI commands, failure tests, and key limits. A key holder can test guesses, and verdicts and repeats remain visible in the capture. A match is only consistency with the supplied originals and key; a matching capture can contain `DIFFER` or `FAIL` outcomes. The offline kit can pin the code for a private capture without packing the key or originals.
 
 After a bounded audit, **Download audit capture** saves the selected files' SHA-256 hashes, ordered verdicts, duplicate indices, totals, and the exact inline browser script's SHA-256 without file names or fact values. Retain the original files in selection order, then replay the browser capture with the [command-line batch auditor](tools/audit-evidence-batch.cjs):
 

@@ -356,6 +356,9 @@
     .transition-card p { margin: 0.45rem 0 0; }
     .transition-card .transition-verdict { font: 700 0.8rem/1.5 'JetBrains Mono', monospace; color: #a5f3fc; }
     .transition-influence { padding: 0.65rem 0.75rem; border-left: 3px solid #38bdf8; border-radius: 6px; background: rgba(8,47,73,0.5); color: #e0f2fe; font-size: 0.82rem; line-height: 1.5; }
+    .sealed-panel { margin-top: 1rem; padding: 0.9rem; border: 1px solid #4ade80; border-radius: 10px; background: rgba(20,83,45,0.18); }
+    .sealed-panel h4 { margin: 0 0 0.4rem; color: #bbf7d0; }
+    .sealed-panel p { line-height: 1.55; }
     @media (max-width: 580px) { .comparison-grid { grid-template-columns: 1fr; } }
 
     @media (prefers-reduced-motion: reduce) {
@@ -555,6 +558,22 @@
         <input id="transition-capture-file" type="file" accept=".json,application/json" onchange="invalidateReferenceTransitionReplay()">
         <div class="ledger-actions"><button type="button" id="transition-capture-verify" onclick="verifySavedReferenceTransition()" disabled>Compare saved transition capture</button></div>
         <div id="transition-capture-verification" role="status" aria-live="polite">Trace the original files, then choose a saved transition capture to compare.</div>
+        <section class="sealed-panel" aria-labelledby="sealed-title">
+          <h4 id="sealed-title">Share a private transition capture</h4>
+          <p>After tracing, prepare a capture with keyed file commitments instead of public file hashes. It still reveals the verifier version, verdicts, counts, and repeated-file positions. Keep the opening key separate from the capture: anyone with both can test guesses about private facts. This is not encryption, authorship, or proof of truth.</p>
+          <div class="ledger-actions">
+            <button type="button" id="sealed-prepare" onclick="prepareSealedTransition()" disabled>Prepare private pair</button>
+            <button type="button" id="sealed-capture-download" onclick="downloadSealedTransitionCapture()" disabled>Download private capture</button>
+            <button type="button" id="sealed-key-download" onclick="downloadSealedTransitionKey()" disabled>Download opening key</button>
+          </div>
+          <p id="sealed-status" role="status" aria-live="polite">Trace the original files to prepare a private pair.</p>
+          <label for="sealed-capture-file">Private transition capture JSON (up to 1 MiB)</label>
+          <input id="sealed-capture-file" type="file" accept=".json,application/json" onchange="invalidateSealedReplay()">
+          <label for="sealed-key-file">Opening key JSON (up to 1 MiB)</label>
+          <input id="sealed-key-file" type="file" accept=".json,application/json" onchange="invalidateSealedReplay()">
+          <div class="ledger-actions"><button type="button" id="sealed-verify" onclick="verifySealedTransition()" disabled>Compare private capture</button></div>
+          <p id="sealed-verification" role="status" aria-live="polite">Trace the original files, then choose both saved files to compare.</p>
+        </section>
         <p>The answer-change test finds the smallest added-source sets that reproduce B's computed answer when B only adds up to six sources. It reports when edits, removals, order changes, or a larger search prevent that conclusion. A and B are comparison labels, not verified dates. An unchanged verdict can conceal a different reason. A checkpoint checks the ordered records and next source ID under these rules; a trusted copy held separately is needed for provenance. The capture contains hashes and outcomes, not fact values, but predictable private assertions may be guessable from a hash. Neither reference proves the assertions are true or complete.</p>
       </section>
     </section>
@@ -2296,6 +2315,9 @@ let evidenceBatchCaptureReplayRequest = 0;
 let referenceTransitionRequest = 0;
 let lastReferenceTransitionCapture = null;
 let referenceTransitionReplayRequest = 0;
+let sealedTransitionRequest = 0;
+let sealedTransitionReplayRequest = 0;
+let lastSealedTransition = null;
 function referenceTransitionSelectionsMatch(state) {
   return document.getElementById("transition-reference-a").files?.[0] === state.aFile &&
     document.getElementById("transition-checkpoint-a").files?.[0] === state.aCheckpointFile &&
@@ -2315,6 +2337,13 @@ function invalidateReferenceTransitionReplay(message = "Saved transition capture
 function invalidateReferenceTransition(message = "File selection changed. Trace the selected files again.") {
   ++referenceTransitionRequest;
   lastReferenceTransitionCapture = null;
+  ++sealedTransitionRequest;
+  lastSealedTransition = null;
+  document.getElementById("sealed-prepare").disabled = true;
+  document.getElementById("sealed-capture-download").disabled = true;
+  document.getElementById("sealed-key-download").disabled = true;
+  document.getElementById("sealed-status").textContent = "Selection changed. Trace the original files again before preparing a private pair.";
+  invalidateSealedReplay("Trace the original files again before comparing a private capture.");
   document.getElementById("transition-capture-download").disabled = true;
   document.getElementById("transition-capture-status").textContent =
     "Selection changed. Trace the selected files again before downloading a capture.";
@@ -2322,6 +2351,13 @@ function invalidateReferenceTransition(message = "File selection changed. Trace 
   const output = document.getElementById("reference-transition-result");
   output.replaceChildren();
   output.textContent = message;
+}
+function invalidateSealedReplay(message = "Private capture or key selection changed. Compare again.") {
+  ++sealedTransitionReplayRequest;
+  document.getElementById("sealed-verify").disabled = !lastReferenceTransitionCapture ||
+    !document.getElementById("sealed-capture-file").files?.[0] ||
+    !document.getElementById("sealed-key-file").files?.[0];
+  document.getElementById("sealed-verification").textContent = message;
 }
 function invalidateEvidenceBatchCaptureReplay(message = "Saved capture selection changed. Compare it again.") {
   ++evidenceBatchCaptureReplayRequest;
@@ -2524,6 +2560,131 @@ function downloadReferenceTransitionCapture() {
   downloadJSON(state.payload, "aru-evidence-reference-transition-capture.json");
 }
 
+function transitionOpeningKeyBytes(opening) {
+  if (!opening || typeof opening !== "object" || Array.isArray(opening) ||
+      Object.keys(opening).length !== 3 ||
+      opening.format !== "aru-evidence-transition-opening-key" || opening.version !== 1 ||
+      typeof opening.key_hex !== "string" || !/^[0-9a-f]{64}$/.test(opening.key_hex)) {
+    throw new Error("Opening key must be the exact version 1 file with 32 random bytes.");
+  }
+  return Uint8Array.from(opening.key_hex.match(/../g), value => parseInt(value, 16));
+}
+
+async function sealReferenceTransition(transition, keyBytes) {
+  if (!globalThis.crypto?.subtle || keyBytes.length !== 32) throw new Error("Secure browser HMAC or opening key is unavailable.");
+  const cryptoKey = await globalThis.crypto.subtle.importKey("raw", keyBytes,
+    {name: "HMAC", hash: "SHA-256"}, false, ["sign"]);
+  const {capture_a: a, capture_b: b} = transition;
+  const commit = async (role, index, digest) => {
+    if (digest === null) return null;
+    const message = new TextEncoder().encode(`aru-sealed-transition-v1\n${role}\n${index}\n${digest}`);
+    const mac = await globalThis.crypto.subtle.sign("HMAC", cryptoKey, message);
+    return Array.from(new Uint8Array(mac), byte => byte.toString(16).padStart(2, "0")).join("");
+  };
+  const [referenceA, referenceB, checkpointA, checkpointB, ...receipts] = await Promise.all([
+    commit("reference-a", 0, a.reference_sha256), commit("reference-b", 0, b.reference_sha256),
+    commit("checkpoint-a", 0, a.checkpoint_sha256), commit("checkpoint-b", 0, b.checkpoint_sha256),
+    ...a.receipts.map(row => commit("receipt", row.index, row.sha256))]);
+  return {format: "aru-evidence-sealed-reference-transition-capture", version: 1,
+    browser_script_sha256: a.browser_script_sha256,
+    reference_a_commitment: referenceA, reference_b_commitment: referenceB,
+    checkpoint_a_commitment: checkpointA, checkpoint_b_commitment: checkpointB,
+    receipts: a.receipts.map((row, index) => ({index: row.index, commitment: receipts[index],
+      verdict_a: row.verdict, verdict_b: b.receipts[index].verdict,
+      duplicate_of: row.duplicate_of})),
+    totals_a: a.totals, totals_b: b.totals, changed_receipts: transition.changed_receipts};
+}
+
+async function prepareSealedTransition() {
+  const request = ++sealedTransitionRequest;
+  const state = lastReferenceTransitionCapture;
+  const status = document.getElementById("sealed-status");
+  lastSealedTransition = null;
+  document.getElementById("sealed-capture-download").disabled = true;
+  document.getElementById("sealed-key-download").disabled = true;
+  if (!state) { status.textContent = "Trace the original files first."; return; }
+  if (!referenceTransitionSelectionsMatch(state)) { invalidateReferenceTransition(); return; }
+  status.textContent = "Preparing a new private pair on this device…";
+  const stillCurrent = () => request === sealedTransitionRequest &&
+    lastReferenceTransitionCapture === state && referenceTransitionSelectionsMatch(state);
+  try {
+    if (!globalThis.crypto?.subtle) throw new Error("Secure browser key generation is unavailable.");
+    const key = await globalThis.crypto.subtle.generateKey(
+      {name: "HMAC", hash: "SHA-256", length: 256}, true, ["sign"]);
+    const keyBytes = new Uint8Array(await globalThis.crypto.subtle.exportKey("raw", key));
+    if (!stillCurrent()) return;
+    const capture = await sealReferenceTransition(state.payload, keyBytes);
+    if (!stillCurrent()) return;
+    const opening = {format: "aru-evidence-transition-opening-key", version: 1,
+      key_hex: Array.from(keyBytes, byte => byte.toString(16).padStart(2, "0")).join("")};
+    lastSealedTransition = {state, capture, opening};
+    document.getElementById("sealed-capture-download").disabled = false;
+    document.getElementById("sealed-key-download").disabled = false;
+    status.textContent = "Private pair ready. Download both files. Share the capture only; give the opening key to an intended verifier through a separate private channel. A new pair uses a new key.";
+  } catch (_) {
+    if (stillCurrent()) status.textContent = "Private pair unavailable: secure key generation or HMAC failed. The original trace remains available.";
+  }
+}
+
+function downloadSealedTransitionCapture() {
+  const pair = lastSealedTransition;
+  if (!pair) return;
+  if (!referenceTransitionSelectionsMatch(pair.state)) { invalidateReferenceTransition(); return; }
+  downloadJSON(pair.capture, "aru-private-transition-capture.json");
+}
+function downloadSealedTransitionKey() {
+  const pair = lastSealedTransition;
+  if (!pair) return;
+  if (!referenceTransitionSelectionsMatch(pair.state)) { invalidateReferenceTransition(); return; }
+  downloadJSON(pair.opening, "aru-private-transition-opening-key-KEEP-SEPARATE.json");
+}
+
+async function verifySealedTransition() {
+  const request = ++sealedTransitionReplayRequest;
+  const state = lastReferenceTransitionCapture;
+  const captureInput = document.getElementById("sealed-capture-file");
+  const keyInput = document.getElementById("sealed-key-file");
+  const captureFile = captureInput.files?.[0];
+  const keyFile = keyInput.files?.[0];
+  const output = document.getElementById("sealed-verification");
+  if (!state || !captureFile || !keyFile) {
+    output.textContent = "Trace the originals and choose both the private capture and its opening key.";
+    return;
+  }
+  const stillCurrent = () => request === sealedTransitionReplayRequest &&
+    lastReferenceTransitionCapture === state && referenceTransitionSelectionsMatch(state) &&
+    captureInput.files?.[0] === captureFile && keyInput.files?.[0] === keyFile;
+  if (!stillCurrent()) { invalidateReferenceTransition(); return; }
+  output.textContent = "Recomputing private commitments and verdicts from the selected originals…";
+  try {
+    const [captureData, keyData] = await Promise.all([
+      readEvidenceAuditBytes(captureFile, "Private capture"),
+      readEvidenceAuditBytes(keyFile, "Opening key")]);
+    if (!stillCurrent()) return;
+    const capture = parseEvidenceAuditJSON(captureData.raw, "Private capture");
+    const opening = parseEvidenceAuditJSON(keyData.raw, "Opening key");
+    const keyBytes = transitionOpeningKeyBytes(opening);
+    if (capture?.format !== "aru-evidence-sealed-reference-transition-capture" || capture.version !== 1) {
+      output.textContent = "FAIL: Unsupported private capture format or version.";
+      return;
+    }
+    const expected = await sealReferenceTransition(state.payload, keyBytes);
+    if (!stillCurrent()) return;
+    if (!sameEvidenceCaptureValue(capture, expected)) {
+      output.textContent = "DIFFER: Private capture or opening key does not reproduce both references, checkpoints, ordered receipts, verdicts, totals, and browser script. Check the originals, key, and archived page version.";
+      return;
+    }
+    const a = expected.totals_a;
+    const b = expected.totals_b;
+    output.textContent = `PRIVATE CAPTURE MATCH: ${expected.changed_receipts.length} verdict changes. ` +
+      `A: ${a.match} MATCH, ${a.differ} DIFFER, ${a.fail} FAIL. ` +
+      `B: ${b.match} MATCH, ${b.differ} DIFFER, ${b.fail} FAIL. ` +
+      "This is consistency with the supplied files, key, and script, including any DIFFER or FAIL. It does not prove origin, custody, completeness, chronology, or factual truth.";
+  } catch (error) {
+    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not compare the private capture."}`;
+  }
+}
+
 async function verifySavedReferenceTransition() {
   const request = ++referenceTransitionReplayRequest;
   const state = lastReferenceTransitionCapture;
@@ -2565,6 +2726,13 @@ async function traceReferenceTransition() {
   const request = ++referenceTransitionRequest;
   const output = document.getElementById("reference-transition-result");
   lastReferenceTransitionCapture = null;
+  ++sealedTransitionRequest;
+  lastSealedTransition = null;
+  document.getElementById("sealed-prepare").disabled = true;
+  document.getElementById("sealed-capture-download").disabled = true;
+  document.getElementById("sealed-key-download").disabled = true;
+  document.getElementById("sealed-status").textContent = "Tracing files before preparing a private pair…";
+  invalidateSealedReplay("Trace the selected files again before comparing a private capture.");
   document.getElementById("transition-capture-download").disabled = true;
   document.getElementById("transition-capture-status").textContent = "Tracing files before a capture can be downloaded…";
   invalidateReferenceTransitionReplay("Trace the selected files again before comparing a saved transition capture.");
@@ -2739,6 +2907,12 @@ async function traceReferenceTransition() {
         capture_b: makeCapture(bSHA, bCheckpointSHA, "after"),
         changed_receipts: rows.filter(row => row.before !== row.after).map(row => row.index)};
       lastReferenceTransitionCapture = {...selection, payload};
+      document.getElementById("sealed-prepare").disabled = false;
+      document.getElementById("sealed-verify").disabled =
+        !document.getElementById("sealed-capture-file").files?.[0] ||
+        !document.getElementById("sealed-key-file").files?.[0];
+      document.getElementById("sealed-status").textContent =
+        "Trace ready. Prepare a private pair with a new random opening key, or compare one saved earlier.";
       document.getElementById("transition-capture-download").disabled = false;
       document.getElementById("transition-capture-verify").disabled =
         !document.getElementById("transition-capture-file").files?.[0];

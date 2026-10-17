@@ -1,6 +1,6 @@
 # Offline verifier kit: preserve code for future capture replay
 
-A version 2 browser batch capture records the SHA-256 fingerprint of the exact inline browser script running when it was made. A paired [transition capture](portable-transition-capture.md) records two such captures for the same ordered receipts. A later page update changes that fingerprint even if its evidence rules stay the same. An archived kit keeps the matching browser page and the two command-line checkers in a separate folder so either capture can be replayed offline after the site changes.
+A version 2 browser batch capture records the SHA-256 fingerprint of the exact inline browser script running when it was made. A paired [transition capture](portable-transition-capture.md) records two such captures for the same ordered receipts. A [private transition capture](private-transition-sharing.md) uses keyed file commitments and retains that clear script fingerprint. A later page update changes the fingerprint even if its evidence rules stay the same. An archived kit keeps the matching browser page and the two command-line checkers in a separate folder so any of these captures can be replayed offline after the site changes.
 
 ## Create while the matching code is available
 
@@ -30,6 +30,8 @@ The kit manifest records seven allowlisted files, exact sizes, SHA-256 values, a
 For a paired transition capture, use the same `create` and `check` commands with the transition JSON path. Supply A as the first reference, the same ordered receipts, B with `--reference-b`, and the optional A and B checkpoints. Run both archived auditors with `--check-transition /path/to/transition.json`. `TRANSITION CAPTURE MATCH` reproduces the recorded sides even if one contains `DIFFER` or `FAIL` rows; inspect each side's counts.
 
 The archived auditors also accept `--explain-additions` with paired references. It recomputes the [bounded added-source answer witness](addition-witness-protocol.md) from the original files; the witness sets are not stored in the capture. An edited or reordered ledger yields an explicit unavailable state.
+
+For a private capture, the same kit `create` and `check` operations validate its bounded structure and pin its browser script without reading the opening key. Those operations alone cannot recompute its keyed commitments. Give the key to the intended verifier separately and run both archived auditors with `--check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json`, supplying both references, every ordered receipt, and the optional checkpoints. The kit never copies the capture, evidence, or key. Sharing the opening key with the capture lets others test guesses about private facts.
 
 ## Trust boundary and future work
 

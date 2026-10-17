@@ -19,7 +19,8 @@ const FILES = [...CODE_FILES, "README.md"];
 const README = `# ĀRU offline verifier kit
 
 This folder preserves the exact browser page and the Node and independent Python
-batch checkers for a version 2 browser audit capture or a paired transition capture. It contains no selected
+batch checkers for a version 2 browser audit capture, a paired transition capture,
+or a private transition capture. It contains no selected
 reference, checkpoint, receipt, or capture file. Keep those originals separately
 and provide them explicitly when replaying a capture.
 
@@ -33,6 +34,10 @@ python3 tools/independent-evidence-batch.py /path/to/reference.json /path/to/rec
 # For a paired transition capture, supply both references and all original receipts:
 node tools/audit-evidence-batch.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-transition /path/to/transition.json
 python3 tools/independent-evidence-batch.py /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-transition /path/to/transition.json
+
+# For a private transition capture, keep its opening key in a separate private location:
+node tools/audit-evidence-batch.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json
+python3 tools/independent-evidence-batch.py /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json
 \`\`\`
 
 Omit \`--checkpoint\` when the original capture has no checkpoint. Supply all
@@ -44,7 +49,10 @@ manifest and the browser script with the capture. The Node and Python commands
 recompute the actual audit from the selected original files. Neither the
 manifest nor the capture is signed, timestamped, or proof of factual truth,
 authorship, completeness, or independent custody. Keep a trusted copy of the
-capture and code separately if those properties matter.
+capture and code separately if those properties matter. The private capture
+does not contain raw file hashes but reveals verdicts, repeats, counts, and
+the browser script fingerprint. Anyone with its opening key can test guesses
+about private facts. Do not package or publish the key with the capture.
 `;
 
 function sha256(bytes) {
@@ -99,6 +107,9 @@ function captureScriptHash(file) {
   let capture;
   try { capture = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(bytes)); }
   catch (_) { throw new Error("Capture is not valid UTF-8 JSON"); }
+  if (capture?.format === "aru-evidence-sealed-reference-transition-capture") {
+    return sealedCaptureHash(capture);
+  }
   if (capture?.format !== "aru-evidence-reference-transition-capture") {
     return browserCaptureHash(capture);
   }
@@ -117,6 +128,47 @@ function captureScriptHash(file) {
     throw new Error("Paired transition sides disagree on script, ordered receipts, or changed verdicts");
   }
   return aHash;
+}
+
+function sealedCaptureHash(capture) {
+  const digest = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+  if (!exactly(capture, ["format", "version", "browser_script_sha256",
+    "reference_a_commitment", "reference_b_commitment", "checkpoint_a_commitment",
+    "checkpoint_b_commitment", "receipts", "totals_a", "totals_b", "changed_receipts"]) ||
+      capture.version !== 1 || !digest(capture.browser_script_sha256) ||
+      !digest(capture.reference_a_commitment) || !digest(capture.reference_b_commitment) ||
+      (capture.checkpoint_a_commitment !== null && !digest(capture.checkpoint_a_commitment)) ||
+      (capture.checkpoint_b_commitment !== null && !digest(capture.checkpoint_b_commitment)) ||
+      !Array.isArray(capture.receipts) || capture.receipts.length < 1 ||
+      capture.receipts.length > 20 || !Array.isArray(capture.changed_receipts)) {
+    throw new Error("Expected a well-formed private transition capture");
+  }
+  const a = {MATCH: 0, DIFFER: 0, FAIL: 0};
+  const b = {MATCH: 0, DIFFER: 0, FAIL: 0};
+  let repeats = 0;
+  const changed = [];
+  for (const [index, row] of capture.receipts.entries()) {
+    if (!exactly(row, ["index", "commitment", "verdict_a", "verdict_b", "duplicate_of"]) ||
+        row.index !== index + 1 || !digest(row.commitment) ||
+        !Object.hasOwn(a, row.verdict_a) || !Object.hasOwn(b, row.verdict_b) ||
+        (row.duplicate_of !== null && (!Number.isSafeInteger(row.duplicate_of) ||
+          row.duplicate_of < 1 || row.duplicate_of >= row.index ||
+          row.verdict_a !== capture.receipts[row.duplicate_of - 1].verdict_a ||
+          row.verdict_b !== capture.receipts[row.duplicate_of - 1].verdict_b))) {
+      throw new Error(`Invalid private capture receipt #${index + 1}`);
+    }
+    a[row.verdict_a]++; b[row.verdict_b]++;
+    if (row.duplicate_of !== null) repeats++;
+    if (row.verdict_a !== row.verdict_b) changed.push(row.index);
+  }
+  const totals = (value, counts) => exactly(value, ["match", "differ", "fail", "identical_copies"]) &&
+    value.match === counts.MATCH && value.differ === counts.DIFFER &&
+    value.fail === counts.FAIL && value.identical_copies === repeats;
+  if (!totals(capture.totals_a, a) || !totals(capture.totals_b, b) ||
+      JSON.stringify(changed) !== JSON.stringify(capture.changed_receipts)) {
+    throw new Error("Private capture totals or changed verdicts disagree with receipt rows");
+  }
+  return capture.browser_script_sha256;
 }
 
 function scriptHash(htmlBytes) {
