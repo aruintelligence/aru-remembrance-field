@@ -29,6 +29,8 @@ The kit manifest records seven allowlisted files, exact sizes, SHA-256 values, a
 
 For a paired transition capture, use the same `create` and `check` commands with the transition JSON path. Supply A as the first reference, the same ordered receipts, B with `--reference-b`, and the optional A and B checkpoints. Run both archived auditors with `--check-transition /path/to/transition.json`. `TRANSITION CAPTURE MATCH` reproduces the recorded sides even if one contains `DIFFER` or `FAIL` rows; inspect each side's counts.
 
+The archived auditors also accept `--explain-additions` with paired references. It recomputes the [bounded added-source answer witness](addition-witness-protocol.md) from the original files; the witness sets are not stored in the capture. An edited or reordered ledger yields an explicit unavailable state.
+
 ## Trust boundary and future work
 
 The capture pins the inline browser script, not the surrounding HTML, CSS, Node or Python files, operating system, or browser runtime. The manifest records the packaged files' bytes **at packaging time**. A person who can replace a kit can also edit its manifest and checker; an internally matching kit does not prove authorship, original distribution, independent custody, time, or factual truth. Preserve a trusted copy separately if provenance matters. Raw file hashes may permit guesses of predictable private assertions. The selected originals are needed for replay, and the kit does not establish that the original set was complete.

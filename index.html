@@ -355,6 +355,7 @@
     .transition-card h3 { font-size: 0.9rem; color: #f8fafc; }
     .transition-card p { margin: 0.45rem 0 0; }
     .transition-card .transition-verdict { font: 700 0.8rem/1.5 'JetBrains Mono', monospace; color: #a5f3fc; }
+    .transition-influence { padding: 0.65rem 0.75rem; border-left: 3px solid #38bdf8; border-radius: 6px; background: rgba(8,47,73,0.5); color: #e0f2fe; font-size: 0.82rem; line-height: 1.5; }
     @media (max-width: 580px) { .comparison-grid { grid-template-columns: 1fr; } }
 
     @media (prefers-reduced-motion: reduce) {
@@ -554,7 +555,7 @@
         <input id="transition-capture-file" type="file" accept=".json,application/json" onchange="invalidateReferenceTransitionReplay()">
         <div class="ledger-actions"><button type="button" id="transition-capture-verify" onclick="verifySavedReferenceTransition()" disabled>Compare saved transition capture</button></div>
         <div id="transition-capture-verification" role="status" aria-live="polite">Trace the original files, then choose a saved transition capture to compare.</div>
-        <p>A and B are comparison labels, not verified dates. An unchanged verdict can conceal a different reason. A checkpoint checks the ordered records and next source ID under these rules; a trusted copy held separately is needed for provenance. The capture contains hashes and outcomes, not fact values, but predictable private assertions may be guessable from a hash. Neither reference proves the assertions are true or complete.</p>
+        <p>The answer-change test finds the smallest added-source sets that reproduce B's computed answer when B only adds up to six sources. It reports when edits, removals, order changes, or a larger search prevent that conclusion. A and B are comparison labels, not verified dates. An unchanged verdict can conceal a different reason. A checkpoint checks the ordered records and next source ID under these rules; a trusted copy held separately is needed for provenance. The capture contains hashes and outcomes, not fact values, but predictable private assertions may be guessable from a hash. Neither reference proves the assertions are true or complete.</p>
       </section>
     </section>
     <div class="ledger-actions">
@@ -2457,6 +2458,62 @@ function referenceReceiptTrace(receipt, a, b, ledgerChanged) {
     "The computed answer and cited sources agree across A and B under this receipt's scope.";
 }
 
+// Exact subset search for addition-only references. Filtering B's order by A's IDs
+// and a chosen subset must reconstruct A for the empty set and B for the full set.
+function referenceAddedSourceWitness(receipt, a, b) {
+  const answers = records => receipt.format === "aru-evidence-brief-receipt" ?
+    evaluateEvidenceBrief(receipt.names, records).map(row => row.answer) :
+    evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, records));
+  const target = answers(b.records);
+  if (sameEvidenceCaptureValue(answers(a.records), target)) return {status: "unchanged"};
+  const baseIds = new Set(a.records.map(record => record.id));
+  const common = b.records.filter(record => baseIds.has(record.id));
+  if (!sameFactLedger(a.records, common)) {
+    return {status: "unavailable", reason: "not-addition-only"};
+  }
+  const added = b.records.filter(record => !baseIds.has(record.id)).map(record => record.id);
+  if (added.length > 6) return {status: "unavailable", reason: "too-many-additions"};
+  const sets = [];
+  let minimumSize = null;
+  let totalSets = 0;
+  let testedSubsets = 0;
+  for (let size = 1; size <= added.length && minimumSize === null; size++) {
+    for (let mask = 1; mask < 2 ** added.length; mask++) {
+      const chosen = added.filter((_, index) => mask & (1 << index));
+      if (chosen.length !== size) continue;
+      testedSubsets++;
+      const chosenIds = new Set(chosen);
+      const hybrid = b.records.filter(record => baseIds.has(record.id) || chosenIds.has(record.id));
+      if (!sameEvidenceCaptureValue(answers(hybrid), target)) continue;
+      minimumSize = size;
+      totalSets++;
+      if (sets.length < 3) sets.push(chosen);
+    }
+  }
+  if (minimumSize === null) return {status: "unavailable", reason: "no-witness"};
+  return {status: "witness", minimum_size: minimumSize, sets,
+    total_sets: totalSets, tested_subsets: testedSubsets};
+}
+
+function referenceWitnessText(result) {
+  if (result.status === "unchanged") {
+    return "Computed answer unchanged. A verdict difference may come from cited records or the full snapshot; no added-source answer witness is claimed.";
+  }
+  if (result.status === "unavailable") {
+    return result.reason === "too-many-additions" ?
+      "Answer-change test unavailable: more than six sources were added. No partial search result is shown." :
+      result.reason === "not-addition-only" ?
+        "Answer-change test unavailable: sources were edited, removed, or reordered. The observed trace above still applies." :
+        "Answer-change test unavailable: no subset reproduced B's computed answer.";
+  }
+  const sets = result.sets.map(ids => ids.map(id => `#${id}`).join(" + ")).join("; ");
+  return `Minimum added-source set${result.total_sets === 1 ? "" : "s"} reproducing B's computed answer: ${sets}` +
+    `${result.total_sets > result.sets.length ? `; ${result.total_sets - result.sets.length} more` : ""}. ` +
+    `${result.minimum_size} source${result.minimum_size === 1 ? "" : "s"} per set; ` +
+    `${result.tested_subsets} subset${result.tested_subsets === 1 ? "" : "s"} tested. ` +
+    "This is a rule counterfactual for the supplied files, not proof of chronology, cause in the world, or truth.";
+}
+
 function downloadReferenceTransitionCapture() {
   const state = lastReferenceTransitionCapture;
   if (!state) return;
@@ -2587,7 +2644,8 @@ async function traceReferenceTransition() {
         const before = compareEvidenceToReference(receipt, a.records).match ? "MATCH" : "DIFFER";
         const after = compareEvidenceToReference(receipt, b.records).match ? "MATCH" : "DIFFER";
         rows.push({index: index + 1, before, after, duplicateOf,
-          detail: referenceReceiptTrace(receipt, a, b, !sameFactLedger(a.records, b.records))});
+          detail: referenceReceiptTrace(receipt, a, b, !sameFactLedger(a.records, b.records)),
+          influence: referenceAddedSourceWitness(receipt, a, b)});
       } catch (_) {
         if (!stillCurrent()) return;
         if (stage === "read") capturable = false;
@@ -2635,6 +2693,12 @@ async function traceReferenceTransition() {
       verdict.textContent = `A: ${row.before} → B: ${row.after}`;
       const reason = document.createElement("p"); reason.textContent = row.detail;
       card.appendChild(title); card.appendChild(verdict); card.appendChild(reason);
+      if (row.influence) {
+        const influence = document.createElement("p");
+        influence.className = "transition-influence";
+        influence.textContent = referenceWitnessText(row.influence);
+        card.appendChild(influence);
+      }
       cards.appendChild(card);
     }
     output.replaceChildren();

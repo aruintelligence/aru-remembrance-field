@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const {createHash} = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const {isDeepStrictEqual} = require("node:util");
 const {loadModel} = require("./benchmark-evidence.cjs");
 const {verifyEvidenceReceipt, verifyLedgerBaseline, verifyLedgerCheckpoint} =
   require("./verify-evidence-receipt.cjs");
@@ -137,6 +138,68 @@ function transitionCaptureFromReports(aReport, bReport) {
       .map(row => row.index)};
 }
 
+function additionWitness(a, b, receipt, model = loadModel()) {
+  const answer = records => receipt.format === "aru-evidence-brief-receipt" ?
+    model.brief(receipt.names, records).map(row => row.answer) :
+    model.resolve(receipt.question, records);
+  const target = answer(b.records);
+  if (isDeepStrictEqual(answer(a.records), target)) return {status: "unchanged"};
+  const baseIds = new Set(a.records.map(record => record.id));
+  const common = b.records.filter(record => baseIds.has(record.id));
+  if (!isDeepStrictEqual(a.records, common)) {
+    return {status: "unavailable", reason: "not-addition-only"};
+  }
+  const added = b.records.filter(record => !baseIds.has(record.id)).map(record => record.id);
+  if (added.length > 6) return {status: "unavailable", reason: "too-many-additions"};
+  const sets = [];
+  let minimumSize = null;
+  let totalSets = 0;
+  let testedSubsets = 0;
+  for (let size = 1; size <= added.length && minimumSize === null; size++) {
+    for (let mask = 1; mask < 2 ** added.length; mask++) {
+      const chosen = added.filter((_, index) => mask & (1 << index));
+      if (chosen.length !== size) continue;
+      testedSubsets++;
+      const chosenIds = new Set(chosen);
+      const hybrid = b.records.filter(record => baseIds.has(record.id) || chosenIds.has(record.id));
+      if (!isDeepStrictEqual(answer(hybrid), target)) continue;
+      minimumSize = size;
+      totalSets++;
+      if (sets.length < 3) sets.push(chosen);
+    }
+  }
+  if (minimumSize === null) return {status: "unavailable", reason: "no-witness"};
+  return {status: "witness", minimum_size: minimumSize, sets,
+    total_sets: totalSets, tested_subsets: testedSubsets};
+}
+
+function explainTransitionAdditions(referenceFile, referenceB, receiptFiles, report, other) {
+  const aBytes = readLimited(referenceFile, "Reference A");
+  const bBytes = readLimited(referenceB, "Reference B");
+  if (sha256(aBytes) !== report.reference_sha256 || sha256(bBytes) !== other.reference_sha256) {
+    throw new Error("Reference bytes changed during answer-change analysis");
+  }
+  const a = parseJSON(aBytes, "Reference A");
+  const b = parseJSON(bBytes, "Reference B");
+  const model = loadModel();
+  if (model.hash !== report.model_sha256 || model.hash !== other.model_sha256) {
+    throw new Error("Browser answer model changed during answer-change analysis");
+  }
+  return receiptFiles.map((file, index) => {
+    const bytes = readLimited(file, `Receipt #${index + 1}`);
+    if (sha256(bytes) !== report.receipts[index].sha256 ||
+        sha256(bytes) !== other.receipts[index].sha256) {
+      throw new Error("Receipt bytes changed during answer-change analysis");
+    }
+    if (report.receipts[index].verdict === "FAIL") {
+      return {index: index + 1, status: "unavailable", reason: "receipt-failed"};
+    }
+    const receipt = parseJSON(bytes, `Receipt #${index + 1}`);
+    verifyEvidenceReceipt(receipt, model);
+    return {index: index + 1, ...additionWitness(a, b, receipt, model)};
+  });
+}
+
 function parseArgs(args) {
   let checkpointFile;
   let referenceB;
@@ -144,6 +207,7 @@ function parseArgs(args) {
   let reportFile;
   let captureFile;
   let transitionFile;
+  let explainAdditions = false;
   let json = false;
   const files = [];
   for (let index = 0; index < args.length; index++) {
@@ -174,19 +238,22 @@ function parseArgs(args) {
     } else if (item === "--json") {
       if (json) throw new Error("Duplicate --json option");
       json = true;
+    } else if (item === "--explain-additions") {
+      if (explainAdditions) throw new Error("Duplicate --explain-additions option");
+      explainAdditions = true;
     } else if (item.startsWith("--")) throw new Error(`Unknown option ${item}`);
     else files.push(item);
   }
-  if (files.length < 2) throw new Error("Usage: node tools/audit-evidence-batch.cjs <reference-a.json> <receipt.json>... [--checkpoint a.json] [--reference-b b.json --checkpoint-b b-checkpoint.json --check-transition capture.json] [--json] [--check-report report.json] [--check-capture capture.json]");
-  if ((checkpointB || transitionFile) && !referenceB) throw new Error("--checkpoint-b and --check-transition require --reference-b");
+  if (files.length < 2) throw new Error("Usage: node tools/audit-evidence-batch.cjs <reference-a.json> <receipt.json>... [--checkpoint a.json] [--reference-b b.json --checkpoint-b b-checkpoint.json --check-transition capture.json --explain-additions] [--json] [--check-report report.json] [--check-capture capture.json]");
+  if ((checkpointB || transitionFile || explainAdditions) && !referenceB) throw new Error("--checkpoint-b, --check-transition, and --explain-additions require --reference-b");
   if (referenceB && (reportFile || captureFile)) throw new Error("Use --check-transition instead of a single-reference report or capture with --reference-b");
   return {referenceFile: files[0], receiptFiles: files.slice(1), checkpointFile,
-    referenceB, checkpointB, reportFile, captureFile, transitionFile, json};
+    referenceB, checkpointB, reportFile, captureFile, transitionFile, explainAdditions, json};
 }
 
 function run(args = process.argv.slice(2)) {
   const {referenceFile, receiptFiles, checkpointFile, referenceB, checkpointB,
-    reportFile, captureFile, transitionFile, json} = parseArgs(args);
+    reportFile, captureFile, transitionFile, explainAdditions, json} = parseArgs(args);
   const report = auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile});
   if (referenceB !== undefined) {
     const other = auditEvidenceBatch(referenceB, receiptFiles, {checkpointFile: checkpointB});
@@ -196,12 +263,24 @@ function run(args = process.argv.slice(2)) {
       try { assert.deepStrictEqual(transition, expected); }
       catch (_) { throw new Error("Saved transition capture differs from the recomputed references, ordered receipts, outcomes, or browser script"); }
     }
-    if (json) console.log(JSON.stringify(transition, null, 2));
+    const influence = explainAdditions ?
+      explainTransitionAdditions(referenceFile, referenceB, receiptFiles, report, other) : null;
+    if (json) console.log(JSON.stringify(influence ? {transition, answer_influence: influence} : transition, null, 2));
     else {
       for (const [label, audit] of [["A", report], ["B", other]]) {
         console.log(`${label}: ${audit.totals.match} MATCH, ${audit.totals.differ} DIFFER, ${audit.totals.fail} FAIL.`);
       }
       console.log(`${transition.changed_receipts.length} changed receipt verdicts.`);
+      if (influence) {
+        for (const row of influence) {
+          if (row.status === "witness") console.log(`#${row.index} answer witness: ${row.minimum_size} added source${row.minimum_size === 1 ? "" : "s"} per minimum set; ` +
+            `${row.sets.map(ids => ids.map(id => `#${id}`).join(" + ")).join("; ")}` +
+            `${row.total_sets > row.sets.length ? `; ${row.total_sets - row.sets.length} more` : ""}; ` +
+            `${row.tested_subsets} subset${row.tested_subsets === 1 ? "" : "s"} tested.`);
+          else console.log(`#${row.index} answer witness: ${row.status}${row.reason ? ` (${row.reason})` : ""}.`);
+        }
+        console.log("Witnesses model only added sources under these rules; they do not establish chronology, authorship, or truth.");
+      }
       if (transitionFile !== undefined) console.log("TRANSITION CAPTURE MATCH: both supplied references, ordered files, outcomes, and browser script were reproduced. Inspect A and B counts independently.");
       console.log("A and B are labels, not verified dates; consistency does not prove origin, completeness, or factual truth.");
     }
@@ -243,4 +322,5 @@ if (require.main === module) {
   catch (error) { console.error(`FAIL: ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = {auditEvidenceBatch, browserCaptureFromReport, transitionCaptureFromReports, run};
+module.exports = {auditEvidenceBatch, browserCaptureFromReport, transitionCaptureFromReports,
+  additionWitness, explainTransitionAdditions, run};

@@ -311,6 +311,72 @@ def transition_from_reports(a_report, b_report):
                                  if row["verdict"] != other["verdict"]]}
 
 
+def addition_witness(a, b, receipt):
+    def answers(records):
+        if receipt["format"] == "aru-evidence-brief-receipt":
+            return [lookup(name, records) for name in receipt["names"]]
+        return answer(receipt["question"], records)
+
+    target = answers(b["records"])
+    if same(answers(a["records"]), target):
+        return {"status": "unchanged"}
+    base_ids = {record["id"] for record in a["records"]}
+    common = [record for record in b["records"] if record["id"] in base_ids]
+    if not same(a["records"], common):
+        return {"status": "unavailable", "reason": "not-addition-only"}
+    added = [record["id"] for record in b["records"] if record["id"] not in base_ids]
+    if len(added) > 6:
+        return {"status": "unavailable", "reason": "too-many-additions"}
+    sets, minimum_size, total_sets, tested_subsets = [], None, 0, 0
+    for size in range(1, len(added) + 1):
+        for mask in range(1, 1 << len(added)):
+            chosen = [identifier for index, identifier in enumerate(added) if mask & (1 << index)]
+            if len(chosen) != size:
+                continue
+            tested_subsets += 1
+            chosen_ids = set(chosen)
+            hybrid = [record for record in b["records"] if record["id"] in base_ids or
+                      record["id"] in chosen_ids]
+            if not same(answers(hybrid), target):
+                continue
+            minimum_size = size
+            total_sets += 1
+            if len(sets) < 3:
+                sets.append(chosen)
+        if minimum_size is not None:
+            break
+    if minimum_size is None:
+        return {"status": "unavailable", "reason": "no-witness"}
+    return {"status": "witness", "minimum_size": minimum_size, "sets": sets,
+            "total_sets": total_sets, "tested_subsets": tested_subsets}
+
+
+def explain_transition_additions(a_file, b_file, receipt_files, a_report, b_report):
+    a_bytes = read_limited(a_file, "Reference A")
+    b_bytes = read_limited(b_file, "Reference B")
+    require(sha256(a_bytes) == a_report["reference_sha256"] and
+            sha256(b_bytes) == b_report["reference_sha256"],
+            "reference bytes changed during answer-change analysis")
+    require(script_sha256() == a_report["browser_script_sha256"] == b_report["browser_script_sha256"] and
+            sha256(Path(__file__).read_bytes()) == a_report["python_verifier_sha256"] ==
+            b_report["python_verifier_sha256"],
+            "verifier code changed during answer-change analysis")
+    a, b = parse(a_bytes), parse(b_bytes)
+    rows = []
+    for index, file in enumerate(receipt_files):
+        data = read_limited(file, f"Receipt #{index + 1}")
+        require(sha256(data) == a_report["receipts"][index]["sha256"] and
+                sha256(data) == b_report["receipts"][index]["sha256"],
+                "receipt bytes changed during answer-change analysis")
+        if a_report["receipts"][index]["verdict"] == "FAIL":
+            rows.append({"index": index + 1, "status": "unavailable", "reason": "receipt-failed"})
+            continue
+        receipt = parse(data)
+        verify_receipt(receipt)
+        rows.append({"index": index + 1, **addition_witness(a, b, receipt)})
+    return rows
+
+
 def run(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("reference")
@@ -319,12 +385,13 @@ def run(argv=None):
     parser.add_argument("--reference-b")
     parser.add_argument("--checkpoint-b")
     parser.add_argument("--check-transition")
+    parser.add_argument("--explain-additions", action="store_true")
     parser.add_argument("--check-capture")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
-        require(not (args.checkpoint_b or args.check_transition) or args.reference_b,
-                "--checkpoint-b and --check-transition require --reference-b")
+        require(not (args.checkpoint_b or args.check_transition or args.explain_additions) or args.reference_b,
+                "--checkpoint-b, --check-transition, and --explain-additions require --reference-b")
         require(not args.reference_b or not args.check_capture,
                 "use --check-transition instead of --check-capture with --reference-b")
         report = audit(args.reference, args.receipts, args.checkpoint)
@@ -335,14 +402,33 @@ def run(argv=None):
                 expected = parse(read_limited(args.check_transition, "Transition capture"))
                 require(same(expected, transition),
                         "transition capture differs from independently recomputed files, outcomes, or browser script")
+            influence = (explain_transition_additions(args.reference, args.reference_b,
+                         args.receipts, report, other) if args.explain_additions else None)
             if args.json:
-                print(json.dumps(transition, indent=2, ensure_ascii=False))
+                print(json.dumps({"transition": transition, "answer_influence": influence}
+                      if influence is not None else transition, indent=2, ensure_ascii=False))
             else:
                 for label, side in (("A", report), ("B", other)):
                     totals = side["totals"]
                     print(f"{label}: {totals['match']} MATCH, {totals['differ']} DIFFER, "
                           f"{totals['fail']} FAIL.")
                 print(f"{len(transition['changed_receipts'])} changed receipt verdicts.")
+                if influence is not None:
+                    for row in influence:
+                        if row["status"] == "witness":
+                            sets = "; ".join(" + ".join(f"#{identifier}" for identifier in group)
+                                             for group in row["sets"])
+                            more = row["total_sets"] - len(row["sets"])
+                            print(f"#{row['index']} answer witness: {row['minimum_size']} added "
+                                  f"source{'s' if row['minimum_size'] != 1 else ''} "
+                                  f"per minimum set; {sets}" + (f"; {more} more" if more else "") +
+                                  f"; {row['tested_subsets']} "
+                                  f"subset{'s' if row['tested_subsets'] != 1 else ''} tested.")
+                        else:
+                            print(f"#{row['index']} answer witness: {row['status']}" +
+                                  (f" ({row['reason']})" if row.get("reason") else "") + ".")
+                    print("Witnesses model only added sources under these rules; they do not "
+                          "establish chronology, authorship, or truth.")
                 if args.check_transition:
                     print("TRANSITION CAPTURE MATCH: independent Python replay agrees. "
                           "Inspect A and B counts independently.")
