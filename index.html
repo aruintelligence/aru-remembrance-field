@@ -552,7 +552,7 @@
         <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/dual-review-protocol.md">See the reviewer command and result format</a>
         <p>Test the checkers themselves with a seeded, synthetic boundary challenge. It found a Unicode input where their answer rules disagreed; a passing run only covers the generated cases.</p>
         <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/verifier-boundary-challenge.md">Reproduce the verifier boundary challenge</a>
-        <p>A capture pins the page script, not the browser's Unicode runtime. The reviewer checks names under its own Node and Python environments and withholds a conclusion if those disagree.</p>
+      <p>New captures bind a digest of how this browser normalized the selected evidence names. The reviewer checks those same names under Node and Python and withholds a conclusion if either differs. Older captures remain readable but cannot recover the original browser's runtime. This covers selected, bounded names, not every possible Unicode string.</p>
         <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/runtime-portability-gate.md">See the runtime compatibility example</a>
       </aside>
       <section class="evidence-question" id="reference-transition">
@@ -2475,6 +2475,37 @@ async function evidenceAuditSHA256(bytes) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
+// Commit to the selected strings' interpretation under this browser runtime.
+// The selected originals' byte hashes bind the raw strings separately.
+async function evidenceNormalizationProfile(values) {
+  const names = new Set();
+  for (const value of values) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    for (const row of Array.isArray(value.records) && value.records.length <= 100 ?
+      value.records : []) {
+      if (typeof row?.key === "string" && row.key.length <= 500) names.add(row.key);
+    }
+    if (typeof value.question === "string" && value.question.length <= 500) names.add(value.question);
+    for (const name of Array.isArray(value.names) && value.names.length <= 8 ?
+      value.names : []) {
+      if (typeof name === "string" && name.length <= 500) names.add(name);
+    }
+  }
+  if (names.size > 2500) throw new Error("Too many selected strings.");
+  const encoder = new TextEncoder();
+  const chunks = [encoder.encode("aru-selected-normalization-v1\n")];
+  for (const name of names) {
+    const bytes = encoder.encode(normalizeFactKey(name));
+    const length = new Uint8Array(4);
+    new DataView(length.buffer).setUint32(0, bytes.length, false);
+    chunks.push(length, bytes);
+  }
+  const joined = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length; }
+  return evidenceAuditSHA256(joined);
+}
+
 function downloadEvidenceBatchCapture() {
   const capture = lastEvidenceBatchCapture;
   if (!capture) return;
@@ -2652,8 +2683,10 @@ async function sealReferenceTransition(transition, keyBytes) {
     commit("reference-a", 0, a.reference_sha256), commit("reference-b", 0, b.reference_sha256),
     commit("checkpoint-a", 0, a.checkpoint_sha256), commit("checkpoint-b", 0, b.checkpoint_sha256),
     ...a.receipts.map(row => commit("receipt", row.index, row.sha256))]);
-  return {format: "aru-evidence-sealed-reference-transition-capture", version: 1,
+  return {format: "aru-evidence-sealed-reference-transition-capture", version: 2,
     browser_script_sha256: a.browser_script_sha256,
+    normalization_a_commitment: await commit("normalization-a", 0, a.normalization_sha256),
+    normalization_b_commitment: await commit("normalization-b", 0, b.normalization_sha256),
     reference_a_commitment: referenceA, reference_b_commitment: referenceB,
     checkpoint_a_commitment: checkpointA, checkpoint_b_commitment: checkpointB,
     receipts: a.receipts.map((row, index) => ({index: row.index, commitment: receipts[index],
@@ -2731,13 +2764,14 @@ async function verifySealedTransition() {
     const capture = parseEvidenceAuditJSON(captureData.raw, "Private capture");
     const opening = parseEvidenceAuditJSON(keyData.raw, "Opening key");
     const keyBytes = transitionOpeningKeyBytes(opening);
-    if (capture?.format !== "aru-evidence-sealed-reference-transition-capture" || capture.version !== 1) {
+    if (capture?.format !== "aru-evidence-sealed-reference-transition-capture" || ![1, 2].includes(capture.version)) {
       output.textContent = "FAIL: Unsupported private capture format or version.";
       return;
     }
     const expected = await sealReferenceTransition(state.payload, keyBytes);
     if (!stillCurrent()) return;
-    if (!sameEvidenceCaptureValue(capture, expected)) {
+    const {normalization_a_commitment, normalization_b_commitment, ...oldPrivate} = expected;
+    if (!sameEvidenceCaptureValue(capture, capture.version === 1 ? {...oldPrivate, version: 1} : expected)) {
       output.textContent = "DIFFER: Private capture or opening key does not reproduce both references, checkpoints, ordered receipts, verdicts, totals, and browser script. Check the originals, key, and archived page version.";
       return;
     }
@@ -2746,7 +2780,9 @@ async function verifySealedTransition() {
     output.textContent = `PRIVATE CAPTURE MATCH: ${expected.changed_receipts.length} verdict changes. ` +
       `A: ${a.match} MATCH, ${a.differ} DIFFER, ${a.fail} FAIL. ` +
       `B: ${b.match} MATCH, ${b.differ} DIFFER, ${b.fail} FAIL. ` +
-      "This is consistency with the supplied files, key, and script, including any DIFFER or FAIL. It does not prove origin, custody, completeness, chronology, or factual truth.";
+      (capture.version === 1 ? "Older private capture: browser runtime was not recorded. " :
+        "Selected-name browser runtime profile agrees. ") +
+      "This is consistency with the supplied files and rules, including any DIFFER or FAIL. It does not prove origin, custody, completeness, chronology, or factual truth.";
   } catch (error) {
     if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not compare the private capture."}`;
   }
@@ -2770,11 +2806,18 @@ async function verifySavedReferenceTransition() {
     const {raw} = await readEvidenceAuditBytes(file, "Saved transition capture");
     if (!stillCurrent()) return;
     const saved = parseEvidenceAuditJSON(raw, "Saved transition capture");
-    if (saved?.format !== "aru-evidence-reference-transition-capture" || saved.version !== 1) {
+    if (saved?.format !== "aru-evidence-reference-transition-capture" || ![1, 2].includes(saved.version)) {
       output.textContent = "FAIL: Unsupported transition capture format or version.";
       return;
     }
-    if (!sameEvidenceCaptureValue(saved, state.payload)) {
+    const olderSide = side => {
+      const {normalization_sha256, ...old} = side;
+      return {...old, version: 2};
+    };
+    const expected = saved.version === 1 ? {...state.payload, version: 1,
+      capture_a: olderSide(state.payload.capture_a),
+      capture_b: olderSide(state.payload.capture_b)} : state.payload;
+    if (!sameEvidenceCaptureValue(saved, expected)) {
       output.textContent = "DIFFER: The saved transition capture does not reproduce both references, ordered receipt bytes and verdicts, totals, and browser script fingerprint. Recheck all selected originals and the archived page version.";
       return;
     }
@@ -2783,7 +2826,9 @@ async function verifySavedReferenceTransition() {
     output.textContent = `TRANSITION CAPTURE MATCH: ${state.payload.changed_receipts.length} verdict changes. ` +
       `A: ${a.match} MATCH, ${a.differ} DIFFER, ${a.fail} FAIL. ` +
       `B: ${b.match} MATCH, ${b.differ} DIFFER, ${b.fail} FAIL. ` +
-      "This reproduces the selected files and browser script, including any DIFFER or FAIL results. It does not prove origin, chronology, completeness, or factual truth.";
+      (saved.version === 1 ? "Older capture: browser runtime was not recorded. " :
+        "Selected-name browser runtime profiles agree. ") +
+      "This reproduces the selected files and rules, including any DIFFER or FAIL results. It does not prove origin, chronology, completeness, or factual truth.";
   } catch (error) {
     if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not read the saved transition capture."}`;
   }
@@ -2857,6 +2902,7 @@ async function traceReferenceTransition() {
       }
     }
     const changes = referenceLedgerChanges(a, b);
+    const selectedValues = [a, b];
     const rows = [];
     const receiptBytes = [];
     const seenText = new Map();
@@ -2871,6 +2917,7 @@ async function traceReferenceTransition() {
         duplicateOf = firstIdenticalReceipt(seenText, raw, bytes, index + 1) ?? null;
         stage = "parse";
         const receipt = parseEvidenceAuditJSON(raw, "Receipt");
+        selectedValues.push(receipt);
         stage = "format";
         if (!["aru-evidence-question-receipt", "aru-evidence-answer-excerpt",
               "aru-evidence-brief-receipt"].includes(receipt?.format)) throw new Error("Unsupported format");
@@ -2957,7 +3004,10 @@ async function traceReferenceTransition() {
           bCheckpointData ? evidenceAuditSHA256(bCheckpointData.bytes) : null,
           ...receiptBytes.map(evidenceAuditSHA256)]);
       if (!stillCurrent()) return;
-      const makeCapture = (referenceSHA, checkpointSHA, verdictField) => {
+      const profileA = await evidenceNormalizationProfile([a, ...selectedValues.slice(2)]);
+      const profileB = await evidenceNormalizationProfile([b, ...selectedValues.slice(2)]);
+      if (!stillCurrent()) return;
+      const makeCapture = (referenceSHA, checkpointSHA, verdictField, normalizationSHA) => {
         const totals = {match: 0, differ: 0, fail: 0, identical_copies: 0};
         const receipts = rows.map((row, index) => {
           totals[row[verdictField].toLowerCase()]++;
@@ -2965,13 +3015,14 @@ async function traceReferenceTransition() {
           return {index: row.index, sha256: receiptSHAs[index],
             verdict: row[verdictField], duplicate_of: row.duplicateOf};
         });
-        return {format: "aru-evidence-browser-batch-capture", version: 2,
+        return {format: "aru-evidence-browser-batch-capture", version: 3,
           browser_script_sha256: scriptSHA, reference_sha256: referenceSHA,
+          normalization_sha256: normalizationSHA,
           checkpoint_sha256: checkpointSHA, receipts, totals};
       };
-      const payload = {format: "aru-evidence-reference-transition-capture", version: 1,
-        capture_a: makeCapture(aSHA, aCheckpointSHA, "before"),
-        capture_b: makeCapture(bSHA, bCheckpointSHA, "after"),
+      const payload = {format: "aru-evidence-reference-transition-capture", version: 2,
+        capture_a: makeCapture(aSHA, aCheckpointSHA, "before", profileA),
+        capture_b: makeCapture(bSHA, bCheckpointSHA, "after", profileB),
         changed_receipts: rows.filter(row => row.before !== row.after).map(row => row.index)};
       lastReferenceTransitionCapture = {...selection, payload};
       document.getElementById("sealed-prepare").disabled = false;
@@ -3017,8 +3068,11 @@ function evidenceCaptureFindings(saved, expected) {
     !Array.isArray(actual) && Object.keys(actual).length === Object.keys(model).length &&
     Object.keys(model).every(key => Object.prototype.hasOwnProperty.call(actual, key));
   if (!sameFields(saved, expected)) findings.push("Capture structure differs: top-level fields are missing or unexpected.");
-  if (expected.version === 2 && saved.browser_script_sha256 !== expected.browser_script_sha256) {
+  if (expected.version >= 2 && saved.browser_script_sha256 !== expected.browser_script_sha256) {
     findings.push("The browser verifier script fingerprint differs. An older capture may require the archived page version.");
+  }
+  if (expected.version === 3 && saved.normalization_sha256 !== expected.normalization_sha256) {
+    findings.push("The selected evidence names normalize differently under this browser runtime.");
   }
   if (saved.reference_sha256 !== expected.reference_sha256) {
     findings.push("Reference file bytes differ. Choose the original reference used for the capture.");
@@ -3109,12 +3163,14 @@ async function verifySavedBatchCapture() {
     const saved = parseEvidenceAuditJSON(raw, "Saved capture");
     if (!saved || typeof saved !== "object" || Array.isArray(saved) ||
         saved.format !== "aru-evidence-browser-batch-capture" ||
-        (saved.version !== 1 && saved.version !== 2)) {
+        ![1, 2, 3].includes(saved.version)) {
       output.textContent = "FAIL: Unsupported saved capture format or version.";
       return;
     }
-    const {browser_script_sha256, ...legacy} = audit.payload;
-    const expected = saved.version === 2 ? audit.payload : {...legacy, version: 1};
+    const {browser_script_sha256, normalization_sha256, ...legacy} = audit.payload;
+    const expected = saved.version === 3 ? audit.payload :
+      saved.version === 2 ? {...legacy, browser_script_sha256, version: 2} :
+        {...legacy, version: 1};
     const findings = evidenceCaptureFindings(saved, expected);
     if (findings.length) {
       showEvidenceCaptureFindings(output, findings);
@@ -3123,7 +3179,8 @@ async function verifySavedBatchCapture() {
     const totals = audit.payload.totals;
     output.textContent = `CAPTURE MATCH: Saved capture reproduced from the selected files: ${totals.match} MATCH, ${totals.differ} DIFFER, ${totals.fail} FAIL. ` +
       (saved.version === 1 ? "Legacy v1 capture has no browser script fingerprint. " :
-        "Browser verifier script fingerprint agrees. ") +
+        saved.version === 2 ? "Browser script agrees; original runtime was not recorded. " :
+          "Browser script and selected-name runtime profile agree. ") +
       (totals.differ || totals.fail ? "The audit contains DIFFER or FAIL results; review those rows. " :
         "All audited receipts matched this selected reference. ") +
       "This consistency check does not prove origin, completeness, or factual truth.";
@@ -3182,6 +3239,7 @@ async function runEvidenceBatchAudit() {
       }
     }
     const seenText = new Map();
+    const selectedValues = [baseline];
     const rows = [];
     const receiptBytes = [];
     let capturable = true;
@@ -3198,6 +3256,7 @@ async function runEvidenceBatchAudit() {
         duplicateOf = firstIdenticalReceipt(seenText, raw, bytes, index + 1);
         if (duplicateOf !== undefined) repeats++;
         const receipt = parseEvidenceAuditJSON(raw, "File");
+        selectedValues.push(receipt);
         if (!["aru-evidence-question-receipt", "aru-evidence-answer-excerpt",
               "aru-evidence-brief-receipt"].includes(receipt?.format)) {
           throw new Error("Only question, excerpt, or brief receipts can be audited.");
@@ -3269,9 +3328,12 @@ async function runEvidenceBatchAudit() {
         checkpointData ? evidenceAuditSHA256(checkpointData.bytes) : null,
         ...receiptBytes.map(evidenceAuditSHA256)]);
       if (!stillCurrent()) return;
+      const normalizationSHA = await evidenceNormalizationProfile(selectedValues);
+      if (!stillCurrent()) return;
       const payload = {
-        format: "aru-evidence-browser-batch-capture", version: 2,
+        format: "aru-evidence-browser-batch-capture", version: 3,
         browser_script_sha256: scriptSHA,
+        normalization_sha256: normalizationSHA,
         reference_sha256: referenceSHA, checkpoint_sha256: checkpointSHA,
         receipts: rows.map((row, index) => ({index: row.number, sha256: receiptSHAs[index],
           verdict: row.verdict, duplicate_of: row.duplicateOf ?? null})),

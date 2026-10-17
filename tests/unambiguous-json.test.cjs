@@ -85,7 +85,7 @@ test('ambiguous reference, checkpoint, capture, private key, and kit input fail 
     '"version": 1', '"version": 0, "version": 1'));
   const captureRaw = fs.readFileSync(fixture('example-evidence-browser-batch-capture.json'), 'utf8');
   const ambiguousCapture = save('capture.json', captureRaw.replace(
-    '"version": 2', '"version": 1, "version": 2'));
+    '"version": 3', '"version": 1, "version": 3'));
   const aReport = auditEvidenceBatch(reference, [receipt]);
   const bReport = auditEvidenceBatch(otherReference, [receipt]);
   const key = {format: 'aru-evidence-transition-opening-key', version: 1,
@@ -118,6 +118,6 @@ test('ambiguous reference, checkpoint, capture, private key, and kit input fail 
   const created = run(process.execPath, 'verifier-kit.cjs', ['create', cleanCapture, kit]);
   assert.equal(created.status, 0, created.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(kit, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.files.length, 10);
+  assert.equal(manifest.files.length, 11);
   assert.ok(manifest.files.some(row => row.path === 'tools/unambiguous-json.cjs'));
 }));

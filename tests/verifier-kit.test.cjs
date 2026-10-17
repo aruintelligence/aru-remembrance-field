@@ -31,13 +31,13 @@ test('archived kit replays a capture through Node and independent Python outside
   assert.equal(created.status, 0, created.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(kit, 'manifest.json'), 'utf8'));
   assert.equal(manifest.browser_script_sha256, JSON.parse(fs.readFileSync(capture, 'utf8')).browser_script_sha256);
-  assert.equal(manifest.files.length, 10);
+  assert.equal(manifest.files.length, 11);
   assert.deepEqual(fs.readdirSync(kit).sort(), ['README.md', 'index.html', 'manifest.json', 'tools']);
   assert.equal(fs.existsSync(path.join(kit, 'research')), false);
   assert.equal(fs.existsSync(path.join(kit, 'capture.json')), false);
   const verified = node([path.join(kit, 'tools', 'verifier-kit.cjs'), 'check', kit, capture], dir);
   assert.equal(verified.status, 0, verified.stderr);
-  assert.match(verified.stdout, /KIT MATCH: 10 archived files.*supplied capture/);
+  assert.match(verified.stdout, /KIT MATCH: 11 archived files.*supplied capture/);
   const args = [reference, ...receipts, '--checkpoint', checkpoint, '--check-capture', capture];
   const replay = node([path.join(kit, 'tools', 'audit-evidence-batch.cjs'), ...args], dir);
   assert.equal(replay.status, 0, replay.stderr);
@@ -125,7 +125,7 @@ test('creation refuses a mismatched or legacy capture before writing and never r
   const {browser_script_sha256, ...old} = altered;
   const legacy = path.join(dir, 'legacy.json');
   fs.writeFileSync(legacy, JSON.stringify({...old, version: 1}));
-  assert.match(node([kitTool, 'create', legacy, refused]).stderr, /version 2 browser batch capture/);
+  assert.match(node([kitTool, 'create', legacy, refused]).stderr, /version 2 or 3 browser batch capture/);
   assert.equal(fs.existsSync(refused), false);
 
   fs.mkdirSync(refused);

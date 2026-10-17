@@ -62,6 +62,7 @@ test('tampering, extra fields, missing or reordered inputs, and a legacy nested 
     {...original, changed_receipts: []},
     {...original, capture_b: {...original.capture_b, totals: {...original.capture_b.totals, match: 2}}},
     {...original, capture_a: {...original.capture_a, browser_script_sha256: '0'.repeat(64)}},
+    {...original, capture_a: {...original.capture_a, normalization_sha256: '0'.repeat(64)}},
     {...original, capture_b: {...original.capture_b, receipts: [
       {...original.capture_b.receipts[0], verdict: 'MATCH'}, original.capture_b.receipts[1]]}},
     {...original, capture_a: {...original.capture_a, version: 1}},

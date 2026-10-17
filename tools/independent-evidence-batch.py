@@ -88,6 +88,35 @@ def normalized(name):
     return re.sub(SPACE_RUN, " ", unicodedata.normalize("NFKC", name).strip(JS_SPACE)).lower()
 
 
+def normalization_profile(values):
+    names = dict()
+    for value in values:
+        if type(value) is not dict:
+            continue
+        records = value.get("records")
+        if type(records) is list and len(records) <= 100:
+            for row in records:
+                if type(row) is dict and type(row.get("key")) is str and length(row["key"]) <= 500:
+                    names[row["key"]] = None
+        question = value.get("question")
+        if type(question) is str and length(question) <= 500:
+            names[question] = None
+        brief_names = value.get("names")
+        if type(brief_names) is list and len(brief_names) <= 8:
+            for name in brief_names:
+                if type(name) is str and length(name) <= 500:
+                    names[name] = None
+    require(len(names) <= 2500, "too many selected strings")
+    digest = hashlib.sha256(b"aru-selected-normalization-v1\n")
+    for name in names:
+        # TextEncoder/Buffer replace an unpaired UTF-16 surrogate with U+FFFD.
+        text = re.sub(r"[\ud800-\udfff]", "\ufffd", normalized(name))
+        data = text.encode("utf-8")
+        digest.update(len(data).to_bytes(4, "big"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
 def records_valid(records):
     require(type(records) is list and len(records) <= 100, "invalid record count")
     seen = set()
@@ -274,6 +303,7 @@ def audit(reference_file, receipt_files, checkpoint_file=None):
     first = {}
     totals = {"match": 0, "differ": 0, "fail": 0, "identical_copies": 0}
     rows = []
+    selected = [reference]
     for index, data in enumerate(file_bytes, 1):
         duplicate = first.setdefault(data, index)
         duplicate = duplicate if duplicate != index else None
@@ -285,6 +315,7 @@ def audit(reference_file, receipt_files, checkpoint_file=None):
         except (ValueError, UnicodeError, RecursionError):
             pass
         else:
+            selected.append(receipt)
             reason = "unsupported-format"
             if type(receipt) is dict and type(receipt.get("format")) is str and receipt["format"] in FORMATS:
                 reason = "replay-failed"
@@ -303,29 +334,32 @@ def audit(reference_file, receipt_files, checkpoint_file=None):
             "browser_script_sha256": script_sha256(),
             "reference_sha256": sha256(reference_bytes),
             "checkpoint_sha256": sha256(checkpoint_bytes) if checkpoint_bytes is not None else None,
+            "normalization_sha256": normalization_profile(selected),
             "receipts": rows, "totals": totals}
 
 
 def capture_from_report(report, version):
-    require(int_value(version) and version in (1, 2), "unsupported capture version")
+    require(int_value(version) and version in (1, 2, 3), "unsupported capture version")
     return {"format": "aru-evidence-browser-batch-capture", "version": version,
-            **({"browser_script_sha256": report["browser_script_sha256"]} if version == 2 else {}),
+            **({"browser_script_sha256": report["browser_script_sha256"]} if version >= 2 else {}),
+            **({"normalization_sha256": report["normalization_sha256"]} if version == 3 else {}),
             "reference_sha256": report["reference_sha256"],
             "checkpoint_sha256": report["checkpoint_sha256"],
             "receipts": [{key: row[key] for key in ("index", "sha256", "verdict", "duplicate_of")}
                          for row in report["receipts"]], "totals": report["totals"]}
 
 
-def transition_from_reports(a_report, b_report):
-    a = capture_from_report(a_report, 2)
-    b = capture_from_report(b_report, 2)
+def transition_from_reports(a_report, b_report, version=2):
+    require(version in (1, 2), "unsupported transition capture version")
+    a = capture_from_report(a_report, 2 if version == 1 else 3)
+    b = capture_from_report(b_report, 2 if version == 1 else 3)
     require(a["browser_script_sha256"] == b["browser_script_sha256"] and
             len(a["receipts"]) == len(b["receipts"]) and
             all(left["sha256"] == right["sha256"] and
                 left["duplicate_of"] == right["duplicate_of"]
                 for left, right in zip(a["receipts"], b["receipts"])),
             "transition sides must use the same verifier and ordered receipt bytes")
-    return {"format": "aru-evidence-reference-transition-capture", "version": 1,
+    return {"format": "aru-evidence-reference-transition-capture", "version": version,
             "capture_a": a, "capture_b": b,
             "changed_receipts": [row["index"] for row, other in zip(a["receipts"], b["receipts"])
                                  if row["verdict"] != other["verdict"]]}
@@ -351,8 +385,12 @@ def sealed_transition_from_capture(transition, key_bytes):
         message = f"aru-sealed-transition-v1\n{role}\n{index}\n{digest}".encode("ascii")
         return hmac.new(key_bytes, message, hashlib.sha256).hexdigest()
 
-    return {"format": "aru-evidence-sealed-reference-transition-capture", "version": 1,
+    version = transition["version"]
+    return {"format": "aru-evidence-sealed-reference-transition-capture", "version": version,
             "browser_script_sha256": a["browser_script_sha256"],
+            **({"normalization_a_commitment": commit("normalization-a", 0, a["normalization_sha256"]),
+                "normalization_b_commitment": commit("normalization-b", 0, b["normalization_sha256"])}
+               if version == 2 else {}),
             "reference_a_commitment": commit("reference-a", 0, a["reference_sha256"]),
             "reference_b_commitment": commit("reference-b", 0, b["reference_sha256"]),
             "checkpoint_a_commitment": commit("checkpoint-a", 0, a["checkpoint_sha256"]),
@@ -459,16 +497,17 @@ def run(argv=None):
         report = audit(args.reference, args.receipts, args.checkpoint)
         if args.reference_b:
             other = audit(args.reference_b, args.receipts, args.checkpoint_b)
-            transition = transition_from_reports(report, other)
+            chosen = args.check_transition or args.check_sealed
+            expected = parse(read_limited(chosen, "Transition capture")) if chosen else None
+            transition = transition_from_reports(report, other,
+                                                 1 if type(expected) is dict and expected.get("version") == 1 else 2)
             if args.check_transition:
-                expected = parse(read_limited(args.check_transition, "Transition capture"))
                 require(same(expected, transition),
                         "transition capture differs from independently recomputed files, outcomes, or browser script")
             sealed = (sealed_transition_from_capture(transition,
                       opening_key_bytes(parse(read_limited(args.opening_key, "Opening key"))))
                       if args.check_sealed else None)
             if sealed is not None:
-                expected = parse(read_limited(args.check_sealed, "Sealed transition capture"))
                 require(same(expected, sealed),
                         "sealed transition capture differs from independently recomputed files, outcomes, or browser script")
             influence = (explain_transition_additions(args.reference, args.reference_b,
@@ -500,9 +539,13 @@ def run(argv=None):
                           "establish chronology, authorship, or truth.")
                 if args.check_transition:
                     print("TRANSITION CAPTURE MATCH: independent Python replay agrees. "
+                          + ("Selected-name profiles agree. " if transition["version"] == 2 else
+                             "Older capture has no originating browser normalization profile. ") +
                           "Inspect A and B counts independently.")
                 if sealed is not None:
                     print("SEALED TRANSITION MATCH: independent Python replay agrees. "
+                          + ("Selected-name profiles agree. " if transition["version"] == 2 else
+                             "Older capture has no originating browser normalization profile. ") +
                           "Inspect A and B counts independently.")
                 print("A and B are labels, not verified dates; consistency does not prove "
                       "origin, completeness, or factual truth.")
@@ -526,7 +569,8 @@ def run(argv=None):
             if args.check_capture:
                 print("CAPTURE MATCH: independent Python replay agrees." +
                       (" Legacy v1 has no script fingerprint." if version == 1 else
-                       " Browser script fingerprint agrees."))
+                       " Browser script fingerprint agrees; original runtime is unbound." if version == 2 else
+                       " Browser script and selected-name normalization profile agree."))
             print("This checks the supplied files under deterministic rules; it does not prove origin or truth.")
         return 0 if args.check_capture or not (totals["differ"] or totals["fail"]) else 1
     except (AuditError, OSError, ValueError, UnicodeError, RecursionError) as error:

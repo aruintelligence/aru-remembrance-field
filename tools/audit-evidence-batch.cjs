@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {isDeepStrictEqual} = require("node:util");
 const {loadModel} = require("./benchmark-evidence.cjs");
+const {selectedNames, profileHash} = require("./normalization-profile.cjs");
 const {parseUnambiguousJSON} = require("./unambiguous-json.cjs");
 const {verifyEvidenceReceipt, verifyLedgerBaseline, verifyLedgerCheckpoint} =
   require("./verify-evidence-receipt.cjs");
@@ -73,6 +74,7 @@ function auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile} = {}) 
     throw new Error("Selected receipts exceed the 4 MiB combined limit");
   }
   const firstCopies = new Map();
+  const selected = [baseline];
   const totals = {match: 0, differ: 0, fail: 0, identical_copies: 0};
   const receipts = receiptBytes.map((bytes, index) => {
     const digest = sha256(bytes);
@@ -86,6 +88,7 @@ function auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile} = {}) 
     let reason = "invalid-json";
     try {
       const receipt = parseJSON(bytes, `Receipt #${index + 1}`);
+      selected.push(receipt);
       reason = "unsupported-format";
       if (!ANSWER_FORMATS.has(receipt?.format)) throw new Error("Unsupported answer receipt");
       reason = "replay-failed";
@@ -97,15 +100,17 @@ function auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile} = {}) 
     totals[verdict.toLowerCase()]++;
     return {index: index + 1, sha256: digest, verdict, reason, duplicate_of: duplicateOf};
   });
-  return {
+  const report = {
     format: "aru-evidence-batch-audit", version: 1,
     model_sha256: model.hash,
     verifier_sha256: sha256(fs.readFileSync(require.resolve("./verify-evidence-receipt.cjs"))),
     auditor_sha256: sha256(fs.readFileSync(__filename)),
     reference_sha256: sha256(referenceBytes),
     checkpoint_sha256: checkpointBytes === null ? null : sha256(checkpointBytes),
-    receipts, totals
+    receipts, totals,
+    normalization_sha256: profileHash(selectedNames(selected), model.normalize)
   };
+  return report;
 }
 
 function browserScriptSHA256() {
@@ -117,11 +122,15 @@ function browserScriptSHA256() {
   return sha256(Buffer.from(script[1], "utf8"));
 }
 
-function browserCaptureFromReport(report, version = 2) {
-  if (version !== 1 && version !== 2) throw new Error("Unsupported browser capture version");
+function browserCaptureFromReport(report, version = 3) {
+  if (![1, 2, 3].includes(version)) throw new Error("Unsupported browser capture version");
+  if (version === 3 && !/^[0-9a-f]{64}$/.test(report.normalization_sha256)) {
+    throw new Error("Version 3 capture requires a selected-name normalization profile");
+  }
   return {
     format: "aru-evidence-browser-batch-capture", version,
-    ...(version === 2 ? {browser_script_sha256: browserScriptSHA256()} : {}),
+    ...(version >= 2 ? {browser_script_sha256: browserScriptSHA256()} : {}),
+    ...(version === 3 ? {normalization_sha256: report.normalization_sha256} : {}),
     reference_sha256: report.reference_sha256,
     checkpoint_sha256: report.checkpoint_sha256,
     receipts: report.receipts.map(item => ({index: item.index, sha256: item.sha256,
@@ -130,15 +139,16 @@ function browserCaptureFromReport(report, version = 2) {
   };
 }
 
-function transitionCaptureFromReports(aReport, bReport) {
-  const a = browserCaptureFromReport(aReport);
-  const b = browserCaptureFromReport(bReport);
+function transitionCaptureFromReports(aReport, bReport, version = 2) {
+  if (![1, 2].includes(version)) throw new Error("Unsupported transition capture version");
+  const a = browserCaptureFromReport(aReport, version === 1 ? 2 : 3);
+  const b = browserCaptureFromReport(bReport, version === 1 ? 2 : 3);
   if (a.browser_script_sha256 !== b.browser_script_sha256 ||
       a.receipts.length !== b.receipts.length || a.receipts.some((row, index) =>
         row.sha256 !== b.receipts[index].sha256 || row.duplicate_of !== b.receipts[index].duplicate_of)) {
     throw new Error("Transition sides must use the same verifier and ordered receipt bytes");
   }
-  return {format: "aru-evidence-reference-transition-capture", version: 1,
+  return {format: "aru-evidence-reference-transition-capture", version,
     capture_a: a, capture_b: b,
     changed_receipts: a.receipts.filter((row, index) => row.verdict !== b.receipts[index].verdict)
       .map(row => row.index)};
@@ -159,8 +169,14 @@ function sealedTransitionFromCapture(transition, keyBytes) {
   const {capture_a: a, capture_b: b} = transition;
   const commit = (role, index, digest) => digest === null ? null : createHmac("sha256", keyBytes)
     .update(`aru-sealed-transition-v1\n${role}\n${index}\n${digest}`, "ascii").digest("hex");
-  return {format: "aru-evidence-sealed-reference-transition-capture", version: 1,
+  const version = transition.version;
+  if (![1, 2].includes(version)) throw new Error("Unsupported transition capture version");
+  return {format: "aru-evidence-sealed-reference-transition-capture", version,
     browser_script_sha256: a.browser_script_sha256,
+    ...(version === 2 ? {
+      normalization_a_commitment: commit("normalization-a", 0, a.normalization_sha256),
+      normalization_b_commitment: commit("normalization-b", 0, b.normalization_sha256)
+    } : {}),
     reference_a_commitment: commit("reference-a", 0, a.reference_sha256),
     reference_b_commitment: commit("reference-b", 0, b.reference_sha256),
     checkpoint_a_commitment: commit("checkpoint-a", 0, a.checkpoint_sha256),
@@ -302,7 +318,11 @@ function run(args = process.argv.slice(2)) {
   const report = auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile});
   if (referenceB !== undefined) {
     const other = auditEvidenceBatch(referenceB, receiptFiles, {checkpointFile: checkpointB});
-    const transition = transitionCaptureFromReports(report, other);
+    const selectedTransitionFile = transitionFile || sealedFile;
+    const selectedTransition = selectedTransitionFile ?
+      parseJSON(readLimited(selectedTransitionFile, "Saved transition capture"), "Saved transition capture") : null;
+    const transitionVersion = selectedTransition?.version === 1 ? 1 : 2;
+    const transition = transitionCaptureFromReports(report, other, transitionVersion);
     if (transitionFile !== undefined) {
       const expected = parseJSON(readLimited(transitionFile, "Saved transition capture"), "Saved transition capture");
       try { assert.deepStrictEqual(transition, expected); }
@@ -334,8 +354,10 @@ function run(args = process.argv.slice(2)) {
         }
         console.log("Witnesses model only added sources under these rules; they do not establish chronology, authorship, or truth.");
       }
-      if (transitionFile !== undefined) console.log("TRANSITION CAPTURE MATCH: both supplied references, ordered files, outcomes, and browser script were reproduced. Inspect A and B counts independently.");
-      if (sealed) console.log("SEALED TRANSITION MATCH: opening key, both supplied references, ordered files, outcomes, and browser script reproduced. Inspect A and B counts independently.");
+      const profile = transitionVersion === 2 ? " Selected-name profiles agree." :
+        " Older capture has no originating browser normalization profile.";
+      if (transitionFile !== undefined) console.log("TRANSITION CAPTURE MATCH: both supplied references, ordered files, outcomes, and browser script were reproduced." + profile + " Inspect A and B counts independently.");
+      if (sealed) console.log("SEALED TRANSITION MATCH: opening key, both supplied references, ordered files, outcomes, and browser script reproduced." + profile + " Inspect A and B counts independently.");
       console.log("A and B are labels, not verified dates; consistency does not prove origin, completeness, or factual truth.");
     }
     if (transitionFile === undefined && !sealed && [report, other].some(audit =>
@@ -363,7 +385,9 @@ function run(args = process.argv.slice(2)) {
     if (reportFile !== undefined) console.log("REPORT MATCH: the saved report was reproduced from the ordered files and current verifier bytes.");
     if (captureFile !== undefined) console.log("CAPTURE MATCH: the browser's file hashes and verdicts were reproduced from the ordered files." +
       (captureVersion === 1
-        ? " Legacy v1 capture has no browser script fingerprint." : " Browser verifier script fingerprint agrees."));
+        ? " Legacy v1 capture has no browser script fingerprint." :
+        captureVersion === 2 ? " Browser verifier script fingerprint agrees; original runtime is unbound." :
+          " Browser script and selected-name normalization profile agree."));
     console.log("Hashes bind these supplied file bytes; they do not prove origin, time, factual truth, independence, or completeness.");
   }
   if (reportFile === undefined && captureFile === undefined &&

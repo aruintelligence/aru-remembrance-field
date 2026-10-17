@@ -72,6 +72,24 @@ test('two independent auditors replay keyed commitments; fresh keys do not expos
   }
 }));
 
+test('older private captures remain readable and explicitly lack the browser profile', () => temporary(save => {
+  const oldPair = transitionCaptureFromReports(
+    auditEvidenceBatch(a, receipts, {checkpointFile: checkpoint}),
+    auditEvidenceBatch(b, receipts), 1);
+  const sealed = sealedTransitionFromCapture(oldPair, openingKeyBytes(key));
+  assert.equal(sealed.version, 1);
+  assert.equal(Object.hasOwn(sealed, 'normalization_a_commitment'), false);
+  const capture = save('older-private.json', sealed);
+  const opening = save('opening.json', key);
+  for (const auditor of auditors) {
+    assert.equal(run(auditor, args(capture, opening)).status, 0);
+  }
+  const {review} = require('../tools/review-evidence.cjs');
+  const result = review(args(capture, opening));
+  assert.equal(result.replay, 'MATCH');
+  assert.equal(result.browser_runtime_normalization, 'not_recorded_in_capture');
+}));
+
 test('wrong key, tampering, bytes, order, checkpoint, legacy, and malformed inputs fail closed', () => temporary(save => {
   const ordinary = transition();
   const privateCapture = sealedTransitionFromCapture(ordinary, openingKeyBytes(key));
@@ -84,6 +102,8 @@ test('wrong key, tampering, bytes, order, checkpoint, legacy, and malformed inpu
   const altered = [
     {...privateCapture, browser_script_sha256: '0'.repeat(64)},
     {...privateCapture, reference_a_commitment: '0'.repeat(64)},
+    {...privateCapture, normalization_a_commitment: '0'.repeat(64)},
+    {...privateCapture, normalization_b_commitment: null},
     {...privateCapture, checkpoint_a_commitment: null},
     {...privateCapture, receipts: privateCapture.receipts.slice(1)},
     {...privateCapture, receipts: privateCapture.receipts.map((row, i) =>
@@ -94,7 +114,7 @@ test('wrong key, tampering, bytes, order, checkpoint, legacy, and malformed inpu
     {...privateCapture, changed_receipts: []},
     {...privateCapture, unexpected: 'private claim'},
     ordinary,
-    {...privateCapture, version: 2}
+    {...privateCapture, version: 1}
   ];
   const badCaptures = altered.map((value, index) => save(`changed-${index}.json`, value));
   badCaptures.push(save('malformed-capture.json', '{'));

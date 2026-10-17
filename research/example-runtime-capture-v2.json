@@ -1,0 +1,21 @@
+{
+  "format": "aru-evidence-browser-batch-capture",
+  "version": 2,
+  "browser_script_sha256": "888b09be77135f86238aab7ff0a8e0682049a1513bd9515cd8dbaafd78d35231",
+  "reference_sha256": "b8f568616a9c956ae3cd2d8d7b1a383ed16ac565bb8471c4dd131a2d9cb56ed3",
+  "checkpoint_sha256": null,
+  "receipts": [
+    {
+      "index": 1,
+      "sha256": "c56e183d7d5cdeff01b3dfe6189550e1169b161416c321887f941a504d2e2519",
+      "verdict": "MATCH",
+      "duplicate_of": null
+    }
+  ],
+  "totals": {
+    "match": 1,
+    "differ": 0,
+    "fail": 0,
+    "identical_copies": 0
+  }
+}

@@ -8,10 +8,11 @@ const {loadModel} = require('../tools/benchmark-evidence.cjs');
 const {auditEvidenceBatch, browserCaptureFromReport} = require('../tools/audit-evidence-batch.cjs');
 const {review} = require('../tools/review-evidence.cjs');
 const {challenge, FIXED} = require('../tools/challenge-multisource-evidence.cjs');
+const {selectedNames, profileHash} = require('../tools/normalization-profile.cjs');
 
 const root = path.join(__dirname, '..');
 const example = name => path.join(root, 'research', `example-runtime-${name}.json`);
-const args = [example('reference'), example('receipt'), '--check-capture', example('capture')];
+const args = [example('reference'), example('receipt'), '--check-capture', example('capture-v2')];
 
 function temporary(callback) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aru-runtime-'));
@@ -63,6 +64,52 @@ test('ordinary review labels its selected-name match and unbound browser runtime
   assert.equal(result.replay, 'MATCH');
   assert.equal(result.selected_name_normalization, 'node_python_match');
   assert.equal(result.browser_runtime_normalization, 'not_recorded_in_capture');
+});
+
+test('version 3 binds the selected browser interpretation and rejects a changed digest', () => temporary(save => {
+  const original = JSON.parse(fs.readFileSync(example('capture'), 'utf8'));
+  const selected = [example('reference'), example('receipt'), '--check-capture', example('capture')];
+  const node = spawnSync(process.execPath,
+    [path.join(root, 'tools/audit-evidence-batch.cjs'), ...selected], {encoding:'utf8'});
+  assert.equal(node.status, 0, node.stderr);
+  const py = spawnSync('python3',
+    [path.join(root, 'tools/independent-evidence-batch.py'), ...selected], {encoding:'utf8'});
+  const pythonProbe = spawnSync('python3', [path.join(root, 'tools/probe-normalization.py')],
+    {input:JSON.stringify({strings:['\ua7f1']}), encoding:'utf8'});
+  assert.equal(pythonProbe.status, 0, pythonProbe.stderr);
+  const compatible = loadModel().normalize('\ua7f1') === JSON.parse(pythonProbe.stdout).normalized[0];
+  assert.equal(py.status, compatible ? 0 : 1, py.stderr);
+  const result = review(selected);
+  assert.equal(result.replay, compatible ? 'MATCH' : 'UNCONFIRMED');
+  if (compatible) assert.equal(result.browser_runtime_normalization, 'selected_profile_matched');
+  else {
+    assert.equal(result.reason, 'auditor_rejected');
+    assert.equal(Object.hasOwn(result, 'receipt_assessment'), false);
+  }
+  const bad = save('bad.json', {...original, normalization_sha256:'0'.repeat(64)});
+  for (const [executable, tool] of [[process.execPath, 'audit-evidence-batch.cjs'],
+    ['python3', 'independent-evidence-batch.py']]) {
+    const replay = spawnSync(executable, [path.join(root, 'tools', tool),
+      example('reference'), example('receipt'), '--check-capture', bad], {encoding:'utf8'});
+    assert.equal(replay.status, 1);
+  }
+  assert.equal(review([example('reference'), example('receipt'), '--check-capture', bad]).replay,
+    'UNCONFIRMED');
+}));
+
+test('length-framed profiles agree on whitespace, supplementary text, repeats, and lone surrogates', () => {
+  const values = [{records:[{key:' A\u00a0 B '},{key:'A B'}, {key:'\ud800'}],
+    question:'What is 🚀?', names:[' A\u00a0 B ', '🚀']}];
+  const names = selectedNames(values);
+  const node = profileHash(names, loadModel().normalize);
+  const code = 'import importlib.util,json,sys\n' +
+    's=importlib.util.spec_from_file_location("a",sys.argv[1]); a=importlib.util.module_from_spec(s);s.loader.exec_module(a)\n' +
+    'print(a.normalization_profile(json.load(sys.stdin)))\n';
+  const py = spawnSync('python3', ['-c', code,
+    path.join(root, 'tools/independent-evidence-batch.py')],
+  {input:JSON.stringify(values), encoding:'utf8'});
+  assert.equal(py.status, 0, py.stderr);
+  assert.equal(py.stdout.trim(), node);
 });
 
 test('a recorded FAIL remains reproducible when its malformed field exceeds the name bound', () => temporary(save => {
