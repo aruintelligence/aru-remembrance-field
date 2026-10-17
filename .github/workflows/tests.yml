@@ -19,6 +19,7 @@ jobs:
       - run: node tests/evidence-batch-audit.test.cjs
       - run: node tests/independent-batch-audit.test.cjs
       - run: node tests/verifier-kit.test.cjs
+      - run: node tests/reference-transition-capture.test.cjs
       - run: node tests/benchmark.test.cjs
       - run: node tests/falsifier.test.cjs
       - run: node tests/blind-analyzer.test.cjs
@@ -34,6 +35,8 @@ jobs:
       - run: node tools/audit-evidence-batch.cjs research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --check-capture research/example-evidence-browser-batch-capture-v1.json
       - run: python3 tools/independent-evidence-batch.py research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --check-capture research/example-evidence-browser-batch-capture.json
       - run: python3 tools/independent-evidence-batch.py research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --check-capture research/example-evidence-browser-batch-capture-v1.json
+      - run: node tools/audit-evidence-batch.cjs research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --reference-b research/example-evidence-reference-conflict.json --check-transition research/example-evidence-reference-transition-capture.json
+      - run: python3 tools/independent-evidence-batch.py research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --reference-b research/example-evidence-reference-conflict.json --check-transition research/example-evidence-reference-transition-capture.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-brief.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction-chain.json

@@ -9,7 +9,9 @@ const root = path.join(__dirname, '..');
 const kitTool = path.join(root, 'tools', 'verifier-kit.cjs');
 const fixture = name => path.join(root, 'research', name);
 const capture = fixture('example-evidence-browser-batch-capture.json');
+const transition = fixture('example-evidence-reference-transition-capture.json');
 const reference = fixture('example-evidence-reference-baseline.json');
+const referenceB = fixture('example-evidence-reference-conflict.json');
 const checkpoint = fixture('example-evidence-ledger-checkpoint.json');
 const receipts = [fixture('example-evidence-excerpt.json'), fixture('example-evidence-receipt.json')];
 
@@ -70,6 +72,33 @@ test('kit checker rejects a changed verifier, unexpected file, and altered captu
   fs.writeFileSync(changedCapture, JSON.stringify(modifiedCapture));
   assert.match(node([checker, 'check', kit, changedCapture], dir).stderr,
     /Capture requires different browser script bytes/);
+}));
+
+test('a paired transition capture creates an offline kit that independently replays both sides', () => temporary(dir => {
+  const kit = path.join(dir, 'paired-kit');
+  const created = node([kitTool, 'create', transition, kit]);
+  assert.equal(created.status, 0, created.stderr);
+  const checked = node([path.join(kit, 'tools/verifier-kit.cjs'), 'check', kit, transition], dir);
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.match(checked.stdout, /KIT MATCH/);
+  const args = [reference, ...receipts, '--checkpoint', checkpoint, '--reference-b', referenceB,
+    '--check-transition', transition];
+  const replay = node([path.join(kit, 'tools/audit-evidence-batch.cjs'), ...args], dir);
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.match(replay.stdout, /TRANSITION CAPTURE MATCH.*Inspect A and B counts independently/);
+  const independent = spawnSync('python3',
+    [path.join(kit, 'tools/independent-evidence-batch.py'), ...args], {encoding: 'utf8', cwd: dir});
+  assert.equal(independent.status, 0, independent.stderr);
+  assert.match(independent.stdout, /TRANSITION CAPTURE MATCH/);
+  assert.equal(fs.existsSync(path.join(kit, 'transition.json')), false);
+  assert.equal(fs.existsSync(path.join(kit, 'research')), false);
+
+  const original = JSON.parse(fs.readFileSync(transition, 'utf8'));
+  const bad = path.join(dir, 'changed.json');
+  fs.writeFileSync(bad, JSON.stringify({...original, changed_receipts: []}));
+  const rejected = path.join(dir, 'rejected-kit');
+  assert.match(node([kitTool, 'create', bad, rejected]).stderr, /Paired transition sides disagree/);
+  assert.equal(fs.existsSync(rejected), false);
 }));
 
 test('creation refuses a mismatched or legacy capture before writing and never replaces a destination', () => temporary(dir => {
