@@ -20,6 +20,7 @@ jobs:
       - run: node tests/independent-batch-audit.test.cjs
       - run: node tests/verifier-kit.test.cjs
       - run: node tests/reference-transition-capture.test.cjs
+      - run: node tests/sealed-transition.test.cjs
       - run: node tests/addition-witness.test.cjs
       - run: node tests/benchmark.test.cjs
       - run: node tests/falsifier.test.cjs

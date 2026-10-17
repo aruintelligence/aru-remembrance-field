@@ -6,6 +6,7 @@ This checks deterministic software consistency, not source identity or factual t
 
 import argparse
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -311,6 +312,41 @@ def transition_from_reports(a_report, b_report):
                                  if row["verdict"] != other["verdict"]]}
 
 
+def opening_key_bytes(opening):
+    require(type(opening) is dict and set(opening) == {"format", "version", "key_hex"} and
+            opening["format"] == "aru-evidence-transition-opening-key" and
+            int_value(opening["version"]) and opening["version"] == 1 and
+            type(opening["key_hex"]) is str and
+            re.fullmatch(r"[0-9a-f]{64}", opening["key_hex"]) is not None,
+            "expected a version 1 transition opening key with 32 random bytes")
+    return bytes.fromhex(opening["key_hex"])
+
+
+def sealed_transition_from_capture(transition, key_bytes):
+    require(type(key_bytes) is bytes and len(key_bytes) == 32, "opening key must be 32 bytes")
+    a, b = transition["capture_a"], transition["capture_b"]
+
+    def commit(role, index, digest):
+        if digest is None:
+            return None
+        message = f"aru-sealed-transition-v1\n{role}\n{index}\n{digest}".encode("ascii")
+        return hmac.new(key_bytes, message, hashlib.sha256).hexdigest()
+
+    return {"format": "aru-evidence-sealed-reference-transition-capture", "version": 1,
+            "browser_script_sha256": a["browser_script_sha256"],
+            "reference_a_commitment": commit("reference-a", 0, a["reference_sha256"]),
+            "reference_b_commitment": commit("reference-b", 0, b["reference_sha256"]),
+            "checkpoint_a_commitment": commit("checkpoint-a", 0, a["checkpoint_sha256"]),
+            "checkpoint_b_commitment": commit("checkpoint-b", 0, b["checkpoint_sha256"]),
+            "receipts": [{"index": row["index"],
+                          "commitment": commit("receipt", row["index"], row["sha256"]),
+                          "verdict_a": row["verdict"], "verdict_b": b["receipts"][i]["verdict"],
+                          "duplicate_of": row["duplicate_of"]}
+                         for i, row in enumerate(a["receipts"])],
+            "totals_a": a["totals"], "totals_b": b["totals"],
+            "changed_receipts": transition["changed_receipts"]}
+
+
 def addition_witness(a, b, receipt):
     def answers(records):
         if receipt["format"] == "aru-evidence-brief-receipt":
@@ -385,13 +421,20 @@ def run(argv=None):
     parser.add_argument("--reference-b")
     parser.add_argument("--checkpoint-b")
     parser.add_argument("--check-transition")
+    parser.add_argument("--check-sealed")
+    parser.add_argument("--opening-key")
     parser.add_argument("--explain-additions", action="store_true")
     parser.add_argument("--check-capture")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
-        require(not (args.checkpoint_b or args.check_transition or args.explain_additions) or args.reference_b,
-                "--checkpoint-b, --check-transition, and --explain-additions require --reference-b")
+        require(not (args.checkpoint_b or args.check_transition or args.check_sealed or
+                     args.explain_additions) or args.reference_b,
+                "paired options require --reference-b")
+        require(bool(args.check_sealed) == bool(args.opening_key),
+                "--check-sealed and --opening-key must be supplied together")
+        require(not (args.check_sealed and args.check_transition),
+                "choose only one transition capture to check")
         require(not args.reference_b or not args.check_capture,
                 "use --check-transition instead of --check-capture with --reference-b")
         report = audit(args.reference, args.receipts, args.checkpoint)
@@ -402,11 +445,18 @@ def run(argv=None):
                 expected = parse(read_limited(args.check_transition, "Transition capture"))
                 require(same(expected, transition),
                         "transition capture differs from independently recomputed files, outcomes, or browser script")
+            sealed = (sealed_transition_from_capture(transition,
+                      opening_key_bytes(parse(read_limited(args.opening_key, "Opening key"))))
+                      if args.check_sealed else None)
+            if sealed is not None:
+                expected = parse(read_limited(args.check_sealed, "Sealed transition capture"))
+                require(same(expected, sealed),
+                        "sealed transition capture differs from independently recomputed files, outcomes, or browser script")
             influence = (explain_transition_additions(args.reference, args.reference_b,
                          args.receipts, report, other) if args.explain_additions else None)
             if args.json:
-                print(json.dumps({"transition": transition, "answer_influence": influence}
-                      if influence is not None else transition, indent=2, ensure_ascii=False))
+                print(json.dumps({"transition": sealed or transition, "answer_influence": influence}
+                      if influence is not None else sealed or transition, indent=2, ensure_ascii=False))
             else:
                 for label, side in (("A", report), ("B", other)):
                     totals = side["totals"]
@@ -432,9 +482,12 @@ def run(argv=None):
                 if args.check_transition:
                     print("TRANSITION CAPTURE MATCH: independent Python replay agrees. "
                           "Inspect A and B counts independently.")
+                if sealed is not None:
+                    print("SEALED TRANSITION MATCH: independent Python replay agrees. "
+                          "Inspect A and B counts independently.")
                 print("A and B are labels, not verified dates; consistency does not prove "
                       "origin, completeness, or factual truth.")
-            return 0 if args.check_transition or not any(
+            return 0 if args.check_transition or sealed is not None or not any(
                 side["totals"][key] for side in (report, other) for key in ("differ", "fail")) else 1
         if args.check_capture:
             expected = parse(read_limited(args.check_capture, "Capture"))

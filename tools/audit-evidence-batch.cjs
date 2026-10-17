@@ -2,7 +2,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const {createHash} = require("node:crypto");
+const {createHash, createHmac} = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const {isDeepStrictEqual} = require("node:util");
@@ -138,6 +138,34 @@ function transitionCaptureFromReports(aReport, bReport) {
       .map(row => row.index)};
 }
 
+function openingKeyBytes(opening) {
+  if (opening === null || typeof opening !== "object" || Array.isArray(opening) ||
+      Object.keys(opening).length !== 3 ||
+      opening.format !== "aru-evidence-transition-opening-key" || opening.version !== 1 ||
+      typeof opening.key_hex !== "string" || !/^[0-9a-f]{64}$/.test(opening.key_hex)) {
+    throw new Error("Expected a version 1 transition opening key with 32 random bytes");
+  }
+  return Buffer.from(opening.key_hex, "hex");
+}
+
+function sealedTransitionFromCapture(transition, keyBytes) {
+  if (!Buffer.isBuffer(keyBytes) || keyBytes.length !== 32) throw new Error("Opening key must be 32 bytes");
+  const {capture_a: a, capture_b: b} = transition;
+  const commit = (role, index, digest) => digest === null ? null : createHmac("sha256", keyBytes)
+    .update(`aru-sealed-transition-v1\n${role}\n${index}\n${digest}`, "ascii").digest("hex");
+  return {format: "aru-evidence-sealed-reference-transition-capture", version: 1,
+    browser_script_sha256: a.browser_script_sha256,
+    reference_a_commitment: commit("reference-a", 0, a.reference_sha256),
+    reference_b_commitment: commit("reference-b", 0, b.reference_sha256),
+    checkpoint_a_commitment: commit("checkpoint-a", 0, a.checkpoint_sha256),
+    checkpoint_b_commitment: commit("checkpoint-b", 0, b.checkpoint_sha256),
+    receipts: a.receipts.map((row, index) => ({index: row.index,
+      commitment: commit("receipt", row.index, row.sha256),
+      verdict_a: row.verdict, verdict_b: b.receipts[index].verdict,
+      duplicate_of: row.duplicate_of})),
+    totals_a: a.totals, totals_b: b.totals, changed_receipts: transition.changed_receipts};
+}
+
 function additionWitness(a, b, receipt, model = loadModel()) {
   const answer = records => receipt.format === "aru-evidence-brief-receipt" ?
     model.brief(receipt.names, records).map(row => row.answer) :
@@ -207,13 +235,15 @@ function parseArgs(args) {
   let reportFile;
   let captureFile;
   let transitionFile;
+  let sealedFile;
+  let openingKeyFile;
   let explainAdditions = false;
   let json = false;
   const files = [];
   for (let index = 0; index < args.length; index++) {
     const item = args[index];
     if (["--checkpoint", "--reference-b", "--checkpoint-b", "--check-report",
-         "--check-capture", "--check-transition"].includes(item)) {
+         "--check-capture", "--check-transition", "--check-sealed", "--opening-key"].includes(item)) {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new Error(`${item} requires a file`);
       if (item === "--checkpoint") {
@@ -231,6 +261,12 @@ function parseArgs(args) {
       } else if (item === "--check-capture") {
         if (captureFile !== undefined) throw new Error("Duplicate --check-capture option");
         captureFile = value;
+      } else if (item === "--check-sealed") {
+        if (sealedFile !== undefined) throw new Error("Duplicate --check-sealed option");
+        sealedFile = value;
+      } else if (item === "--opening-key") {
+        if (openingKeyFile !== undefined) throw new Error("Duplicate --opening-key option");
+        openingKeyFile = value;
       } else {
         if (transitionFile !== undefined) throw new Error("Duplicate --check-transition option");
         transitionFile = value;
@@ -244,16 +280,19 @@ function parseArgs(args) {
     } else if (item.startsWith("--")) throw new Error(`Unknown option ${item}`);
     else files.push(item);
   }
-  if (files.length < 2) throw new Error("Usage: node tools/audit-evidence-batch.cjs <reference-a.json> <receipt.json>... [--checkpoint a.json] [--reference-b b.json --checkpoint-b b-checkpoint.json --check-transition capture.json --explain-additions] [--json] [--check-report report.json] [--check-capture capture.json]");
-  if ((checkpointB || transitionFile || explainAdditions) && !referenceB) throw new Error("--checkpoint-b, --check-transition, and --explain-additions require --reference-b");
+  if (files.length < 2) throw new Error("Usage: node tools/audit-evidence-batch.cjs <reference-a.json> <receipt.json>... [--checkpoint a.json] [--reference-b b.json --checkpoint-b b-checkpoint.json --check-transition capture.json | --check-sealed capture.json --opening-key key.json] [--explain-additions] [--json]");
+  if ((checkpointB || transitionFile || sealedFile || explainAdditions) && !referenceB) throw new Error("Paired options require --reference-b");
+  if (!!sealedFile !== !!openingKeyFile) throw new Error("--check-sealed and --opening-key must be supplied together");
+  if (sealedFile && transitionFile) throw new Error("Choose only one transition capture to check");
   if (referenceB && (reportFile || captureFile)) throw new Error("Use --check-transition instead of a single-reference report or capture with --reference-b");
   return {referenceFile: files[0], receiptFiles: files.slice(1), checkpointFile,
-    referenceB, checkpointB, reportFile, captureFile, transitionFile, explainAdditions, json};
+    referenceB, checkpointB, reportFile, captureFile, transitionFile, sealedFile, openingKeyFile,
+    explainAdditions, json};
 }
 
 function run(args = process.argv.slice(2)) {
   const {referenceFile, receiptFiles, checkpointFile, referenceB, checkpointB,
-    reportFile, captureFile, transitionFile, explainAdditions, json} = parseArgs(args);
+    reportFile, captureFile, transitionFile, sealedFile, openingKeyFile, explainAdditions, json} = parseArgs(args);
   const report = auditEvidenceBatch(referenceFile, receiptFiles, {checkpointFile});
   if (referenceB !== undefined) {
     const other = auditEvidenceBatch(referenceB, receiptFiles, {checkpointFile: checkpointB});
@@ -263,9 +302,17 @@ function run(args = process.argv.slice(2)) {
       try { assert.deepStrictEqual(transition, expected); }
       catch (_) { throw new Error("Saved transition capture differs from the recomputed references, ordered receipts, outcomes, or browser script"); }
     }
+    const sealed = sealedFile === undefined ? null : sealedTransitionFromCapture(transition,
+      openingKeyBytes(parseJSON(readLimited(openingKeyFile, "Opening key"), "Opening key")));
+    if (sealed) {
+      const expected = parseJSON(readLimited(sealedFile, "Sealed transition capture"), "Sealed transition capture");
+      try { assert.deepStrictEqual(sealed, expected); }
+      catch (_) { throw new Error("Sealed transition capture differs from the recomputed files, outcomes, or browser script"); }
+    }
     const influence = explainAdditions ?
       explainTransitionAdditions(referenceFile, referenceB, receiptFiles, report, other) : null;
-    if (json) console.log(JSON.stringify(influence ? {transition, answer_influence: influence} : transition, null, 2));
+    if (json) console.log(JSON.stringify(influence ?
+      {transition: sealed || transition, answer_influence: influence} : sealed || transition, null, 2));
     else {
       for (const [label, audit] of [["A", report], ["B", other]]) {
         console.log(`${label}: ${audit.totals.match} MATCH, ${audit.totals.differ} DIFFER, ${audit.totals.fail} FAIL.`);
@@ -282,9 +329,10 @@ function run(args = process.argv.slice(2)) {
         console.log("Witnesses model only added sources under these rules; they do not establish chronology, authorship, or truth.");
       }
       if (transitionFile !== undefined) console.log("TRANSITION CAPTURE MATCH: both supplied references, ordered files, outcomes, and browser script were reproduced. Inspect A and B counts independently.");
+      if (sealed) console.log("SEALED TRANSITION MATCH: opening key, both supplied references, ordered files, outcomes, and browser script reproduced. Inspect A and B counts independently.");
       console.log("A and B are labels, not verified dates; consistency does not prove origin, completeness, or factual truth.");
     }
-    if (transitionFile === undefined && [report, other].some(audit =>
+    if (transitionFile === undefined && !sealed && [report, other].some(audit =>
       audit.totals.differ || audit.totals.fail)) process.exitCode = 1;
     return transition;
   }
@@ -323,4 +371,4 @@ if (require.main === module) {
 }
 
 module.exports = {auditEvidenceBatch, browserCaptureFromReport, transitionCaptureFromReports,
-  additionWitness, explainTransitionAdditions, run};
+  sealedTransitionFromCapture, openingKeyBytes, additionWitness, explainTransitionAdditions, run};

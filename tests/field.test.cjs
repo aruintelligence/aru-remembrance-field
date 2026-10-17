@@ -2354,6 +2354,93 @@ test('transition capture distinguishes identical text from identical bytes, incl
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
 
+test('browser private pair replays in page and both independent CLIs without publishing raw hashes', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const a = fixture('example-evidence-reference-baseline.json');
+  const b = fixture('example-evidence-reference-conflict.json');
+  const checkpoint = fixture('example-evidence-ledger-checkpoint.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const receipt = fixture('example-evidence-receipt.json');
+  const app = boot();
+  const files = [auditFile(excerpt), auditFile(receipt), auditFile('{')];
+  await traceSavedReferences(app, a, b, files, checkpoint);
+  assert.equal(app.elements.get('sealed-prepare').disabled, false);
+  await vm.runInContext('prepareSealedTransition()', app.context);
+  assert.equal(app.elements.get('sealed-key-download').disabled, false);
+  vm.runInContext('downloadSealedTransitionCapture()', app.context);
+  vm.runInContext('downloadSealedTransitionKey()', app.context);
+  const capture = JSON.parse(await app.exports[0].text());
+  const opening = JSON.parse(await app.exports[1].text());
+  assert.equal(capture.format, 'aru-evidence-sealed-reference-transition-capture');
+  assert.match(opening.key_hex, /^[0-9a-f]{64}$/);
+  assert.deepEqual(capture.changed_receipts, [1, 2]);
+  assert.equal(capture.totals_b.fail, 1);
+  assert.doesNotMatch(JSON.stringify(capture), new RegExp(createHash('sha256').update(a).digest('hex')));
+  assert.doesNotMatch(JSON.stringify(capture), /favorite color|teal|amber|key_hex/);
+  assert.equal(Object.hasOwn(capture, 'reference_sha256'), false);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aru-browser-private-'));
+  try {
+    const save = (name, data) => {
+      const file = path.join(dir, name); fs.writeFileSync(file, data); return file;
+    };
+    const originals = [save('excerpt.json', excerpt), save('receipt.json', receipt), save('malformed.json', '{')];
+    const flags = [save('a.json', a), ...originals, '--checkpoint', save('checkpoint.json', checkpoint),
+      '--reference-b', save('b.json', b), '--check-sealed', save('capture.json', JSON.stringify(capture)),
+      '--opening-key', save('key.json', JSON.stringify(opening))];
+    for (const [executable, script] of [[process.execPath, 'audit-evidence-batch.cjs'],
+      ['python3', 'independent-evidence-batch.py']]) {
+      const result = spawnSync(executable, [path.join(__dirname, '..', 'tools', script), ...flags],
+        {encoding: 'utf8'});
+      assert.equal(result.status, 0, `${script}: ${result.stderr}`);
+      assert.match(result.stdout, /SEALED TRANSITION MATCH/);
+      assert.match(result.stdout, /1 FAIL/);
+    }
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+  const captureInput = app.context.document.getElementById('sealed-capture-file');
+  const keyInput = app.context.document.getElementById('sealed-key-file');
+  const output = app.context.document.getElementById('sealed-verification');
+  captureInput.files = [auditFile(JSON.stringify(capture))];
+  keyInput.files = [auditFile(JSON.stringify(opening))];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  await vm.runInContext('verifySealedTransition()', app.context);
+  assert.match(output.textContent, /PRIVATE CAPTURE MATCH: 2 verdict changes.*1 FAIL.*does not prove origin/);
+  keyInput.files = [auditFile(JSON.stringify({...opening, key_hex: 'f'.repeat(64)}))];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  await vm.runInContext('verifySealedTransition()', app.context);
+  assert.match(output.textContent, /DIFFER: Private capture or opening key/);
+  keyInput.files = [auditFile(JSON.stringify({...opening, key_hex: '00'}))];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  await vm.runInContext('verifySealedTransition()', app.context);
+  assert.match(output.textContent, /FAIL: Opening key must be the exact version 1 file/);
+  keyInput.files = [auditFile(JSON.stringify(opening))];
+  captureInput.files = [auditFile(JSON.stringify({...capture, browser_script_sha256: '0'.repeat(64)}))];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  await vm.runInContext('verifySealedTransition()', app.context);
+  assert.match(output.textContent, /DIFFER:/);
+  captureInput.files = [auditFile(JSON.stringify(capture))];
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  keyInput.files = [{size: 1, arrayBuffer: async () => {
+    await waiting; return auditFile(JSON.stringify(opening)).arrayBuffer();
+  }}];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  const oldCheck = vm.runInContext('verifySealedTransition()', app.context);
+  await new Promise(resolve => setImmediate(resolve));
+  keyInput.files = [auditFile(JSON.stringify(opening))];
+  vm.runInContext('invalidateSealedReplay()', app.context);
+  release();
+  await oldCheck;
+  assert.match(output.textContent, /selection changed/);
+  await vm.runInContext('verifySealedTransition()', app.context);
+  assert.match(output.textContent, /PRIVATE CAPTURE MATCH/);
+  app.context.document.getElementById('audit-receipts').files = [auditFile(excerpt)];
+  vm.runInContext('invalidateEvidenceBatchAudit()', app.context);
+  assert.equal(app.elements.get('sealed-capture-download').disabled, true);
+  assert.equal(app.elements.get('sealed-verify').disabled, true);
+  vm.runInContext('downloadSealedTransitionKey()', app.context);
+  assert.equal(app.exports.length, 2);
+});
+
 test('transition trace remains visible if a receipt cannot be captured or browser hashing is unavailable', async () => {
   const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
   const a = fixture('example-evidence-reference-baseline.json');
