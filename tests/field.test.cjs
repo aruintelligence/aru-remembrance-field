@@ -2239,21 +2239,33 @@ test('browser replays saved v2 and v1 captures and exposes byte, script, and str
     await vm.runInContext('verifySavedBatchCapture()', app.context);
     return output.textContent;
   };
-  assert.match(await compare(capture), /PASS: Saved capture reproduced.*1 MATCH, 0 DIFFER, 1 FAIL.*fingerprint agrees/);
+  assert.match(await compare(capture), /CAPTURE MATCH: Saved capture reproduced.*1 MATCH, 0 DIFFER, 1 FAIL.*fingerprint agrees.*audit contains DIFFER or FAIL results/);
   assert.match(await compare({totals: capture.totals, receipts: capture.receipts,
     checkpoint_sha256: capture.checkpoint_sha256, reference_sha256: capture.reference_sha256,
     browser_script_sha256: capture.browser_script_sha256, version: 2, format: capture.format}),
-    /PASS: Saved capture reproduced/);
+    /CAPTURE MATCH: Saved capture reproduced/);
   const {browser_script_sha256, ...old} = capture;
-  assert.match(await compare({...old, version: 1}), /PASS:.*Legacy v1 capture has no browser script fingerprint/);
+  assert.match(await compare({...old, version: 1}), /CAPTURE MATCH:.*Legacy v1 capture has no browser script fingerprint/);
   assert.match(await compare({...capture, browser_script_sha256: '0'.repeat(64)}),
     /DIFFER:.*browser verifier script fingerprint differs/);
   assert.match(await compare({...capture, reference_sha256: '0'.repeat(64)}),
-    /DIFFER:.*selected file bytes/);
+    /DIFFER:.*Reference file bytes differ/);
   assert.match(await compare({...capture, receipts: [{...capture.receipts[0], verdict: 'DIFFER'}, capture.receipts[1]]}),
-    /DIFFER:.*verdicts/);
+    /DIFFER:.*verdict differs/);
   assert.match(await compare({...capture, private_value: 'never show this'}), /DIFFER:.*structure/);
   assert.match(await compare({...old, version: 1, browser_script_sha256}), /DIFFER:.*structure/);
+  const altered = {...capture, private_value: 'never show this', reference_sha256: '0'.repeat(64),
+    receipts: [{...capture.receipts[1], index: 1, verdict: '<img onerror=alert(1)>'},
+      {...capture.receipts[0], index: 2}],
+    totals: {...capture.totals, fail: 0}};
+  assert.match(await compare(altered), /DIFFER: \d+ capture mismatches.*structure differs/);
+  const findings = output.children[0].children.map(item => item.textContent);
+  assert.ok(findings.some(item => /Receipt #1 file bytes differ/.test(item)));
+  assert.ok(findings.some(item => /Receipt #1 verdict differs.*current audit reports MATCH/.test(item)));
+  assert.ok(findings.some(item => /Recorded FAIL total differs/.test(item)));
+  assert.doesNotMatch(findings.join(' '), /favorite color|teal|private note|never show this|<img|[0-9a-f]{64}/);
+  assert.match(await compare(capture), /CAPTURE MATCH:/);
+  assert.equal(output.children.length, 0, 'a new comparison clears older mismatch details');
   assert.match(await compare('{'), /FAIL: Saved capture is not valid JSON/);
   assert.match(await compare({...capture, version: 3}), /FAIL: Unsupported saved capture format or version/);
   assert.equal(JSON.stringify([...app.saved]), before);
@@ -2267,7 +2279,9 @@ test('browser replays saved v2 and v1 captures and exposes byte, script, and str
   await vm.runInContext('runEvidenceBatchAudit()', app.context);
   assert.equal(app.elements.get('audit-capture-verify').disabled, false);
   await vm.runInContext('verifySavedBatchCapture()', app.context);
-  assert.match(output.textContent, /DIFFER:.*selected file bytes/);
+  assert.match(output.textContent, /DIFFER:.*number of selected receipts differs/);
+  assert.match(output.children[0].children.map(item => item.textContent).join(' '),
+    /Receipt #1 file bytes differ/);
 });
 
 test('browser capture replay refuses unreadable files and ignores a stale read', async () => {
@@ -2305,7 +2319,7 @@ test('browser capture replay refuses unreadable files and ignores a stale read',
   await checking;
   assert.match(output.textContent, /Saved capture selection changed/);
   await vm.runInContext('verifySavedBatchCapture()', app.context);
-  assert.match(output.textContent, /PASS: Saved capture reproduced/);
+  assert.match(output.textContent, /CAPTURE MATCH: Saved capture reproduced/);
   vm.runInContext('invalidateReferenceComparison()', app.context);
   assert.equal(app.elements.get('audit-capture-verify').disabled, true);
   assert.match(output.textContent, /Audit the selected files again/);

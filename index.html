@@ -343,6 +343,8 @@
     .ledger-entry small { color: #cbd5e1; margin-top: 0.3rem; }
     .evidence-question { margin: 0.75rem 0 1rem; padding: 0.8rem; border: 1px solid rgba(34,211,238,0.4); border-radius: 10px; background: rgba(8,20,43,0.8); }
     .evidence-question h2 { font-size: 0.95rem; color: #a5f3fc; }
+    .capture-findings { display: grid; gap: 0.45rem; margin: 0.7rem 0; padding: 0; list-style: none; }
+    .capture-findings li { padding: 0.6rem 0.75rem; border-left: 3px solid #fbbf24; border-radius: 6px; background: rgba(120,53,15,0.26); color: #fef3c7; font-size: 0.82rem; line-height: 1.5; overflow-wrap: anywhere; }
     @media (max-width: 580px) { .comparison-grid { grid-template-columns: 1fr; } }
 
     @media (prefers-reduced-motion: reduce) {
@@ -523,8 +525,8 @@
       <div class="ledger-actions">
         <button type="button" id="audit-capture-verify" onclick="verifySavedBatchCapture()" disabled>Compare saved capture</button>
       </div>
-      <p id="audit-capture-verification" role="status" aria-live="polite">Audit the selected files, then choose a saved capture to compare.</p>
-      <p>Run the audit, choose a saved capture, then compare it with these original files. A passing comparison can reproduce recorded failures; review the counts. A repeated file is not a new independent source. The capture contains hashes and outcomes, not record values or filenames. No files are uploaded or imported.</p>
+      <div id="audit-capture-verification" role="status" aria-live="polite">Audit the selected files, then choose a saved capture to compare.</div>
+      <p>Run the audit, choose a saved capture, then compare it with these original files. CAPTURE MATCH means the files and recorded results reproduced; check the audit counts separately for DIFFER or FAIL rows. If the capture differs, this page lists changed components without showing the private facts. A repeated file is not a new independent source. The capture contains hashes and outcomes, not record values or filenames. No files are uploaded or imported.</p>
     </section>
     <div class="ledger-actions">
       <button type="button" id="incoming-correction-preview-button" onclick="previewIncomingCorrection()" disabled>Preview applying correction here</button>
@@ -2265,7 +2267,9 @@ function invalidateEvidenceBatchCaptureReplay(message = "Saved capture selection
   ++evidenceBatchCaptureReplayRequest;
   document.getElementById("audit-capture-verify").disabled =
     !lastEvidenceBatchCapture || !document.getElementById("audit-capture-file").files?.[0];
-  document.getElementById("audit-capture-verification").textContent = message;
+  const output = document.getElementById("audit-capture-verification");
+  output.replaceChildren();
+  output.textContent = message;
 }
 function invalidateEvidenceBatchCapture(message) {
   lastEvidenceBatchCapture = null;
@@ -2323,6 +2327,80 @@ function sameEvidenceCaptureValue(actual, expected) {
     sameEvidenceCaptureValue(actual[key], expected[key]));
 }
 
+// Diagnostic text is deliberately limited to field names, row numbers, and fixed messages.
+// The capture and original inputs may contain private assertions or arbitrary untrusted text.
+function evidenceCaptureFindings(saved, expected) {
+  const findings = [];
+  const sameFields = (actual, model) => actual && typeof actual === "object" &&
+    !Array.isArray(actual) && Object.keys(actual).length === Object.keys(model).length &&
+    Object.keys(model).every(key => Object.prototype.hasOwnProperty.call(actual, key));
+  if (!sameFields(saved, expected)) findings.push("Capture structure differs: top-level fields are missing or unexpected.");
+  if (expected.version === 2 && saved.browser_script_sha256 !== expected.browser_script_sha256) {
+    findings.push("The browser verifier script fingerprint differs. An older capture may require the archived page version.");
+  }
+  if (saved.reference_sha256 !== expected.reference_sha256) {
+    findings.push("Reference file bytes differ. Choose the original reference used for the capture.");
+  }
+  if (saved.checkpoint_sha256 !== expected.checkpoint_sha256) {
+    findings.push("Checkpoint selection or file bytes differ. Choose the original optional checkpoint.");
+  }
+  if (!Array.isArray(saved.receipts)) {
+    findings.push("Receipt list is missing or invalid.");
+  } else {
+    if (saved.receipts.length !== expected.receipts.length) {
+      findings.push("The number of selected receipts differs.");
+    }
+    for (let index = 0; index < Math.min(saved.receipts.length, expected.receipts.length); index++) {
+      const old = saved.receipts[index];
+      const current = expected.receipts[index];
+      const label = `Receipt #${index + 1}`;
+      if (!sameFields(old, current)) findings.push(`${label} has missing or unexpected fields.`);
+      if (!old || typeof old !== "object" || Array.isArray(old)) continue;
+      if (old.index !== current.index) findings.push(`${label} has a different recorded position.`);
+      if (old.sha256 !== current.sha256) {
+        findings.push(`${label} file bytes differ. Recheck that file and the selection order.`);
+      }
+      if (old.verdict !== current.verdict) {
+        findings.push(`${label} verdict differs. The current audit reports ${current.verdict}.`);
+      }
+      if (old.duplicate_of !== current.duplicate_of) {
+        findings.push(`${label} identical-file relationship differs.`);
+      }
+    }
+  }
+  if (!sameFields(saved.totals, expected.totals)) {
+    findings.push("Totals have missing or unexpected fields.");
+  }
+  for (const [key, label] of [["match", "MATCH"], ["differ", "DIFFER"],
+    ["fail", "FAIL"], ["identical_copies", "identical-file repeats"]]) {
+    if (saved.totals?.[key] !== expected.totals[key]) {
+      findings.push(`Recorded ${label} total differs from the current audit.`);
+    }
+  }
+  // Strict equality remains the acceptance rule, including types and unexpected nested fields.
+  if (!findings.length && !sameEvidenceCaptureValue(saved, expected)) {
+    findings.push("Capture structure or field types differ from the expected format.");
+  }
+  return findings;
+}
+
+function showEvidenceCaptureFindings(output, findings) {
+  output.textContent = `DIFFER: ${findings.length} capture mismatch${findings.length === 1 ? "" : "es"}. First finding: ${findings[0]} Details below; no file contents were displayed.`;
+  const list = document.createElement("ol");
+  list.className = "capture-findings";
+  for (const finding of findings.slice(0, 12)) {
+    const item = document.createElement("li");
+    item.textContent = finding;
+    list.appendChild(item);
+  }
+  if (findings.length > 12) {
+    const item = document.createElement("li");
+    item.textContent = `${findings.length - 12} more mismatches. Fix the listed items and compare again.`;
+    list.appendChild(item);
+  }
+  output.appendChild(list);
+}
+
 async function verifySavedBatchCapture() {
   const request = ++evidenceBatchCaptureReplayRequest;
   const audit = lastEvidenceBatchCapture;
@@ -2341,6 +2419,7 @@ async function verifySavedBatchCapture() {
     invalidateEvidenceBatchAudit("Selection changed. Audit the selected files again.");
     return;
   }
+  output.replaceChildren();
   output.textContent = "Comparing the saved capture with this browser's audit…";
   try {
     const {raw} = await readEvidenceAuditBytes(file, "Saved capture");
@@ -2352,22 +2431,20 @@ async function verifySavedBatchCapture() {
       output.textContent = "FAIL: Unsupported saved capture format or version.";
       return;
     }
-    if (saved.version === 2 &&
-        saved.browser_script_sha256 !== audit.payload.browser_script_sha256) {
-      output.textContent = "DIFFER: The saved capture's browser verifier script fingerprint differs from this page.";
-      return;
-    }
     const {browser_script_sha256, ...legacy} = audit.payload;
     const expected = saved.version === 2 ? audit.payload : {...legacy, version: 1};
-    if (!sameEvidenceCaptureValue(saved, expected)) {
-      output.textContent = "DIFFER: The saved capture differs in its structure, selected file bytes, order, verdicts, or totals.";
+    const findings = evidenceCaptureFindings(saved, expected);
+    if (findings.length) {
+      showEvidenceCaptureFindings(output, findings);
       return;
     }
     const totals = audit.payload.totals;
-    output.textContent = `PASS: Saved capture reproduced from the selected files: ${totals.match} MATCH, ${totals.differ} DIFFER, ${totals.fail} FAIL. ` +
+    output.textContent = `CAPTURE MATCH: Saved capture reproduced from the selected files: ${totals.match} MATCH, ${totals.differ} DIFFER, ${totals.fail} FAIL. ` +
       (saved.version === 1 ? "Legacy v1 capture has no browser script fingerprint. " :
         "Browser verifier script fingerprint agrees. ") +
-      "Review the recorded outcomes; this does not prove origin or factual truth.";
+      (totals.differ || totals.fail ? "The audit contains DIFFER or FAIL results; review those rows. " :
+        "All audited receipts matched this selected reference. ") +
+      "This consistency check does not prove origin, completeness, or factual truth.";
   } catch (error) {
     if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not read the saved capture."}`;
   }
