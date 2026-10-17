@@ -59,6 +59,8 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - An unambiguous JSON intake rule that rejects repeated object names, including escaped spellings, before an evidence file can earn a `MATCH` verdict
 - A dual-auditor review command that checks the same capture with Node and independent Python, compares their outputs, and reports replay separately from the recorded receipt outcomes
 - A seeded verifier boundary challenge that found and fixed a real browser/Python Unicode disagreement, then checks their answer rules against synthetic counterexamples
+- A dual-review portability gate that checks selected names under both runtimes, withholds a positive result when they normalize differently, and detects an original file changed during review
+- A seeded multi-source challenge that probes known, missing, historical, conflicting, ambiguous, and malformed record sets in both implementations
 
 “Remembrance,” “coherence,” “Eternal Quartz,” and “dragon ignition” are conceptual names within the prototype. They do not imply autonomous awareness or empirically validated physical mechanisms.
 
@@ -215,6 +217,8 @@ node tools/review-evidence.cjs research/example-evidence-reference-baseline.json
 
 The result says `replay: "MATCH"`, while `receipt_assessment` says A is `all_receipts_match` and B has `recorded_differences`. It includes the SHA-256 of the exact capture file, totals, changed receipt positions, and fixed trust limits, without printing private fact values or original file hashes. A nonmatching capture, changed input, unavailable checker, or checker disagreement yields `UNCONFIRMED` and exit 1, without a partial positive verdict. The command also supports `--check-capture` for a single reference and `--check-sealed ... --opening-key ...` for a private pair. Its [review protocol](research/dual-review-protocol.md) documents the full interface, privacy boundary, and reproducible failure cases. The offline kit archives this command alongside both auditors.
 
+The reviewer now also compares normalization of selected fact names and questions between its Node and Python runtimes. If those differ, it returns `UNCONFIRMED` even when both auditors reproduced the same capture; it checks that the original files did not change during review. A `MATCH` labels this selected-string check and says that the capture does **not** record the Unicode runtime of the original browser. The [runtime portability case](research/runtime-portability-gate.md) shows a synthetic capture that previously gave both auditors `MATCH` even though their normalized names differed. Run `node tools/challenge-multisource-evidence.cjs --seed 20261017 --runs 500 --json` for the associated source-competition challenge.
+
 To challenge the **agreement of the implementations themselves**, run `node tools/challenge-verifier-boundaries.cjs --seed 20261017 --runs 400 --json`. Its [boundary challenge and synthetic fixture](research/verifier-boundary-challenge.md) document a real Unicode disagreement found in the previous Python checker and show the before-and-after full-capture replay. A passing bounded challenge does not establish that all inputs agree or that an assertion is true.
 
 For sharing where the raw file hashes themselves would reveal predictable private assertions, use **Share a private transition capture** after tracing. **Prepare private pair** creates a new 256-bit opening key in the browser; download the private capture and opening key separately. Send the capture to its intended audience and transfer the key only to an intended verifier through a separate private channel. A verifier reselects the originals, traces again, and chooses both saved files under **Compare private capture**, or runs each auditor with `--check-sealed private-capture.json --opening-key opening-key.json` in place of `--check-transition`. The [private sharing protocol](research/private-transition-sharing.md) gives the exact format, CLI commands, failure tests, and key limits. A key holder can test guesses, and verdicts and repeats remain visible in the capture. A match is only consistency with the supplied originals and key; a matching capture can contain `DIFFER` or `FAIL` outcomes. The offline kit can pin the code for a private capture without packing the key or originals.
@@ -281,7 +285,7 @@ Run the small regression suite with Node.js:
 node --test tests/*.test.cjs
 ```
 
-These cover score controls and proof replay, blind trials, sourced answers, corrections, reference and checkpoint comparison, batch captures, independent Python replay, offline kits, reference transition traces, state recovery, privacy boundaries, and synthetic falsification cases. CI also runs the fixed command-line fixtures and differential challenges, including the verifier's Unicode boundary challenge.
+These cover score controls and proof replay, blind trials, sourced answers, corrections, reference and checkpoint comparison, batch captures, independent Python replay, offline kits, reference transition traces, state recovery, privacy boundaries, and synthetic falsification cases. CI also runs the fixed command-line fixtures and differential challenges, including Unicode boundaries and multi-source competition.
 
 ## Research question
 

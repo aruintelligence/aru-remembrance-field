@@ -15,6 +15,7 @@ const CODE_FILES = [
   "tools/benchmark-evidence.cjs",
   "tools/verify-evidence-receipt.cjs",
   "tools/independent-evidence-batch.py",
+  "tools/probe-normalization.py",
   "tools/review-evidence.cjs",
   "tools/verifier-kit.cjs"
 ];
@@ -51,7 +52,10 @@ receipts in their original order. Add \`--explain-additions\` to either paired
 auditor command to recompute the bounded added-source answer witness; this
 view is not stored in the capture. A CAPTURE MATCH can reproduce DIFFER or FAIL
 rows, so inspect every outcome. The review command runs both auditors and emits
-one compact result with replay and receipt outcomes as separate fields. It is
+one compact result with replay and receipt outcomes as separate fields. It
+also compares selected names under Node and Python, withholds a positive result
+if their Unicode normalization differs, and checks original file bytes again.
+The capture does not record the original browser's Unicode runtime. The kit is
 not signed or proof of independent custody. A kit check compares bytes with this folder's
 manifest and the browser script with the capture. The Node and Python commands
 recompute the actual audit from the selected original files. Neither the

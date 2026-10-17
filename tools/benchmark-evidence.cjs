@@ -41,6 +41,10 @@ function loadModel() {
   vm.runInContext(source, context, { timeout: 1000 });
   return {
     hash: createHash("sha256").update(source).digest("hex"),
+    normalize(name) {
+      context.name = name;
+      return vm.runInContext("normalizeFactKey(name)", context, { timeout: 1000 });
+    },
     validClaim: claim => vm.runInContext("validFactClaim(claim)", Object.assign(context, { claim }), { timeout: 1000 }),
     resolve(question, claims) {
       context.question = question;

@@ -23,18 +23,34 @@ def main():
         raise ValueError("probe needs 1–2000 synthetic cases")
     results = []
     for case in cases:
-        if type(case) is not dict or set(case) != {"record", "question"}:
+        if type(case) is not dict or set(case) not in (
+                {"record", "question"}, {"records", "question"},
+                {"records", "names"}):
             raise ValueError("invalid probe case")
-        record, question = case["record"], case["question"]
-        if type(question) is not str or len(question) > 500:
-            raise ValueError("invalid probe question")
+        records = [case["record"]] if "record" in case else case["records"]
+        if "question" in case:
+            question = case["question"]
+            if type(question) is not str or auditor.length(question) > 500:
+                raise ValueError("invalid probe question")
+        else:
+            names = case["names"]
+            if type(names) is not list or not 2 <= len(names) <= 8 or any(
+                    type(name) is not str or auditor.length(name) > 120 for name in names):
+                raise ValueError("invalid probe names")
         try:
-            auditor.records_valid([record])
+            auditor.records_valid(records)
+            if len({item["id"] for item in records}) != len(records):
+                raise auditor.AuditError("duplicate record ID")
             valid = True
         except (auditor.AuditError, TypeError, ValueError):
             valid = False
-        results.append({"valid": valid,
-                        "answer": auditor.answer(question, [record]) if valid else None})
+        if "question" in case:
+            results.append({"valid": valid,
+                            "answer": auditor.answer(question, records) if valid else None})
+        else:
+            results.append({"valid": valid,
+                            "brief": ([{"name": name, "answer": auditor.lookup(name, records)}
+                                       for name in names] if valid else None)})
     print(json.dumps({"results": results}, ensure_ascii=True, separators=(",", ":")))
 
 
