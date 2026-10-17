@@ -343,8 +343,18 @@
     .ledger-entry small { color: #cbd5e1; margin-top: 0.3rem; }
     .evidence-question { margin: 0.75rem 0 1rem; padding: 0.8rem; border: 1px solid rgba(34,211,238,0.4); border-radius: 10px; background: rgba(8,20,43,0.8); }
     .evidence-question h2 { font-size: 0.95rem; color: #a5f3fc; }
+    #reference-transition h3 { color: #a5f3fc; font-size: 1rem; line-height: 1.4; }
     .capture-findings { display: grid; gap: 0.45rem; margin: 0.7rem 0; padding: 0; list-style: none; }
     .capture-findings li { padding: 0.6rem 0.75rem; border-left: 3px solid #fbbf24; border-radius: 6px; background: rgba(120,53,15,0.26); color: #fef3c7; font-size: 0.82rem; line-height: 1.5; overflow-wrap: anywhere; }
+    .transition-summary { padding: 0.8rem; border: 1px solid #38bdf8; border-radius: 10px; background: rgba(8,47,73,0.46); }
+    .transition-changes { margin: 0.6rem 0 0.85rem; padding-left: 1.4rem; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
+    .transition-changes li { margin: 0.25rem 0; overflow-wrap: anywhere; }
+    .transition-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); gap: 0.65rem; margin: 0.7rem 0; }
+    .transition-card { min-width: 0; padding: 0.8rem; border: 1px solid #64748b; border-radius: 10px; background: #0b1530; overflow-wrap: anywhere; }
+    .transition-card[data-changed="true"] { border-color: #fbbf24; background: rgba(120,53,15,0.25); }
+    .transition-card h3 { font-size: 0.9rem; color: #f8fafc; }
+    .transition-card p { margin: 0.45rem 0 0; }
+    .transition-card .transition-verdict { font: 700 0.8rem/1.5 'JetBrains Mono', monospace; color: #a5f3fc; }
     @media (max-width: 580px) { .comparison-grid { grid-template-columns: 1fr; } }
 
     @media (prefers-reduced-motion: reduce) {
@@ -527,6 +537,17 @@
       </div>
       <div id="audit-capture-verification" role="status" aria-live="polite">Audit the selected files, then choose a saved capture to compare.</div>
       <p>Run the audit, choose a saved capture, then compare it with these original files. CAPTURE MATCH means the files and recorded results reproduced; check the audit counts separately for DIFFER or FAIL rows. If the capture differs, this page lists changed components without showing the private facts. To preserve this version's verifier code for later replay, see the <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/verifier-kit-protocol.md">offline verifier kit guide</a>. A repeated file is not a new independent source. The capture contains hashes and outcomes, not record values or filenames. No files are uploaded or imported.</p>
+      <section class="evidence-question" id="reference-transition">
+        <h3>Trace a verdict across two references</h3>
+        <p>Keep the selected reference and receipts above as B. Choose a second reference as A to replay those same receipts against both. Optional checkpoints are checked against their respective references before any verdict is compared. The view names changed source IDs and fields, answer kinds, and citation changes without displaying fact names or values.</p>
+        <label for="transition-reference-a">Reference A ledger JSON (up to 1 MiB)</label>
+        <input id="transition-reference-a" type="file" accept=".json,application/json" onchange="invalidateReferenceTransition()">
+        <label for="transition-checkpoint-a">Reference A checkpoint JSON (optional, up to 1 MiB)</label>
+        <input id="transition-checkpoint-a" type="file" accept=".json,application/json" onchange="invalidateReferenceTransition()">
+        <div class="ledger-actions"><button type="button" onclick="traceReferenceTransition()">Trace selected receipts</button></div>
+        <div id="reference-transition-result" role="status" aria-live="polite">Choose reference A, the selected reference B, and 1–20 receipts to trace.</div>
+        <p>A and B are comparison labels, not verified dates. An unchanged verdict can conceal a different reason. A checkpoint checks the ordered records and next source ID under these rules; a trusted copy held separately is needed for provenance. Neither reference proves the assertions are true or complete.</p>
+      </section>
     </section>
     <div class="ledger-actions">
       <button type="button" id="incoming-correction-preview-button" onclick="previewIncomingCorrection()" disabled>Preview applying correction here</button>
@@ -2263,6 +2284,13 @@ async function compareVerifiedEvidenceToReference() {
 let evidenceBatchAuditRequest = 0;
 let lastEvidenceBatchCapture = null;
 let evidenceBatchCaptureReplayRequest = 0;
+let referenceTransitionRequest = 0;
+function invalidateReferenceTransition(message = "File selection changed. Trace the selected files again.") {
+  ++referenceTransitionRequest;
+  const output = document.getElementById("reference-transition-result");
+  output.replaceChildren();
+  output.textContent = message;
+}
 function invalidateEvidenceBatchCaptureReplay(message = "Saved capture selection changed. Compare it again.") {
   ++evidenceBatchCaptureReplayRequest;
   document.getElementById("audit-capture-verify").disabled =
@@ -2282,6 +2310,7 @@ function invalidateEvidenceBatchAudit(message = "Receipt selection changed. Audi
   ++evidenceBatchAuditRequest;
   document.getElementById("audit-result").textContent = message;
   invalidateEvidenceBatchCapture("Selection changed. Run the audit again before downloading a capture.");
+  invalidateReferenceTransition();
 }
 
 async function readEvidenceAuditBytes(file, label) {
@@ -2315,6 +2344,200 @@ function downloadEvidenceBatchCapture() {
     return;
   }
   downloadJSON(capture.payload, "aru-evidence-browser-batch-capture.json");
+}
+
+// Trace rule inputs without copying names, values, questions, or raw hashes into the view.
+function referenceChangedFields(a, b) {
+  return ["key", "value", "time", "status", "imported"].filter(field =>
+    Object.prototype.hasOwnProperty.call(a, field) !== Object.prototype.hasOwnProperty.call(b, field) ||
+    !Object.is(a[field], b[field]));
+}
+
+function referenceLedgerChanges(a, b) {
+  const earlier = new Map(a.records.map((record, index) => [record.id, {record, index}]));
+  const later = new Map(b.records.map((record, index) => [record.id, {record, index}]));
+  const changes = [];
+  for (const record of a.records) {
+    if (!later.has(record.id)) changes.push(`Source #${record.id} is absent from B.`);
+  }
+  for (const [id, entry] of later) {
+    const old = earlier.get(id);
+    if (!old) { changes.push(`Source #${id} was added to B.`); continue; }
+    const fields = referenceChangedFields(old.record, entry.record);
+    if (fields.length) changes.push(`Source #${id} changed ${fields.join(", ")}.`);
+    if (old.index !== entry.index) changes.push(`Source #${id} changed position in the ordered ledger.`);
+  }
+  if (a.next_source_id !== b.next_source_id) changes.push("The next source ID changed.");
+  return changes;
+}
+
+function referenceAnswerChanges(label, a, b) {
+  const changes = [];
+  if (a.kind !== b.kind) changes.push(`${label} kind: ${a.kind} → ${b.kind}.`);
+  if (a.value !== b.value) changes.push(`${label} value changed (values hidden).`);
+  const ids = answer => (answer.sources || []).map(id => `#${id}`);
+  if (JSON.stringify(ids(a)) !== JSON.stringify(ids(b))) {
+    const compact = values => values.length > 8 ? `${values.slice(0, 8).join(", ")} and ${values.length - 8} more` :
+      values.join(", ") || "none";
+    changes.push(`${label} source IDs: ${compact(ids(a))} → ${compact(ids(b))}.`);
+  }
+  if (JSON.stringify(a.names || []) !== JSON.stringify(b.names || [])) {
+    changes.push(`${label} ambiguous candidate names changed (names hidden).`);
+  }
+  return changes;
+}
+
+function referenceReceiptTrace(receipt, a, b, ledgerChanged) {
+  const lines = [];
+  if (receipt.format === "aru-evidence-brief-receipt") {
+    const old = evaluateEvidenceBrief(receipt.names, a.records);
+    const current = evaluateEvidenceBrief(receipt.names, b.records);
+    for (let index = 0; index < old.length; index++) {
+      lines.push(...referenceAnswerChanges(`Brief answer #${index + 1}`, old[index].answer,
+        current[index].answer));
+    }
+  } else {
+    lines.push(...referenceAnswerChanges("Computed answer",
+      evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, a.records)),
+      evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, b.records))));
+  }
+  if (receipt.format === "aru-evidence-answer-excerpt") {
+    const byId = new Map(b.records.map(record => [record.id, record]));
+    for (const cited of receipt.records) {
+      const current = byId.get(cited.id);
+      if (!current) lines.push(`Cited source #${cited.id} is absent from B.`);
+      else {
+        const fields = referenceChangedFields(cited, current);
+        if (fields.length) lines.push(`Cited source #${cited.id} differs from B in ${fields.join(", ")}.`);
+      }
+    }
+  } else if (ledgerChanged) {
+    lines.push("This full receipt requires an exact ordered snapshot; see the source changes above.");
+  }
+  return lines.length ? lines.join(" ") :
+    "The computed answer and cited sources agree across A and B under this receipt's scope.";
+}
+
+async function traceReferenceTransition() {
+  const request = ++referenceTransitionRequest;
+  const output = document.getElementById("reference-transition-result");
+  const aInput = document.getElementById("transition-reference-a");
+  const aCheckpointInput = document.getElementById("transition-checkpoint-a");
+  const bInput = document.getElementById("reference-file");
+  const bCheckpointInput = document.getElementById("checkpoint-file");
+  const receiptInput = document.getElementById("audit-receipts");
+  const aFile = aInput.files?.[0];
+  const aCheckpointFile = aCheckpointInput.files?.[0];
+  const bFile = bInput.files?.[0];
+  const bCheckpointFile = bCheckpointInput.files?.[0];
+  const files = Array.from(receiptInput.files || []);
+  output.replaceChildren();
+  if (!aFile || !bFile) { output.textContent = "Choose reference A and the selected reference B."; return; }
+  if (files.length < 1 || files.length > 20) {
+    output.textContent = "Choose 1–20 answer receipts above."; return;
+  }
+  if (files.reduce((sum, file) => sum + file.size, 0) > 4 * 1024 * 1024) {
+    output.textContent = "FAIL: Selected receipts exceed the 4 MiB combined limit."; return;
+  }
+  const stillCurrent = () => request === referenceTransitionRequest &&
+    aInput.files?.[0] === aFile && aCheckpointInput.files?.[0] === aCheckpointFile &&
+    bInput.files?.[0] === bFile && bCheckpointInput.files?.[0] === bCheckpointFile &&
+    receiptInput.files?.length === files.length &&
+    files.every((file, index) => receiptInput.files[index] === file);
+  output.textContent = "Checking both references and replaying selected receipts on this device…";
+  try {
+    const [aData, bData, aCheckpointData, bCheckpointData] = await Promise.all([
+      readEvidenceAuditBytes(aFile, "Reference A"), readEvidenceAuditBytes(bFile, "Reference B"),
+      aCheckpointFile ? readEvidenceAuditBytes(aCheckpointFile, "Checkpoint A") : null,
+      bCheckpointFile ? readEvidenceAuditBytes(bCheckpointFile, "Checkpoint B") : null]);
+    if (!stillCurrent()) return;
+    const a = parseEvidenceAuditJSON(aData.raw, "Reference A");
+    const b = parseEvidenceAuditJSON(bData.raw, "Reference B");
+    validateEvidenceReference(a);
+    validateEvidenceReference(b);
+    for (const [label, data, baseline] of [["A", aCheckpointData, a], ["B", bCheckpointData, b]]) {
+      if (!data) continue;
+      const checkpoint = parseEvidenceAuditJSON(data.raw, `Checkpoint ${label}`);
+      validateEvidenceCheckpoint(checkpoint);
+      const digest = await ledgerCheckpointSHA256(baseline.records, baseline.next_source_id);
+      if (!stillCurrent()) return;
+      if (checkpoint.sha256 !== digest) {
+        output.textContent = `DIFFER: Reference ${label} differs from its selected checkpoint. No receipts were traced.`;
+        return;
+      }
+    }
+    const changes = referenceLedgerChanges(a, b);
+    const rows = [];
+    for (const [index, file] of files.entries()) {
+      let stage = "read";
+      try {
+        const {raw} = await readEvidenceAuditBytes(file, `Receipt #${index + 1}`);
+        if (!stillCurrent()) return;
+        stage = "parse";
+        const receipt = parseEvidenceAuditJSON(raw, "Receipt");
+        stage = "format";
+        if (!["aru-evidence-question-receipt", "aru-evidence-answer-excerpt",
+              "aru-evidence-brief-receipt"].includes(receipt?.format)) throw new Error("Unsupported format");
+        stage = "replay";
+        verifyEvidenceBundle(receipt);
+        const before = compareEvidenceToReference(receipt, a.records).match ? "MATCH" : "DIFFER";
+        const after = compareEvidenceToReference(receipt, b.records).match ? "MATCH" : "DIFFER";
+        rows.push({index: index + 1, before, after,
+          detail: referenceReceiptTrace(receipt, a, b, !sameFactLedger(a.records, b.records))});
+      } catch (_) {
+        if (!stillCurrent()) return;
+        const descriptions = {read: "Unreadable, invalid UTF-8, or oversized receipt.",
+          parse: "Receipt is not valid JSON.", format: "Unsupported answer receipt format.",
+          replay: "Receipt failed its own rule replay."};
+        rows.push({index: index + 1, before: "FAIL", after: "FAIL",
+          detail: `${descriptions[stage]} No reference verdict can be inferred.`});
+      }
+    }
+    if (!stillCurrent()) return;
+    const changed = rows.filter(row => row.before !== row.after).length;
+    const failed = rows.filter(row => row.before === "FAIL").length;
+    const summary = document.createElement("p");
+    summary.className = "transition-summary";
+    summary.textContent = `${files.length} receipts traced: ${changed} verdict change${changed === 1 ? "" : "s"}, ${files.length - changed - failed} unchanged, ${failed} could not replay. ` +
+      `Reference A checkpoint ${aCheckpointData ? "matches" : "not supplied"}; B checkpoint ${bCheckpointData ? "matches" : "not supplied"}.`;
+    const heading = document.createElement("h4");
+    heading.textContent = `Reference differences: ${changes.length}`;
+    const list = document.createElement("ol");
+    list.className = "transition-changes";
+    for (const change of changes.slice(0, 12)) {
+      const item = document.createElement("li"); item.textContent = change; list.appendChild(item);
+    }
+    if (changes.length > 12) {
+      const item = document.createElement("li");
+      item.textContent = `${changes.length - 12} more source differences; no values are displayed.`;
+      list.appendChild(item);
+    }
+    if (!changes.length) {
+      const item = document.createElement("li");
+      item.textContent = "Ordered records and next source ID agree; raw JSON bytes may still differ.";
+      list.appendChild(item);
+    }
+    const cards = document.createElement("div");
+    cards.className = "transition-cards";
+    cards.setAttribute("role", "list");
+    for (const row of rows) {
+      const card = document.createElement("article");
+      card.className = "transition-card";
+      card.setAttribute("role", "listitem");
+      card.setAttribute("data-changed", String(row.before !== row.after));
+      const title = document.createElement("h3"); title.textContent = `Receipt #${row.index}`;
+      const verdict = document.createElement("p"); verdict.className = "transition-verdict";
+      verdict.textContent = `A: ${row.before} → B: ${row.after}`;
+      const reason = document.createElement("p"); reason.textContent = row.detail;
+      card.appendChild(title); card.appendChild(verdict); card.appendChild(reason);
+      cards.appendChild(card);
+    }
+    output.replaceChildren();
+    output.appendChild(summary); output.appendChild(heading); output.appendChild(list);
+    output.appendChild(cards);
+  } catch (error) {
+    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not trace the selected files."}`;
+  }
 }
 
 function sameEvidenceCaptureValue(actual, expected) {
