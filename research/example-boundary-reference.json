@@ -1,0 +1,15 @@
+{
+  "format": "aru-evidence-ledger-baseline",
+  "version": 1,
+  "records": [
+    {
+      "id": 1,
+      "key": "city\u0085hall",
+      "value": "Synthetic example",
+      "time": 1700000000000,
+      "status": "active",
+      "imported": false
+    }
+  ],
+  "next_source_id": 2
+}

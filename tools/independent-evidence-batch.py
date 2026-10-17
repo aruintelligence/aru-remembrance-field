@@ -22,6 +22,19 @@ ROOT = Path(__file__).resolve().parents[1]
 FIELDS = {"id", "key", "value", "time", "status", "imported"}
 FORMATS = {"aru-evidence-question-receipt", "aru-evidence-answer-excerpt",
            "aru-evidence-brief-receipt"}
+# ECMAScript /\s/ and String.trim() in the browser's evidence rules. Python's
+# \s and str.strip() differ at U+0085, U+001C–U+001F, and U+FEFF, among others.
+JS_SPACE = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+SPACE_RUN = f"[{re.escape(JS_SPACE)}]+"
+SPACE_OPT = f"[{re.escape(JS_SPACE)}]*"
+# JS regex '.' excludes these four line terminators; Python's '.' only excludes LF.
+JS_DOT = r"[^\r\n\u2028\u2029]"
+# The JS grammar uses /i without /u. For these ASCII literals that means just
+# ASCII upper/lower pairs; Python IGNORECASE additionally accepts İ, ı, and ſ.
+QUESTION = re.compile(r"[Ww][Hh][Aa][Tt](?:" + SPACE_RUN +
+                      r"[Ii][Ss]|['’][Ss])" + SPACE_RUN +
+                      "(" + JS_DOT + r"+?)(?:" + SPACE_OPT + r"\?)?")
+POSSESSIVE = re.compile(r"[Mm][Yy]" + SPACE_RUN + "(" + JS_DOT + r"+)")
 
 
 class AuditError(ValueError):
@@ -72,7 +85,7 @@ def fields(value, required):
 
 
 def normalized(name):
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", name).strip()).lower()
+    return re.sub(SPACE_RUN, " ", unicodedata.normalize("NFKC", name).strip(JS_SPACE)).lower()
 
 
 def records_valid(records):
@@ -82,8 +95,8 @@ def records_valid(records):
         require(type(item) is dict and FIELDS.issuperset(item) and
                 {"id", "key", "value", "time", "status"}.issubset(item) and
                 int_value(item["id"]) and 1 <= item["id"] <= 10**9 and
-                type(item["key"]) is str and item["key"].strip() and length(item["key"]) <= 120 and
-                type(item["value"]) is str and item["value"].strip() and length(item["value"]) <= 500 and
+                type(item["key"]) is str and item["key"].strip(JS_SPACE) and length(item["key"]) <= 120 and
+                type(item["value"]) is str and item["value"].strip(JS_SPACE) and length(item["value"]) <= 500 and
                 number(item["time"]) and 0 <= item["time"] <= 8.64e15 and
                 item["status"] in ("active", "superseded") and
                 ("imported" not in item or type(item["imported"]) is bool) and
@@ -142,17 +155,16 @@ def lookup(name, records):
 
 
 def answer(question, records):
-    if not question.strip():
+    if not question.strip(JS_SPACE):
         return {"kind": "empty"}
     if length(question) > 200:
         return {"kind": "unsupported"}
-    match = re.fullmatch(r"what(?:\s+is|['’]s)\s+(.+?)(?:\s*\?)?",
-                         unicodedata.normalize("NFKC", question).strip(), re.IGNORECASE)
+    match = QUESTION.fullmatch(unicodedata.normalize("NFKC", question).strip(JS_SPACE))
     if not match:
         return {"kind": "unsupported"}
-    name = match[1].strip()
+    name = match[1].strip(JS_SPACE)
     candidates = [name]
-    possessive = re.fullmatch(r"my\s+(.+)", name, re.IGNORECASE)
+    possessive = POSSESSIVE.fullmatch(name)
     if possessive:
         candidates.append(possessive[1])
     keys = list(dict.fromkeys(normalized(item) for item in candidates))
@@ -175,7 +187,7 @@ def verify_receipt(receipt):
                 type(receipt["names"]) is list and 2 <= len(receipt["names"]) <= 8,
                 "invalid brief format")
         names = receipt["names"]
-        require(all(type(name) is str and name.strip() and name == name.strip() and
+        require(all(type(name) is str and name.strip(JS_SPACE) and name == name.strip(JS_SPACE) and
                     length(name) <= 120 and "\r" not in name and "\n" not in name for name in names),
                 "invalid brief name")
         require(len({normalized(name) for name in names}) == len(names), "duplicate brief name")

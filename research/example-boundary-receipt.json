@@ -1,0 +1,17 @@
+{
+  "format": "aru-evidence-question-receipt",
+  "version": 1,
+  "model_revision": "aru-evidence-questions-1",
+  "question": "What is city hall?",
+  "records": [
+    {
+      "id": 1,
+      "key": "city\u0085hall",
+      "value": "Synthetic example",
+      "time": 1700000000000,
+      "status": "active",
+      "imported": false
+    }
+  ],
+  "answer": {"kind": "missing"}
+}
