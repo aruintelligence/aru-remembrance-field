@@ -36,7 +36,9 @@ python3 tools/independent-evidence-batch.py /path/to/reference-a.json /path/to/r
 \`\`\`
 
 Omit \`--checkpoint\` when the original capture has no checkpoint. Supply all
-receipts in their original order. A CAPTURE MATCH can reproduce DIFFER or FAIL
+receipts in their original order. Add \`--explain-additions\` to either paired
+auditor command to recompute the bounded added-source answer witness; this
+view is not stored in the capture. A CAPTURE MATCH can reproduce DIFFER or FAIL
 rows, so inspect every outcome. A kit check compares bytes with this folder's
 manifest and the browser script with the capture. The Node and Python commands
 recompute the actual audit from the selected original files. Neither the

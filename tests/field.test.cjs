@@ -2077,10 +2077,50 @@ test('two-reference lens traces an omitted conflict, full-snapshot change, and u
   assert.match(cards[0].children[2].textContent, /kind: known → conflict.*source IDs: #1 → #1, #2/);
   assert.match(cards[1].children[2].textContent, /full receipt requires an exact ordered snapshot/);
   assert.match(cards[2].children[2].textContent, /not valid JSON.*No reference verdict/);
+  assert.match(cards[0].children[3].textContent, /Minimum added-source set.*#2.*1 subset tested.*not proof of chronology/);
+  assert.equal(cards[2].children.length, 3, 'a failed replay has no answer-change claim');
   assert.equal(JSON.stringify([...app.saved]), saved);
   const allText = element => [element.textContent, ...(element.children || []).flatMap(allText)];
   assert.doesNotMatch(allText(output).join(' '),
     /secret|never reveal|favorite color|<img|[0-9a-f]{64}/);
+});
+
+test('addition witness finds a minimum pair and tied alternatives but declines edits and reorders', () => {
+  const app = boot();
+  const examine = (question, before, after) => {
+    app.context.sample = {format: 'aru-evidence-question-receipt', question};
+    app.context.before = {records: before};
+    app.context.after = {records: after};
+    return JSON.parse(JSON.stringify(vm.runInContext(
+      'referenceAddedSourceWitness(sample, before, after)', app.context)));
+  };
+  const record = (id, key, value) => ({id, key, value, time: 1700000000000 + id,
+    status: 'active', imported: false});
+  const color = record(1, 'color', 'teal');
+  const amber = record(2, 'color', 'amber');
+  const green = record(3, 'color', 'green');
+  assert.deepEqual(examine('What is color?', [], [color, amber]),
+    {status: 'witness', minimum_size: 2, sets: [[1, 2]], total_sets: 1, tested_subsets: 3});
+  assert.deepEqual(examine('What is my color?', [record(1, 'my color', 'teal')],
+    [record(1, 'my color', 'teal'), amber, green]),
+    {status: 'witness', minimum_size: 1, sets: [[2], [3]], total_sets: 2, tested_subsets: 2});
+  const manyTies = examine('What is my color?', [record(1, 'my color', 'teal')],
+    [record(1, 'my color', 'teal'), ...[2, 3, 4, 5].map(id => record(id, 'color', `private ${id}`))]);
+  assert.deepEqual(manyTies.sets, [[2], [3], [4]]);
+  assert.equal(manyTies.total_sets, 4);
+  app.context.manyTies = manyTies;
+  assert.match(vm.runInContext('referenceWitnessText(manyTies)', app.context), /#2; #3; #4; 1 more/);
+  assert.deepEqual(examine('What is color?', [color], [color, record(2, 'city', 'Portland')]),
+    {status: 'unchanged'});
+  assert.deepEqual(examine('What is color?', [color], [{...color, value: 'amber'}]),
+    {status: 'unavailable', reason: 'not-addition-only'});
+  assert.deepEqual(examine('What is color?', [color], []),
+    {status: 'unavailable', reason: 'not-addition-only'});
+  assert.deepEqual(examine('What is color?', [color, amber], [amber, color]),
+    {status: 'unavailable', reason: 'not-addition-only'});
+  assert.deepEqual(examine('What is color?', [], Array.from({length: 7}, (_, index) =>
+    record(index + 1, 'color', 'teal'))),
+    {status: 'unavailable', reason: 'too-many-additions'});
 });
 
 test('browser transitions agree with Node and independent Python on the same synthetic references', async () => {

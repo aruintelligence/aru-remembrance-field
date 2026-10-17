@@ -82,14 +82,16 @@ test('a paired transition capture creates an offline kit that independently repl
   assert.equal(checked.status, 0, checked.stderr);
   assert.match(checked.stdout, /KIT MATCH/);
   const args = [reference, ...receipts, '--checkpoint', checkpoint, '--reference-b', referenceB,
-    '--check-transition', transition];
+    '--check-transition', transition, '--explain-additions'];
   const replay = node([path.join(kit, 'tools/audit-evidence-batch.cjs'), ...args], dir);
   assert.equal(replay.status, 0, replay.stderr);
   assert.match(replay.stdout, /TRANSITION CAPTURE MATCH.*Inspect A and B counts independently/);
+  assert.match(replay.stdout, /#1 answer witness: 1 added source.*#2/);
   const independent = spawnSync('python3',
     [path.join(kit, 'tools/independent-evidence-batch.py'), ...args], {encoding: 'utf8', cwd: dir});
   assert.equal(independent.status, 0, independent.stderr);
   assert.match(independent.stdout, /TRANSITION CAPTURE MATCH/);
+  assert.match(independent.stdout, /#1 answer witness: 1 added source.*#2/);
   assert.equal(fs.existsSync(path.join(kit, 'transition.json')), false);
   assert.equal(fs.existsSync(path.join(kit, 'research')), false);
 
