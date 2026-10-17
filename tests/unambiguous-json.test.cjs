@@ -118,6 +118,6 @@ test('ambiguous reference, checkpoint, capture, private key, and kit input fail 
   const created = run(process.execPath, 'verifier-kit.cjs', ['create', cleanCapture, kit]);
   assert.equal(created.status, 0, created.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(kit, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.files.length, 8);
+  assert.equal(manifest.files.length, 9);
   assert.ok(manifest.files.some(row => row.path === 'tools/unambiguous-json.cjs'));
 }));
