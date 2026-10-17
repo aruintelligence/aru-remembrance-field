@@ -15,6 +15,7 @@ const CODE_FILES = [
   "tools/benchmark-evidence.cjs",
   "tools/verify-evidence-receipt.cjs",
   "tools/independent-evidence-batch.py",
+  "tools/review-evidence.cjs",
   "tools/verifier-kit.cjs"
 ];
 const FILES = [...CODE_FILES, "README.md"];
@@ -32,21 +33,26 @@ From this folder, with Node.js 22+ and Python 3.12+ installed:
 node tools/verifier-kit.cjs check . /path/to/capture.json
 node tools/audit-evidence-batch.cjs /path/to/reference.json /path/to/receipt-1.json --checkpoint /path/to/checkpoint.json --check-capture /path/to/capture.json
 python3 tools/independent-evidence-batch.py /path/to/reference.json /path/to/receipt-1.json --checkpoint /path/to/checkpoint.json --check-capture /path/to/capture.json
+node tools/review-evidence.cjs /path/to/reference.json /path/to/receipt-1.json --checkpoint /path/to/checkpoint.json --check-capture /path/to/capture.json --json
 
 # For a paired transition capture, supply both references and all original receipts:
 node tools/audit-evidence-batch.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-transition /path/to/transition.json
 python3 tools/independent-evidence-batch.py /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-transition /path/to/transition.json
+node tools/review-evidence.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-transition /path/to/transition.json --json
 
 # For a private transition capture, keep its opening key in a separate private location:
 node tools/audit-evidence-batch.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json
 python3 tools/independent-evidence-batch.py /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json
+node tools/review-evidence.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json --json
 \`\`\`
 
 Omit \`--checkpoint\` when the original capture has no checkpoint. Supply all
 receipts in their original order. Add \`--explain-additions\` to either paired
 auditor command to recompute the bounded added-source answer witness; this
 view is not stored in the capture. A CAPTURE MATCH can reproduce DIFFER or FAIL
-rows, so inspect every outcome. A kit check compares bytes with this folder's
+rows, so inspect every outcome. The review command runs both auditors and emits
+one compact result with replay and receipt outcomes as separate fields. It is
+not signed or proof of independent custody. A kit check compares bytes with this folder's
 manifest and the browser script with the capture. The Node and Python commands
 recompute the actual audit from the selected original files. Neither the
 manifest nor the capture is signed, timestamped, or proof of factual truth,

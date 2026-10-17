@@ -31,13 +31,13 @@ test('archived kit replays a capture through Node and independent Python outside
   assert.equal(created.status, 0, created.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(kit, 'manifest.json'), 'utf8'));
   assert.equal(manifest.browser_script_sha256, JSON.parse(fs.readFileSync(capture, 'utf8')).browser_script_sha256);
-  assert.equal(manifest.files.length, 8);
+  assert.equal(manifest.files.length, 9);
   assert.deepEqual(fs.readdirSync(kit).sort(), ['README.md', 'index.html', 'manifest.json', 'tools']);
   assert.equal(fs.existsSync(path.join(kit, 'research')), false);
   assert.equal(fs.existsSync(path.join(kit, 'capture.json')), false);
   const verified = node([path.join(kit, 'tools', 'verifier-kit.cjs'), 'check', kit, capture], dir);
   assert.equal(verified.status, 0, verified.stderr);
-  assert.match(verified.stdout, /KIT MATCH: 8 archived files.*supplied capture/);
+  assert.match(verified.stdout, /KIT MATCH: 9 archived files.*supplied capture/);
   const args = [reference, ...receipts, '--checkpoint', checkpoint, '--check-capture', capture];
   const replay = node([path.join(kit, 'tools', 'audit-evidence-batch.cjs'), ...args], dir);
   assert.equal(replay.status, 0, replay.stderr);
@@ -46,6 +46,9 @@ test('archived kit replays a capture through Node and independent Python outside
     [path.join(kit, 'tools', 'independent-evidence-batch.py'), ...args], {encoding: 'utf8', cwd: dir});
   assert.equal(independent.status, 0, independent.stderr);
   assert.match(independent.stdout, /CAPTURE MATCH: independent Python replay agrees/);
+  const decision = node([path.join(kit, 'tools', 'review-evidence.cjs'), ...args, '--json'], dir);
+  assert.equal(decision.status, 0, decision.stderr);
+  assert.equal(JSON.parse(decision.stdout).receipt_assessment, 'all_receipts_match');
 
   const another = path.join(dir, 'same-kit');
   assert.equal(node([kitTool, 'create', capture, another]).status, 0);
@@ -63,6 +66,11 @@ test('kit checker rejects a changed verifier, unexpected file, and altered captu
   assert.equal(changed.status, 1);
   assert.match(changed.stderr, /Kit file differs from manifest: tools\/verify-evidence-receipt.cjs/);
   fs.copyFileSync(path.join(root, 'tools', 'verify-evidence-receipt.cjs'), verifier);
+  const reviewer = path.join(kit, 'tools', 'review-evidence.cjs');
+  fs.appendFileSync(reviewer, '\n// changed after packaging\n');
+  assert.match(node([checker, 'check', kit, capture], dir).stderr,
+    /Kit file differs from manifest: tools\/review-evidence.cjs/);
+  fs.copyFileSync(path.join(root, 'tools', 'review-evidence.cjs'), reviewer);
   fs.writeFileSync(path.join(kit, 'tools', 'unexpected.txt'), 'extra');
   assert.match(node([checker, 'check', kit, capture], dir).stderr, /missing or unexpected files/);
   fs.rmSync(path.join(kit, 'tools', 'unexpected.txt'));

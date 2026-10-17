@@ -346,6 +346,11 @@
     #reference-transition h3 { color: #a5f3fc; font-size: 1rem; line-height: 1.4; }
     .capture-findings { display: grid; gap: 0.45rem; margin: 0.7rem 0; padding: 0; list-style: none; }
     .capture-findings li { padding: 0.6rem 0.75rem; border-left: 3px solid #fbbf24; border-radius: 6px; background: rgba(120,53,15,0.26); color: #fef3c7; font-size: 0.82rem; line-height: 1.5; overflow-wrap: anywhere; }
+    .review-path { margin: 0.9rem 0; padding: 0.9rem; border: 1px solid #67e8f9; border-radius: 12px; background: linear-gradient(135deg, rgba(8,47,73,0.85), rgba(20,83,45,0.35)); overflow-wrap: anywhere; }
+    .review-path h3 { margin: 0; color: #cffafe; font-size: 0.95rem; }
+    .review-path p { margin: 0.45rem 0; }
+    .review-path a { display: inline-block; min-height: 44px; padding: 0.7rem 0; color: #a5f3fc; font-weight: 700; text-underline-offset: 3px; }
+    .review-path a:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
     .transition-summary { padding: 0.8rem; border: 1px solid #38bdf8; border-radius: 10px; background: rgba(8,47,73,0.46); }
     .transition-changes { margin: 0.6rem 0 0.85rem; padding-left: 1.4rem; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
     .transition-changes li { margin: 0.25rem 0; overflow-wrap: anywhere; }
@@ -541,6 +546,11 @@
       </div>
       <div id="audit-capture-verification" role="status" aria-live="polite">Audit the selected files, then choose a saved capture to compare.</div>
       <p>Run the audit, choose a saved capture, then compare it with these original files. CAPTURE MATCH means the files and recorded results reproduced; check the audit counts separately for DIFFER or FAIL rows. If the capture differs, this page lists changed components without showing the private facts. To preserve this version's verifier code for later replay, see the <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/verifier-kit-protocol.md">offline verifier kit guide</a>. A repeated file is not a new independent source. The capture contains hashes and outcomes, not record values or filenames. No files are uploaded or imported.</p>
+      <aside class="review-path" aria-labelledby="dual-review-title">
+        <h3 id="dual-review-title">Independent review · one clear result</h3>
+        <p>Give a reviewer the saved capture and the same original files. A local command runs both the Node and Python checkers, compares their results, and separates capture replay from receipt outcomes. It works for ordinary, paired, and private captures; private review also needs the opening key.</p>
+        <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/dual-review-protocol.md">See the reviewer command and result format</a>
+      </aside>
       <section class="evidence-question" id="reference-transition">
         <h3>Trace a verdict across two references</h3>
         <p>Keep the selected reference and receipts above as B. Choose a second reference as A to replay those same receipts against both. Optional checkpoints are checked against their respective references before any verdict is compared. The view names changed source IDs and fields, answer kinds, and citation changes without displaying fact names or values.</p>
