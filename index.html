@@ -550,6 +550,8 @@
         <h3 id="dual-review-title">Independent review · one clear result</h3>
         <p>Give a reviewer the saved capture and the same original files. A local command runs both the Node and Python checkers, compares their results, and separates capture replay from receipt outcomes. It works for ordinary, paired, and private captures; private review also needs the opening key.</p>
         <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/dual-review-protocol.md">See the reviewer command and result format</a>
+        <p>Test the checkers themselves with a seeded, synthetic boundary challenge. It found a Unicode input where their answer rules disagreed; a passing run only covers the generated cases.</p>
+        <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/verifier-boundary-challenge.md">Reproduce the verifier boundary challenge</a>
       </aside>
       <section class="evidence-question" id="reference-transition">
         <h3>Trace a verdict across two references</h3>
