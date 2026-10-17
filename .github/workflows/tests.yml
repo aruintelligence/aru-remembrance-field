@@ -21,6 +21,7 @@ jobs:
       - run: node tests/verifier-kit.test.cjs
       - run: node tests/reference-transition-capture.test.cjs
       - run: node tests/sealed-transition.test.cjs
+      - run: node tests/unambiguous-json.test.cjs
       - run: node tests/addition-witness.test.cjs
       - run: node tests/benchmark.test.cjs
       - run: node tests/falsifier.test.cjs

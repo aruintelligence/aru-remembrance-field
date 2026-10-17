@@ -2319,6 +2319,30 @@ test('browser downloads and replays a strict paired capture without confusing co
   assert.equal(app.exports.length, 1, 'old report cannot be downloaded after a new selection');
 });
 
+test('browser refuses ambiguous JSON before a receipt can be trusted or a reference traced', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const reference = fixture('example-evidence-reference-baseline.json');
+  const receipt = fixture('example-evidence-receipt.json');
+  const ambiguous = receipt.replace('"version": 1,', '"\\u0076ersion": 0, "version": 1,');
+  assert.deepEqual(JSON.parse(ambiguous), JSON.parse(receipt));
+  const app = boot();
+  const saved = JSON.stringify([...app.saved]);
+  assert.match(await chooseReceiptFile(app, ambiguous), /FAIL: File has duplicate JSON object names/);
+  const result = await auditSavedReceipts(app, reference, [auditFile(ambiguous)]);
+  assert.match(result.children[0].textContent, /0 MATCH, 0 DIFFER, 1 FAIL/);
+  assert.match(result.children[1].children[0].children[1].children[0].children[3].textContent,
+    /duplicate JSON object name/);
+  const trace = await traceSavedReferences(app, reference, reference, [auditFile(ambiguous)]);
+  assert.match(trace.children[0].textContent, /1 could not replay/);
+  assert.match(trace.children.at(-1).children[0].children[2].textContent, /repeated object names/);
+  const ambiguousReference = reference.replace('"next_source_id": 2',
+    '"next_source_id": 9, "next_source_id": 2');
+  const stopped = await traceSavedReferences(app, ambiguousReference, reference, [auditFile(receipt)]);
+  assert.match(stopped.textContent, /FAIL: Reference A has a duplicate JSON object name/);
+  assert.equal(stopped.children.length, 0);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+});
+
 test('transition capture distinguishes identical text from identical bytes, including a UTF-8 BOM', async () => {
   const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
   const reference = fixture('example-evidence-reference-baseline.json');

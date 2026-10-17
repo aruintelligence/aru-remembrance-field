@@ -2,8 +2,8 @@
   "format": "aru-evidence-batch-audit",
   "version": 1,
   "model_sha256": "35a50422c5655d47a1e6c8a16e58847a33dbed84f9f3bfa53738b4af61fdadb7",
-  "verifier_sha256": "059734f3a51975f5221dcc9941782aa42e41a37265c4849f1366066567fb54db",
-  "auditor_sha256": "288176772b3ca57d4afaaab8ef03ff6b1fa7deedf43a28291a314ae64991c301",
+  "verifier_sha256": "f0958a97f4b2e51cad153f09f1b8c58169ba79b39420872a9550c2380d29638b",
+  "auditor_sha256": "d1c163c6464f18997f3704def159b300c62b6f805c31bd64c915d646fa082507",
   "reference_sha256": "442a05ce956f7a196863840d7594c8ea5178e49cf93c20e41124f80ed7c863d6",
   "checkpoint_sha256": "ecabe5f00d4be22e9d1ca9ac2a2d588b918ba162f647dcdb4132dca31b6b79e7",
   "receipts": [
