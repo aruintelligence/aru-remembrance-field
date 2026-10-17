@@ -9,8 +9,10 @@ const {createHash} = require("node:crypto");
 const {spawnSync} = require("node:child_process");
 const {isDeepStrictEqual} = require("node:util");
 const {parseUnambiguousJSON} = require("./unambiguous-json.cjs");
+const {loadModel} = require("./benchmark-evidence.cjs");
 
 const MAX_CAPTURE_BYTES = 1024 * 1024;
+const MAX_SELECTED_BYTES = 9 * MAX_CAPTURE_BYTES;
 const VALUE_FLAGS = new Set(["--checkpoint", "--reference-b", "--checkpoint-b",
   "--check-capture", "--check-transition", "--check-sealed", "--opening-key"]);
 const CAPTURE_FLAGS = ["--check-capture", "--check-transition", "--check-sealed"];
@@ -52,7 +54,7 @@ function parseArgs(argv) {
       (values.has("--checkpoint-b") && !values.has("--reference-b"))) {
     throw new Error("Paired captures require reference B; private captures also require an opening key");
   }
-  return {values, kind, json, auditorArgs, captureFile: values.get(kind)};
+  return {values, files, kind, json, auditorArgs, captureFile: values.get(kind)};
 }
 
 function captureBytes(file) {
@@ -104,6 +106,74 @@ function invoke(executable, script, args) {
   catch (_) { return {status: "invalid_output"}; }
 }
 
+function selectedSnapshot(selection) {
+  const paths = [...selection.files, ...["--reference-b", "--checkpoint", "--checkpoint-b",
+    "--opening-key"].map(flag => selection.values.get(flag)).filter(Boolean)];
+  let total = 0;
+  return paths.map(file => {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.size > MAX_CAPTURE_BYTES) throw new Error("Input exceeds 1 MiB");
+    const bytes = fs.readFileSync(file);
+    total += bytes.length;
+    if (bytes.length > MAX_CAPTURE_BYTES || total > MAX_SELECTED_BYTES) {
+      throw new Error("Selected files exceed snapshot bounds");
+    }
+    return {file, bytes};
+  });
+}
+
+function snapshotUnchanged(snapshot) {
+  try { return snapshot.every(({file, bytes}) => {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() && stat.size === bytes.length && bytes.equals(fs.readFileSync(file));
+  }); }
+  catch (_) { return false; }
+}
+
+function selectedStrings(selection, snapshot) {
+  const paths = [selection.files[0], selection.values.get("--reference-b"),
+    ...selection.files.slice(1)].filter(Boolean);
+  const strings = new Set();
+  for (const file of paths) {
+    const bytes = snapshot.find(item => item.file === file).bytes;
+    let value;
+    try { value = parseUnambiguousJSON(new TextDecoder("utf-8", {fatal: true}).decode(bytes)); }
+    catch (_) { continue; } // A recorded FAIL can contain malformed receipt bytes.
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    for (const row of Array.isArray(value.records) && value.records.length <= 100 ?
+      value.records : []) {
+      if (typeof row?.key === "string" && row.key.length <= 500) strings.add(row.key);
+    }
+    if (typeof value.question === "string" && value.question.length <= 500) {
+      strings.add(value.question);
+    }
+    for (const name of Array.isArray(value.names) && value.names.length <= 8 ?
+      value.names : []) {
+      if (typeof name === "string" && name.length <= 500) strings.add(name);
+    }
+  }
+  if (strings.size > 2500) throw new Error("Too many selected strings");
+  return [...strings];
+}
+
+function normalizationCompatible(selection, snapshot) {
+  const strings = selectedStrings(selection, snapshot);
+  const input = JSON.stringify({strings});
+  if (Buffer.byteLength(input) > 2 * 1024 * 1024) throw new Error("Normalization input exceeds 2 MiB");
+  const result = spawnSync("python3", [path.join(__dirname, "probe-normalization.py")],
+    {input, encoding: "utf8", timeout: 30000, maxBuffer: 4 * 1024 * 1024});
+  if (result.error || result.status !== 0) throw new Error("Normalization probe failed");
+  let normalized;
+  try { normalized = JSON.parse(result.stdout).normalized; }
+  catch (_) { throw new Error("Normalization probe returned invalid output"); }
+  if (!Array.isArray(normalized) || normalized.length !== strings.length ||
+      normalized.some(value => typeof value !== "string")) {
+    throw new Error("Normalization probe returned invalid strings");
+  }
+  const model = loadModel();
+  return strings.every((value, index) => model.normalize(value) === normalized[index]);
+}
+
 function review(argv, runners = null) {
   const selection = parseArgs(argv);
   const before = captureBytes(selection.captureFile);
@@ -112,6 +182,9 @@ function review(argv, runners = null) {
     capture_sha256: sha256(before),
     capture_kind: selection.kind === "--check-capture" ? "batch" :
       selection.kind === "--check-transition" ? "transition" : "private_transition"};
+  let snapshot;
+  try { snapshot = selectedSnapshot(selection); }
+  catch (_) { return {...base, replay: "UNCONFIRMED", reason: "input_unavailable"}; }
   const scripts = runners || [
     [process.execPath, path.join(__dirname, "audit-evidence-batch.cjs")],
     ["python3", path.join(__dirname, "independent-evidence-batch.py")]
@@ -122,6 +195,7 @@ function review(argv, runners = null) {
   try { after = captureBytes(selection.captureFile); }
   catch (_) { return {...base, replay: "UNCONFIRMED", reason: "capture_changed"}; }
   if (!before.equals(after)) return {...base, replay: "UNCONFIRMED", reason: "capture_changed"};
+  if (!snapshotUnchanged(snapshot)) return {...base, replay: "UNCONFIRMED", reason: "inputs_changed"};
   if (node.status !== "matched" || python.status !== "matched") {
     return {...base, replay: "UNCONFIRMED", reason: "auditor_rejected",
       auditors: {node: node.status, python: python.status}};
@@ -134,6 +208,12 @@ function review(argv, runners = null) {
     if (!isDeepStrictEqual(left, right)) {
       return {...base, replay: "UNCONFIRMED", reason: "auditor_disagreement"};
     }
+    let compatible;
+    try { compatible = normalizationCompatible(selection, snapshot); }
+    catch (_) { return {...base, replay: "UNCONFIRMED", reason: "normalization_check_failed"}; }
+    if (!snapshotUnchanged(snapshot)) return {...base, replay: "UNCONFIRMED", reason: "inputs_changed"};
+    if (!compatible) return {...base, replay: "UNCONFIRMED",
+      reason: "normalization_disagreement"};
     const paired = selection.kind !== "--check-capture";
     const totals = paired ? {a: left.capture_a?.totals || left.totals_a,
       b: left.capture_b?.totals || left.totals_b} : left.totals;
@@ -142,6 +222,8 @@ function review(argv, runners = null) {
     }
     return {...base, replay: "MATCH", auditors: {node: "matched", python: "matched"},
       script_binding: legacy ? "unavailable_legacy_v1" : "matched",
+      selected_name_normalization: "node_python_match",
+      browser_runtime_normalization: "not_recorded_in_capture",
       receipt_assessment: paired ? {a: verdict(totals.a), b: verdict(totals.b)} : verdict(totals),
       totals, ...(paired ? {changed_receipt_positions: left.changed_receipts} : {}),
       checkpoint_selection: paired ? {a: totals.a &&
@@ -167,6 +249,7 @@ function run(argv = process.argv.slice(2)) {
     if (result.script_binding === "unavailable_legacy_v1") {
       console.log("Legacy v1 capture has no browser script fingerprint.");
     }
+    console.log("Selected names normalize identically under this Node and Python installation; the capture does not pin the original browser's Unicode runtime.");
     console.log("Capture replay and receipt outcomes are separate. Authorship, independent custody, completeness, and factual truth remain unverified.");
   } else console.error(`REVIEW UNCONFIRMED: ${result.reason}. No receipt conclusion issued.`);
   if (result.replay !== "MATCH") process.exitCode = 1;

@@ -4,6 +4,8 @@
 
 A saved capture can reproduce exactly while containing `DIFFER` or `FAIL` receipt rows. Node and the separately implemented Python auditor already replay the same original files, but a recipient had to run both and reconcile their outputs. The reviewer command runs both locally, requires both to accept the capture, compares their computed outcomes, and emits a small result that keeps **capture replay** and **receipt assessment** separate.
 
+It now also compares normalization of the selected, parseable fact keys, questions, and brief names under the Node and Python installations. A mismatch withholds the positive result even if both individual audits returned `MATCH`. The [runtime portability example](runtime-portability-gate.md) reproduces that case and explains why a script hash cannot pin the original browser's Unicode runtime.
+
 This is a reviewer aid and a developer interface. It does not make the two programs independently operated, establish that their shared rules are correct, or create a signature. The user controls the supplied files, checker code, and runtime. A matching checkpoint only checks the selected checkpoint against its selected reference; its earlier independent preservation cannot be inferred from the file.
 
 ## Use it
@@ -28,11 +30,13 @@ The result format `aru-evidence-review-result` version 1 has:
 | `script_binding` | `matched` for supported captures; `unavailable_legacy_v1` for old single captures without a script fingerprint. |
 | `changed_receipt_positions` | Paired positions whose verdict changed; the selected order is significant. |
 | `checkpoint_selection` | Whether a matching checkpoint was supplied per side. It says nothing about who preserved it or when. |
+| `selected_name_normalization` | `node_python_match` only for selected, bounded, parseable strings under the current two runtimes. |
+| `browser_runtime_normalization` | `not_recorded_in_capture`; no old capture identifies the browser's Unicode tables. |
 | `not_established` | Authorship, independent custody, completeness, and factual truth remain unverified. |
 
-On a failed replay the JSON result contains `UNCONFIRMED` and a bounded reason such as `auditor_rejected`, `auditor_disagreement`, or `capture_changed`; it has **no totals or assessment**. Exit status is 1. Invalid arguments or malformed capture input fail before a result. The command does not print the child auditors' error output, which might contain paths. It prints no assertion names, values, filenames, raw evidence hashes, or opening key. Counts and the capture hash may still reveal information about a case. Review the saved capture itself before sharing it; ordinary captures contain raw file hashes that may permit guessing predictable private assertions.
+On a failed replay the JSON result contains `UNCONFIRMED` and a bounded reason such as `auditor_rejected`, `auditor_disagreement`, `capture_changed`, `inputs_changed`, `normalization_disagreement`, or `normalization_check_failed`; it has **no totals or assessment**. Exit status is 1. Invalid arguments or malformed capture input fail before a result. The command does not print the child auditors' error output, which might contain paths. It prints no assertion names, values, filenames, raw evidence hashes, or opening key. Counts and the capture hash may still reveal information about a case. Review the saved capture itself before sharing it; ordinary captures contain raw file hashes that may permit guessing predictable private assertions.
 
-This checks that each auditor computed the same report from the supplied files and independently accepted the saved capture. It reads the capture before and after both runs and refuses a changed capture. The two processes do not get an atomic snapshot of the other original files: concurrent mutation of those files is a remaining risk, even though their computed file hashes and outcomes must agree. Run against stable, separately held copies if independent custody matters. A compromised installation can replace both checkers or this wrapper; a self-consistent offline kit manifest does not authenticate its distributor.
+This checks that each auditor computed the same report from the supplied files and independently accepted the saved capture. It reads the capture before and after both runs and refuses a changed capture. It now also snapshots the original files and compares their bytes after the auditor runs and compatibility check. This reduces concurrent-mutation risk, but the two processes still do not receive an atomic filesystem snapshot; a temporary swap and restoration could escape this check. Run against stable, separately held copies if independent custody matters. A compromised installation can replace both checkers or this wrapper; a self-consistent offline kit manifest does not authenticate its distributor.
 
 ## Reproduce boundaries
 

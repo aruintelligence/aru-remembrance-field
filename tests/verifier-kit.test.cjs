@@ -31,13 +31,13 @@ test('archived kit replays a capture through Node and independent Python outside
   assert.equal(created.status, 0, created.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(kit, 'manifest.json'), 'utf8'));
   assert.equal(manifest.browser_script_sha256, JSON.parse(fs.readFileSync(capture, 'utf8')).browser_script_sha256);
-  assert.equal(manifest.files.length, 9);
+  assert.equal(manifest.files.length, 10);
   assert.deepEqual(fs.readdirSync(kit).sort(), ['README.md', 'index.html', 'manifest.json', 'tools']);
   assert.equal(fs.existsSync(path.join(kit, 'research')), false);
   assert.equal(fs.existsSync(path.join(kit, 'capture.json')), false);
   const verified = node([path.join(kit, 'tools', 'verifier-kit.cjs'), 'check', kit, capture], dir);
   assert.equal(verified.status, 0, verified.stderr);
-  assert.match(verified.stdout, /KIT MATCH: 9 archived files.*supplied capture/);
+  assert.match(verified.stdout, /KIT MATCH: 10 archived files.*supplied capture/);
   const args = [reference, ...receipts, '--checkpoint', checkpoint, '--check-capture', capture];
   const replay = node([path.join(kit, 'tools', 'audit-evidence-batch.cjs'), ...args], dir);
   assert.equal(replay.status, 0, replay.stderr);
