@@ -1,7 +1,7 @@
 import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_AUDIO_BYTES,
   MAX_FILE_BYTES, MAX_MEMORIES, MAX_PHOTO_BYTES, audioFromBytes, openCapsule,
   openDraft, photoFromBytes, recallMemories, sealCapsule, sealDraft,
-  validateCapsule, validateDraft } from "./core.mjs";
+  validateCapsule, validateDraft } from "./core.mjs?v=e381150ab7390005b23ec2d24a9dbda1cc3810894f11adf1576b8c4ef2b4138d";
 
 const $ = id => document.getElementById(id);
 let memories = [];

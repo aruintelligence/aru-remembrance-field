@@ -26,3 +26,5 @@ node --test tests/capsule.test.mjs
 ```
 
 The tests cover encrypt/decrypt, fresh salts and IVs, wrong passphrases, changed ciphertext, unsupported parameters, bounded imports, rejected SVG/spoofed images, cited lexical recall, unfinished checkpoints, real decodable M4A/MP3/WAV fixtures, format migration, and separation between gift and draft formats. A passing local test does not establish commercial readiness or independent security validation.
+
+After changing `core.mjs` or `app.mjs`, run `node tools/update-capsule-assets.mjs` before committing. The content hashes in the module URLs keep a newly deployed page from loading older cached JavaScript. The capsule test fails if a URL does not match its current file.
