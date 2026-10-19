@@ -1,18 +1,24 @@
 // Portable, local-only gift format. Nothing in this module calls a network API.
 export const CAPSULE_FORMAT = "aru-remembrance-capsule/1";
 export const ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/1";
+export const DRAFT_FORMAT = "aru-remembrance-capsule-draft/1";
+export const DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/1";
 export const MAX_MEMORIES = 8;
 export const MAX_PHOTO_BYTES = 600_000;
 export const MAX_PLAINTEXT_BYTES = 7_000_000;
 export const MAX_FILE_BYTES = 10_000_000;
 const ITERATIONS = 310_000;
-const AAD = new TextEncoder().encode(ENVELOPE_FORMAT);
 const STOP = new Set("a an and are as at be by can did do does for from how i in is it me my of on or our she he the their them they this to was were what when where who why with you your tell show about remember memory memories".split(" "));
 
 function assertText(value, label, maximum, required = true) {
   if (typeof value !== "string" || value.length > maximum ||
       (required && !value.trim())) throw new Error(`Invalid ${label}`);
   return value.trim();
+}
+
+function draftText(value, label, maximum) {
+  if (typeof value !== "string" || value.length > maximum) throw new Error(`Invalid ${label}`);
+  return value;
 }
 
 function bytesFromBase64(value, maximum) {
@@ -73,29 +79,69 @@ export function validateCapsule(value) {
   const recipient = assertText(value.recipient, "recipient", 60);
   const from = assertText(value.from, "sender", 60);
   const letter = assertText(value.letter, "letter", 1600);
-  if (typeof value.created_at !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.created_at) ||
-      Number.isNaN(Date.parse(value.created_at))) throw new Error("Invalid creation date");
+  assertTimestamp(value.created_at, "creation date");
   const ids = new Set();
-  const memories = value.memories.map((item, index) => {
-    if (!item || typeof item !== "object" || Array.isArray(item) ||
-        typeof item.id !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(item.id) ||
-        ids.has(item.id)) throw new Error(`Invalid memory ${index + 1}`);
-    ids.add(item.id);
-    return {
-      id: item.id,
-      title: assertText(item.title, "memory title", 100),
-      when: assertText(item.when, "memory date", 80, false),
-      story: assertText(item.story, "memory story", 2400),
-      photo: validatePhoto(item.photo ?? null)
-    };
-  });
+  const memories = value.memories.map((item, index) => validateMemory(item, index, ids));
   const capsule = { format: CAPSULE_FORMAT, created_at: value.created_at,
     recipient, from, letter, memories };
   if (new TextEncoder().encode(JSON.stringify(capsule)).length > MAX_PLAINTEXT_BYTES) {
     throw new Error("Capsule exceeds size limit");
   }
   return capsule;
+}
+
+function assertTimestamp(value, label) {
+  if (typeof value !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) ||
+      Number.isNaN(Date.parse(value))) throw new Error(`Invalid ${label}`);
+}
+
+function validateMemory(item, index, ids) {
+  if (!item || typeof item !== "object" || Array.isArray(item) ||
+      typeof item.id !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(item.id) ||
+      ids.has(item.id)) throw new Error(`Invalid memory ${index + 1}`);
+  ids.add(item.id);
+  return {
+    id: item.id,
+    title: assertText(item.title, "memory title", 100),
+    when: assertText(item.when, "memory date", 80, false),
+    story: assertText(item.story, "memory story", 2400),
+    photo: validatePhoto(item.photo ?? null)
+  };
+}
+
+// A checkpoint accepts unfinished writing, including a memory currently being edited.
+// It is a separate encrypted format and cannot be mistaken for a finished gift.
+export function validateDraft(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      value.format !== DRAFT_FORMAT || !Array.isArray(value.memories) ||
+      value.memories.length > MAX_MEMORIES || !value.pending ||
+      typeof value.pending !== "object" || Array.isArray(value.pending)) {
+    throw new Error("Invalid draft");
+  }
+  assertTimestamp(value.saved_at, "save date");
+  const ids = new Set();
+  const memories = value.memories.map((item, index) => validateMemory(item, index, ids));
+  const editingIndex = value.editing_index;
+  if (editingIndex !== null && (!Number.isInteger(editingIndex) ||
+      editingIndex < 0 || editingIndex >= memories.length)) throw new Error("Invalid edit position");
+  const draft = {
+    format: DRAFT_FORMAT, saved_at: value.saved_at,
+    recipient: draftText(value.recipient, "recipient", 60),
+    from: draftText(value.from, "sender", 60),
+    letter: draftText(value.letter, "letter", 1600), memories,
+    editing_index: editingIndex,
+    pending: {
+      title: draftText(value.pending.title, "pending title", 100),
+      when: draftText(value.pending.when, "pending date", 80),
+      story: draftText(value.pending.story, "pending story", 2400),
+      photo: validatePhoto(value.pending.photo ?? null)
+    }
+  };
+  if (new TextEncoder().encode(JSON.stringify(draft)).length > MAX_PLAINTEXT_BYTES) {
+    throw new Error("Draft exceeds size limit");
+  }
+  return draft;
 }
 
 function passphraseIsValid(passphrase) {
@@ -110,8 +156,7 @@ async function deriveKey(passphrase, salt, usage) {
     hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, [usage]);
 }
 
-export async function sealCapsule(value, passphrase) {
-  const capsule = validateCapsule(value);
+async function sealValue(value, passphrase, format) {
   if (!passphraseIsValid(passphrase)) throw new Error("Use a passphrase of 12–256 characters");
   if (!globalThis.crypto?.subtle || !globalThis.crypto?.getRandomValues) {
     throw new Error("A secure browser context is required to seal a capsule");
@@ -119,15 +164,23 @@ export async function sealCapsule(value, passphrase) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await deriveKey(passphrase, salt, "encrypt");
-  const plaintext = new TextEncoder().encode(JSON.stringify(capsule));
+  const plaintext = new TextEncoder().encode(JSON.stringify(value));
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv,
-    additionalData: AAD }, key, plaintext);
-  return { format: ENVELOPE_FORMAT, kdf: "PBKDF2-SHA256", iterations: ITERATIONS,
+    additionalData: new TextEncoder().encode(format) }, key, plaintext);
+  return { format, kdf: "PBKDF2-SHA256", iterations: ITERATIONS,
     cipher: "AES-256-GCM", salt: base64FromBytes(salt), iv: base64FromBytes(iv),
     ciphertext: base64FromBytes(new Uint8Array(ciphertext)) };
 }
 
-export async function openCapsule(input, passphrase) {
+export async function sealCapsule(value, passphrase) {
+  return sealValue(validateCapsule(value), passphrase, ENVELOPE_FORMAT);
+}
+
+export async function sealDraft(value, passphrase) {
+  return sealValue(validateDraft(value), passphrase, DRAFT_ENVELOPE_FORMAT);
+}
+
+async function openValue(input, passphrase, format, validate) {
   if (!globalThis.crypto?.subtle || !passphraseIsValid(passphrase)) {
     throw new Error("A secure browser and a passphrase are required");
   }
@@ -138,7 +191,7 @@ export async function openCapsule(input, passphrase) {
     if (!envelope || typeof envelope !== "object" || Array.isArray(envelope) ||
         Object.keys(envelope).sort().join("|") !==
           "cipher|ciphertext|format|iterations|iv|kdf|salt" ||
-        envelope.format !== ENVELOPE_FORMAT || envelope.kdf !== "PBKDF2-SHA256" ||
+        envelope.format !== format || envelope.kdf !== "PBKDF2-SHA256" ||
         envelope.iterations !== ITERATIONS || envelope.cipher !== "AES-256-GCM") throw Error();
     const salt = bytesFromBase64(envelope.salt, 16);
     const iv = bytesFromBase64(envelope.iv, 12);
@@ -146,12 +199,20 @@ export async function openCapsule(input, passphrase) {
     if (salt.length !== 16 || iv.length !== 12 || ciphertext.length < 17) throw Error();
     const key = await deriveKey(passphrase, salt, "decrypt");
     const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv,
-      additionalData: AAD }, key, ciphertext);
+      additionalData: new TextEncoder().encode(format) }, key, ciphertext);
     const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    return validateCapsule(value);
+    return validate(value);
   } catch {
-    throw new Error("Unable to open this capsule. Check the passphrase or file.");
+    throw new Error("Unable to open this file. Check the passphrase or file type.");
   }
+}
+
+export async function openCapsule(input, passphrase) {
+  return openValue(input, passphrase, ENVELOPE_FORMAT, validateCapsule);
+}
+
+export async function openDraft(input, passphrase) {
+  return openValue(input, passphrase, DRAFT_ENVELOPE_FORMAT, validateDraft);
 }
 
 function terms(value) {

@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CAPSULE_FORMAT, FICTIONAL_SAMPLE, MAX_MEMORIES, openCapsule,
-  photoFromBytes, recallMemories, sealCapsule, validateCapsule } from
+import { readFileSync } from "node:fs";
+import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_MEMORIES,
+  openCapsule, openDraft, photoFromBytes, recallMemories, sealCapsule,
+  sealDraft, validateCapsule, validateDraft } from
   "../capsule/core.mjs";
 
 const sample = () => structuredClone(FICTIONAL_SAMPLE);
@@ -15,6 +17,11 @@ test("a sealed gift opens with its passphrase and never exposes plaintext in its
   assert.notEqual(first.iv, second.iv);
   assert.equal(JSON.stringify(first).includes("blue umbrella"), false);
   assert.deepEqual(await openCapsule(JSON.stringify(first), passphrase), capsule);
+});
+
+test("a gift sealed by the original release still opens after draft support is added", async () => {
+  const oldFile = readFileSync(new URL("./fixtures/capsule-v1-sealed.json", import.meta.url), "utf8");
+  assert.deepEqual(await openCapsule(oldFile, "previous public gift phrase 2026"), sample());
 });
 
 test("wrong passphrase, changed ciphertext, unsupported parameters, and plaintext fail", async () => {
@@ -68,4 +75,58 @@ test("recall cites stored memories and refuses unmatched or vague questions", ()
   assert.deepEqual(recallMemories(gift, "What about it?"),
     { kind: "insufficient_question", matches: [] });
   assert.equal(gift.format, CAPSULE_FORMAT);
+});
+
+function unfinishedDraft() {
+  return { format: DRAFT_FORMAT, saved_at: "2026-10-19T20:00:00.000Z",
+    recipient: "Alex", from: "", letter: "I was thinking about the time",
+    memories: [], editing_index: null,
+    pending: { title: "On the beach", when: "", story: "We found", photo: null } };
+}
+
+test("an unfinished letter and unsaved memory survive an encrypted private checkpoint", async () => {
+  const draft = unfinishedDraft();
+  draft.letter = "  I was thinking about the time\n";
+  draft.pending.story = "We found\n";
+  const passphrase = "a different, private draft phrase";
+  const first = await sealDraft(draft, passphrase);
+  const second = await sealDraft(draft, passphrase);
+  assert.notEqual(first.salt, second.salt);
+  assert.notEqual(first.iv, second.iv);
+  assert.equal(JSON.stringify(first).includes("On the beach"), false);
+  assert.deepEqual(await openDraft(JSON.stringify(first), passphrase), draft);
+  await assert.rejects(openCapsule(first, passphrase), /Unable to open/);
+  const gift = await sealCapsule(sample(), passphrase);
+  await assert.rejects(openDraft(gift, passphrase), /Unable to open/);
+});
+
+test("an in-progress edit and its selected photo survive a checkpoint", async () => {
+  const draft = unfinishedDraft();
+  draft.memories = sample().memories.slice(0, 1);
+  draft.editing_index = 0;
+  draft.pending.title = "The rainy beach";
+  draft.pending.photo = photoFromBytes(Uint8Array.from(atob(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII="),
+    char => char.charCodeAt(0)), "image/png");
+  const opened = await openDraft(await sealDraft(draft, "private draft passphrase 2026"),
+    "private draft passphrase 2026");
+  assert.deepEqual(opened, draft);
+  assert.equal(opened.pending.photo, draft.pending.photo);
+});
+
+test("wrong keys, changes, and malformed or oversized checkpoints are rejected", async () => {
+  const passphrase = "private draft passphrase 2026";
+  const envelope = await sealDraft(unfinishedDraft(), passphrase);
+  await assert.rejects(openDraft(envelope, "incorrect passphrase 2026"), /Unable to open/);
+  await assert.rejects(openDraft({ ...envelope, ciphertext: envelope.ciphertext.slice(0, -4) + "AAAA" },
+    passphrase), /Unable to open/);
+  await assert.rejects(openDraft({ ...envelope, format: "aru-remembrance-capsule-sealed/1" },
+    passphrase), /Unable to open/);
+  await assert.rejects(openDraft("x".repeat(10_000_001), passphrase), /Unable to open/);
+  const bad = unfinishedDraft();
+  bad.editing_index = 0;
+  assert.throws(() => validateDraft(bad), /Invalid edit position/);
+  bad.editing_index = null;
+  bad.pending.photo = "data:image/svg+xml;base64,PHN2Zy8+";
+  assert.throws(() => validateDraft(bad), /Invalid photo/);
 });
