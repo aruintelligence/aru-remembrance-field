@@ -28,6 +28,7 @@ jobs:
       - run: node tests/addition-witness.test.cjs
       - run: node tests/verdict-witness.test.cjs
       - run: node tests/reviewer-judgment.test.cjs
+      - run: node tests/source-probe.test.cjs
       - run: node tests/benchmark.test.cjs
       - run: node tests/falsifier.test.cjs
       - run: node tests/blind-analyzer.test.cjs
@@ -37,6 +38,7 @@ jobs:
       - run: node tools/verify-reviewer-judgment.cjs research/example-reviewer-judgment.json
       - run: node tools/analyze-reviewer-judgments.cjs --json research/example-reviewer-judgment.json
       - run: node tools/review-evidence.cjs research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-judgment-fail-receipt.json --check-capture research/example-judgment-fail-capture.json --json
+      - run: node tools/review-source-probe.cjs research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --check-capture research/example-evidence-browser-batch-capture.json --json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json research/example-evidence-reference-baseline.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-excerpt.json research/example-evidence-reference-baseline.json research/example-evidence-ledger-checkpoint.json
