@@ -86,6 +86,8 @@ function unfinishedDraft() {
 
 test("an unfinished letter and unsaved memory survive an encrypted private checkpoint", async () => {
   const draft = unfinishedDraft();
+  draft.letter = "  I was thinking about the time\n";
+  draft.pending.story = "We found\n";
   const passphrase = "a different, private draft phrase";
   const first = await sealDraft(draft, passphrase);
   const second = await sealDraft(draft, passphrase);

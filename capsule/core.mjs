@@ -16,6 +16,11 @@ function assertText(value, label, maximum, required = true) {
   return value.trim();
 }
 
+function draftText(value, label, maximum) {
+  if (typeof value !== "string" || value.length > maximum) throw new Error(`Invalid ${label}`);
+  return value;
+}
+
 function bytesFromBase64(value, maximum) {
   if (typeof value !== "string" || value.length > Math.ceil(maximum / 3) * 4 + 4 ||
       !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
@@ -122,14 +127,14 @@ export function validateDraft(value) {
       editingIndex < 0 || editingIndex >= memories.length)) throw new Error("Invalid edit position");
   const draft = {
     format: DRAFT_FORMAT, saved_at: value.saved_at,
-    recipient: assertText(value.recipient, "recipient", 60, false),
-    from: assertText(value.from, "sender", 60, false),
-    letter: assertText(value.letter, "letter", 1600, false), memories,
+    recipient: draftText(value.recipient, "recipient", 60),
+    from: draftText(value.from, "sender", 60),
+    letter: draftText(value.letter, "letter", 1600), memories,
     editing_index: editingIndex,
     pending: {
-      title: assertText(value.pending.title, "pending title", 100, false),
-      when: assertText(value.pending.when, "pending date", 80, false),
-      story: assertText(value.pending.story, "pending story", 2400, false),
+      title: draftText(value.pending.title, "pending title", 100),
+      when: draftText(value.pending.when, "pending date", 80),
+      story: draftText(value.pending.story, "pending story", 2400),
       photo: validatePhoto(value.pending.photo ?? null)
     }
   };

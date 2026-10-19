@@ -237,6 +237,8 @@ async function resumeCheckpoint() {
     $("memory-when").value = restored.pending.when;
     $("memory-story").value = restored.pending.story;
     $("memory-photo").value = "";
+    $("passphrase").value = "";
+    $("confirm-passphrase").value = "";
     $("pending-photo-hint").textContent = pendingPhoto ?
       "A photo from your saved draft is attached to the unfinished memory. Choose a new file to replace it." : "";
     $("save-memory").textContent = editingIndex === null ? "Add memory" : "Save changes";
