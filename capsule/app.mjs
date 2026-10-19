@@ -1,12 +1,14 @@
-import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_FILE_BYTES,
-  MAX_MEMORIES, MAX_PHOTO_BYTES, openCapsule, openDraft, photoFromBytes,
-  recallMemories, sealCapsule, sealDraft, validateCapsule, validateDraft } from "./core.mjs";
+import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_AUDIO_BYTES,
+  MAX_FILE_BYTES, MAX_MEMORIES, MAX_PHOTO_BYTES, audioFromBytes, openCapsule,
+  openDraft, photoFromBytes, recallMemories, sealCapsule, sealDraft,
+  validateCapsule, validateDraft } from "./core.mjs";
 
 const $ = id => document.getElementById(id);
 let memories = [];
 let editingIndex = null;
 let openedCapsule = null;
 let pendingPhoto = null;
+let pendingAudio = null;
 
 function status(target, message, error = false) {
   const node = $(target);
@@ -30,7 +32,8 @@ function element(tag, className, content) {
 }
 
 function draft() {
-  if (editingIndex !== null || pendingPhoto || $("memory-photo").files[0] ||
+  if (editingIndex !== null || pendingPhoto || pendingAudio ||
+      $("memory-photo").files[0] || $("memory-audio").files[0] ||
       ["memory-title", "memory-when", "memory-story"].some(id => $(id).value.trim())) {
     throw Error("Add or cancel the unfinished memory before previewing or sealing your gift. You can save a private draft at any time.");
   }
@@ -40,12 +43,14 @@ function draft() {
 }
 
 function clearMemoryForm() {
-  for (const id of ["memory-title", "memory-when", "memory-story", "memory-photo"]) {
+  for (const id of ["memory-title", "memory-when", "memory-story", "memory-photo", "memory-audio"]) {
     $(id).value = "";
   }
   editingIndex = null;
   pendingPhoto = null;
+  pendingAudio = null;
   $("pending-photo-hint").textContent = "";
+  $("pending-audio-hint").textContent = "";
   $("save-memory").textContent = "Add memory";
   $("cancel-edit").hidden = true;
 }
@@ -63,7 +68,8 @@ function renderMemoryList() {
     const row = element("div", "memory-row");
     const info = element("div");
     info.append(element("strong", "", `${index + 1}. ${memory.title}`),
-      element("span", "", [memory.when, memory.photo ? "Photo included" : ""].filter(Boolean).join(" · ") || "Story included"));
+      element("span", "", [memory.when, memory.photo ? "Photo included" : "",
+        memory.audio ? "Voice included" : ""].filter(Boolean).join(" · ") || "Story included"));
     const actions = element("div", "actions");
     const edit = element("button", "button quiet small", "Edit");
     edit.type = "button";
@@ -71,11 +77,14 @@ function renderMemoryList() {
     edit.addEventListener("click", () => {
       editingIndex = index;
       pendingPhoto = null;
+      pendingAudio = null;
       $("pending-photo-hint").textContent = "";
+      $("pending-audio-hint").textContent = "";
       $("memory-title").value = memory.title;
       $("memory-when").value = memory.when;
       $("memory-story").value = memory.story;
       $("memory-photo").value = "";
+      $("memory-audio").value = "";
       $("save-memory").textContent = "Save changes";
       $("cancel-edit").hidden = false;
       renderMemoryList();
@@ -90,7 +99,23 @@ function renderMemoryList() {
       renderMemoryList();
       status("create-status", "Memory removed from this page session.");
     });
-    actions.append(edit, remove);
+    actions.append(edit);
+    if (memory.audio) {
+      const removeVoice = element("button", "button quiet small", "Remove voice");
+      removeVoice.type = "button";
+      removeVoice.setAttribute("aria-label", `Remove voice from ${memory.title}`);
+      removeVoice.addEventListener("click", () => {
+        if (editingIndex === index) {
+          status("create-status", "Save or cancel the current edit before removing its voice note.", true);
+          return;
+        }
+        memories[index] = { ...memories[index], audio: null };
+        renderMemoryList();
+        status("create-status", "Voice note removed from this page session. Save a new private draft or gift to keep the change.");
+      });
+      actions.append(removeVoice);
+    }
+    actions.append(remove);
     row.append(info, actions);
     list.append(row);
   });
@@ -106,9 +131,15 @@ async function saveMemory() {
       if (photoFile.size > MAX_PHOTO_BYTES) throw Error("Choose a photo under 600 KB.");
       photo = photoFromBytes(await photoFile.arrayBuffer(), photoFile.type);
     }
+    const audioFile = $("memory-audio").files[0];
+    let audio = pendingAudio || (editingIndex === null ? null : memories[editingIndex].audio);
+    if (audioFile) {
+      if (audioFile.size > MAX_AUDIO_BYTES) throw Error("Choose a voice recording under 1 MB.");
+      audio = audioFromBytes(await audioFile.arrayBuffer(), audioFile.type, audioFile.name);
+    }
     const candidate = { id: editingIndex === null ? crypto.randomUUID() : memories[editingIndex].id,
       title: $("memory-title").value, when: $("memory-when").value,
-      story: $("memory-story").value, photo };
+      story: $("memory-story").value, photo, audio };
     const check = validateCapsule({ format: CAPSULE_FORMAT,
       created_at: new Date().toISOString(), recipient: "Recipient", from: "Sender",
       letter: "A letter", memories: [candidate] });
@@ -135,6 +166,7 @@ function giftCard(memory, index) {
     element("h4", "", memory.title));
   if (memory.when) card.append(element("span", "when", memory.when));
   card.append(element("p", "", memory.story));
+  if (memory.audio) card.append(voicePlayer(memory));
   const copy = element("button", "button quiet small", "Copy this story");
   copy.type = "button";
   copy.addEventListener("click", async () => {
@@ -145,6 +177,18 @@ function giftCard(memory, index) {
   });
   card.append(copy);
   return card;
+}
+
+function voicePlayer(memory) {
+  const player = element("div", "voice-player");
+  const label = element("p", "voice-label", "A voice to remember");
+  const recording = element("audio");
+  recording.controls = true;
+  recording.preload = "none";
+  recording.src = memory.audio;
+  recording.setAttribute("aria-label", `Voice recording for ${memory.title}`);
+  player.append(label, recording);
+  return player;
 }
 
 function showGift(capsule, label) {
@@ -188,11 +232,17 @@ async function checkpoint() {
     if (selected.size > MAX_PHOTO_BYTES) throw Error("Choose a photo under 600 KB.");
     pendingPhoto = photoFromBytes(await selected.arrayBuffer(), selected.type);
   }
+  const selectedAudio = $("memory-audio").files[0];
+  if (selectedAudio) {
+    if (selectedAudio.size > MAX_AUDIO_BYTES) throw Error("Choose a voice recording under 1 MB.");
+    pendingAudio = audioFromBytes(await selectedAudio.arrayBuffer(),
+      selectedAudio.type, selectedAudio.name);
+  }
   return validateDraft({ format: DRAFT_FORMAT, saved_at: new Date().toISOString(),
     recipient: $("recipient").value, from: $("from").value, letter: $("letter").value,
     memories, editing_index: editingIndex,
     pending: { title: $("memory-title").value, when: $("memory-when").value,
-      story: $("memory-story").value, photo: pendingPhoto } });
+      story: $("memory-story").value, photo: pendingPhoto, audio: pendingAudio } });
 }
 
 async function saveCheckpoint() {
@@ -211,7 +261,8 @@ async function saveCheckpoint() {
 }
 
 function hasUnsavedWork() {
-  return memories.length > 0 || pendingPhoto !== null || $("memory-photo").files.length > 0 ||
+  return memories.length > 0 || pendingPhoto !== null || pendingAudio !== null ||
+    $("memory-photo").files.length > 0 || $("memory-audio").files.length > 0 ||
     ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story"]
       .some(id => $(id).value.trim());
 }
@@ -221,7 +272,7 @@ async function resumeCheckpoint() {
   button.disabled = true;
   try {
     const file = $("draft-file").files[0];
-    if (!file || file.size > MAX_FILE_BYTES) throw Error("Choose a private draft JSON file under 10 MB.");
+    if (!file || file.size > MAX_FILE_BYTES) throw Error("Choose a private draft JSON file under 27 MB.");
     const restored = await openDraft(await file.text(), $("restore-passphrase").value);
     if (hasUnsavedWork() && !confirm("Replace the unfinished work currently on this page with this saved draft?")) {
       status("draft-status", "Current work kept. The saved draft was not loaded.");
@@ -233,14 +284,18 @@ async function resumeCheckpoint() {
     memories = restored.memories;
     editingIndex = restored.editing_index;
     pendingPhoto = restored.pending.photo;
+    pendingAudio = restored.pending.audio ?? null;
     $("memory-title").value = restored.pending.title;
     $("memory-when").value = restored.pending.when;
     $("memory-story").value = restored.pending.story;
     $("memory-photo").value = "";
+    $("memory-audio").value = "";
     $("passphrase").value = "";
     $("confirm-passphrase").value = "";
     $("pending-photo-hint").textContent = pendingPhoto ?
       "A photo from your saved draft is attached to the unfinished memory. Choose a new file to replace it." : "";
+    $("pending-audio-hint").textContent = pendingAudio ?
+      "A voice recording from your saved draft is attached. Choose a new file to replace it." : "";
     $("save-memory").textContent = editingIndex === null ? "Add memory" : "Save changes";
     $("cancel-edit").hidden = editingIndex === null;
     renderMemoryList();
@@ -273,7 +328,7 @@ async function openGift() {
   $("opened").hidden = true;
   try {
     const file = $("capsule-file").files[0];
-    if (!file || file.size > MAX_FILE_BYTES) throw Error("Choose a sealed capsule JSON file under 10 MB.");
+    if (!file || file.size > MAX_FILE_BYTES) throw Error("Choose a sealed capsule JSON file under 27 MB.");
     const capsule = await openCapsule(await file.text(), $("open-passphrase").value);
     showGift(capsule, "Capsule opened locally. The file was not uploaded.");
   } catch (error) { status("open-status", error.message, true); }
@@ -282,7 +337,7 @@ async function openGift() {
 
 function showSample() {
   switchTab("open");
-  showGift(FICTIONAL_SAMPLE, "Fictional sample · No personal file was opened.");
+  showGift(FICTIONAL_SAMPLE, "Fictional written sample · Add your own voice note when creating a gift.");
 }
 
 function ask() {
@@ -302,6 +357,8 @@ function ask() {
       const article = element("article");
       article.append(element("small", "", `Memory ${match.index} of ${openedCapsule.memories.length} · ${match.title}`),
         element("p", "", match.story));
+      const memory = openedCapsule.memories[match.index - 1];
+      if (memory.audio) article.append(voicePlayer(memory));
       answer.append(article);
     }
   } catch (error) { answer.append(element("p", "", error.message)); }

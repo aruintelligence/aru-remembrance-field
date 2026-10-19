@@ -1,12 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_MEMORIES,
+import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, LEGACY_CAPSULE_FORMAT,
+  LEGACY_DRAFT_FORMAT, MAX_AUDIO_BYTES, MAX_MEMORIES, audioFromBytes,
   openCapsule, openDraft, photoFromBytes, recallMemories, sealCapsule,
   sealDraft, validateCapsule, validateDraft } from
   "../capsule/core.mjs";
 
 const sample = () => structuredClone(FICTIONAL_SAMPLE);
+const legacySample = () => {
+  const gift = sample();
+  gift.format = LEGACY_CAPSULE_FORMAT;
+  gift.memories.forEach(memory => { delete memory.audio; });
+  return gift;
+};
 
 test("a sealed gift opens with its passphrase and never exposes plaintext in its file", async () => {
   const capsule = sample();
@@ -21,7 +28,11 @@ test("a sealed gift opens with its passphrase and never exposes plaintext in its
 
 test("a gift sealed by the original release still opens after draft support is added", async () => {
   const oldFile = readFileSync(new URL("./fixtures/capsule-v1-sealed.json", import.meta.url), "utf8");
-  assert.deepEqual(await openCapsule(oldFile, "previous public gift phrase 2026"), sample());
+  const oldGift = await openCapsule(oldFile, "previous public gift phrase 2026");
+  assert.deepEqual(oldGift, legacySample());
+  const resealed = await sealCapsule(oldGift, "a new versioned passphrase 2026");
+  const reopened = await openCapsule(resealed, "a new versioned passphrase 2026");
+  assert.deepEqual(reopened, sample());
 });
 
 test("wrong passphrase, changed ciphertext, unsupported parameters, and plaintext fail", async () => {
@@ -31,6 +42,8 @@ test("wrong passphrase, changed ciphertext, unsupported parameters, and plaintex
   const changed = { ...sealed, ciphertext: `${sealed.ciphertext[0] === "A" ? "B" : "A"}${sealed.ciphertext.slice(1)}` };
   await assert.rejects(openCapsule(changed, passphrase), /Unable to open/);
   await assert.rejects(openCapsule({ ...sealed, iterations: 1 }, passphrase), /Unable to open/);
+  await assert.rejects(openCapsule({ ...sealed, format: "aru-remembrance-capsule-sealed/1" },
+    passphrase), /Unable to open/);
   await assert.rejects(openCapsule(JSON.stringify(sample()), passphrase), /Unable to open/);
   await assert.rejects(sealCapsule(sample(), "short"), /12–256/);
 });
@@ -81,8 +94,59 @@ function unfinishedDraft() {
   return { format: DRAFT_FORMAT, saved_at: "2026-10-19T20:00:00.000Z",
     recipient: "Alex", from: "", letter: "I was thinking about the time",
     memories: [], editing_index: null,
-    pending: { title: "On the beach", when: "", story: "We found", photo: null } };
+    pending: { title: "On the beach", when: "", story: "We found",
+      photo: null, audio: null } };
 }
+
+test("a private draft from the previous release opens and upgrades on the next save", async () => {
+  const oldFile = readFileSync(new URL("./fixtures/capsule-draft-v1-sealed.json", import.meta.url), "utf8");
+  const oldDraft = await openDraft(oldFile, "previous private draft phrase 2026");
+  assert.equal(oldDraft.format, LEGACY_DRAFT_FORMAT);
+  assert.equal(oldDraft.pending.story, "Still writing");
+  assert.equal(oldDraft.pending.audio, undefined);
+  const newFile = await sealDraft(oldDraft, "a new draft passphrase 2026");
+  const restored = await openDraft(newFile, "a new draft passphrase 2026");
+  assert.equal(restored.format, DRAFT_FORMAT);
+  assert.equal(restored.pending.audio, null);
+  assert.equal(restored.pending.story, "Still writing");
+});
+
+test("real M4A, MP3, and WAV samples are recognized and encrypted voice survives gift and draft", async () => {
+  const formats = [
+    ["m4a", "", "audio/mp4"], ["mp3", "audio/mpeg", "audio/mpeg"],
+    ["wav", "audio/wav", "audio/wav"]
+  ];
+  for (const [extension, type, canonical] of formats) {
+    const bytes = readFileSync(new URL(`./fixtures/voice-sample.${extension}`, import.meta.url));
+    const audio = audioFromBytes(bytes, type, `voice-sample.${extension}`);
+    assert.ok(audio.startsWith(`data:${canonical};base64,`));
+    const gift = sample();
+    gift.memories[0].audio = audio;
+    const passphrase = "a separate voice phrase 2026";
+    const sealed = await sealCapsule(gift, passphrase);
+    assert.equal(JSON.stringify(sealed).includes("data:audio"), false);
+    const opened = await openCapsule(sealed, passphrase);
+    assert.equal(opened.memories[0].audio, audio);
+    const draft = unfinishedDraft();
+    draft.pending.audio = audio;
+    const checkpoint = await sealDraft(draft, passphrase);
+    assert.equal((await openDraft(checkpoint, passphrase)).pending.audio, audio);
+  }
+});
+
+test("voice data rejects spoofed types, malformed headers, and files beyond the limit", () => {
+  const mp3 = readFileSync(new URL("./fixtures/voice-sample.mp3", import.meta.url));
+  assert.throws(() => audioFromBytes(mp3, "text/html", "voice.mp3"), /Choose an M4A/);
+  assert.throws(() => audioFromBytes(mp3, "audio/mp4", "voice.m4a"), /Choose an M4A/);
+  assert.throws(() => audioFromBytes(new Uint8Array(MAX_AUDIO_BYTES + 1),
+    "audio/mpeg", "voice.mp3"), /Choose an M4A/);
+  const spoofed = sample();
+  spoofed.memories[0].audio = "data:audio/mp4;base64,PHN2Zy8+";
+  assert.throws(() => validateCapsule(spoofed), /Invalid audio/);
+  const legacy = legacySample();
+  legacy.memories[0].audio = audioFromBytes(mp3, "audio/mpeg", "voice.mp3");
+  assert.throws(() => validateCapsule(legacy), /Invalid memory/);
+});
 
 test("an unfinished letter and unsaved memory survive an encrypted private checkpoint", async () => {
   const draft = unfinishedDraft();
@@ -122,7 +186,7 @@ test("wrong keys, changes, and malformed or oversized checkpoints are rejected",
     passphrase), /Unable to open/);
   await assert.rejects(openDraft({ ...envelope, format: "aru-remembrance-capsule-sealed/1" },
     passphrase), /Unable to open/);
-  await assert.rejects(openDraft("x".repeat(10_000_001), passphrase), /Unable to open/);
+  await assert.rejects(openDraft("x".repeat(27_000_001), passphrase), /Unable to open/);
   const bad = unfinishedDraft();
   bad.editing_index = 0;
   assert.throws(() => validateDraft(bad), /Invalid edit position/);

@@ -1,12 +1,17 @@
 // Portable, local-only gift format. Nothing in this module calls a network API.
-export const CAPSULE_FORMAT = "aru-remembrance-capsule/1";
-export const ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/1";
-export const DRAFT_FORMAT = "aru-remembrance-capsule-draft/1";
-export const DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/1";
+export const LEGACY_CAPSULE_FORMAT = "aru-remembrance-capsule/1";
+export const LEGACY_ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/1";
+export const LEGACY_DRAFT_FORMAT = "aru-remembrance-capsule-draft/1";
+export const LEGACY_DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/1";
+export const CAPSULE_FORMAT = "aru-remembrance-capsule/2";
+export const ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/2";
+export const DRAFT_FORMAT = "aru-remembrance-capsule-draft/2";
+export const DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/2";
 export const MAX_MEMORIES = 8;
 export const MAX_PHOTO_BYTES = 600_000;
-export const MAX_PLAINTEXT_BYTES = 7_000_000;
-export const MAX_FILE_BYTES = 10_000_000;
+export const MAX_AUDIO_BYTES = 1_000_000;
+export const MAX_PLAINTEXT_BYTES = 20_000_000;
+export const MAX_FILE_BYTES = 27_000_000;
 const ITERATIONS = 310_000;
 const STOP = new Set("a an and are as at be by can did do does for from how i in is it me my of on or our she he the their them they this to was were what when where who why with you your tell show about remember memory memories".split(" "));
 
@@ -70,9 +75,62 @@ function validatePhoto(value) {
   return value;
 }
 
+function canonicalAudioType(type, name = "") {
+  if (typeof type !== "string" || typeof name !== "string") return null;
+  const aliases = { "audio/mp4": "audio/mp4", "audio/m4a": "audio/mp4",
+    "audio/x-m4a": "audio/mp4", "audio/mpeg": "audio/mpeg",
+    "audio/mp3": "audio/mpeg", "audio/wav": "audio/wav",
+    "audio/wave": "audio/wav", "audio/x-wav": "audio/wav" };
+  if (type) return aliases[type.toLowerCase()] ?? null;
+  if (/\.m4a$/i.test(name)) return "audio/mp4";
+  if (/\.mp3$/i.test(name)) return "audio/mpeg";
+  if (/\.wav$/i.test(name)) return "audio/wav";
+  return null;
+}
+
+function marker(bytes, offset, value) {
+  return bytes.length >= offset + value.length &&
+    [...value].every((char, i) => bytes[offset + i] === char.charCodeAt(0));
+}
+
+function validAudio(bytes, type) {
+  if (type === "audio/mp4") {
+    const boxSize = ((bytes[0] << 24) | (bytes[1] << 16) |
+      (bytes[2] << 8) | bytes[3]) >>> 0;
+    return bytes.length >= 16 && marker(bytes, 4, "ftyp") &&
+      boxSize >= 16 && boxSize <= bytes.length;
+  }
+  if (type === "audio/mpeg") return (marker(bytes, 0, "ID3") && bytes.length >= 10) ||
+    (bytes.length >= 4 && bytes[0] === 255 && (bytes[1] & 0xe0) === 0xe0 &&
+    (bytes[1] & 0x06) !== 0);
+  if (type === "audio/wav") return bytes.length >= 12 &&
+    marker(bytes, 0, "RIFF") && marker(bytes, 8, "WAVE");
+  return false;
+}
+
+export function audioFromBytes(input, type, name = "") {
+  const bytes = new Uint8Array(input);
+  const canonical = canonicalAudioType(type, name);
+  if (!canonical || bytes.length > MAX_AUDIO_BYTES || !validAudio(bytes, canonical)) {
+    throw new Error("Choose an M4A, MP3, or WAV recording under 1 MB");
+  }
+  return `data:${canonical};base64,${base64FromBytes(bytes)}`;
+}
+
+function validateAudio(value) {
+  if (value === null) return null;
+  if (typeof value !== "string" || value.length > 1_350_000) throw new Error("Invalid audio");
+  const match = /^data:(audio\/(?:mp4|mpeg|wav));base64,([A-Za-z0-9+/=]+)$/.exec(value);
+  if (!match || !validAudio(bytesFromBase64(match[2], MAX_AUDIO_BYTES), match[1])) {
+    throw new Error("Invalid audio");
+  }
+  return value;
+}
+
 export function validateCapsule(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-      value.format !== CAPSULE_FORMAT || !Array.isArray(value.memories) ||
+      ![CAPSULE_FORMAT, LEGACY_CAPSULE_FORMAT].includes(value.format) ||
+      !Array.isArray(value.memories) ||
       value.memories.length < 1 || value.memories.length > MAX_MEMORIES) {
     throw new Error("Invalid capsule");
   }
@@ -81,8 +139,9 @@ export function validateCapsule(value) {
   const letter = assertText(value.letter, "letter", 1600);
   assertTimestamp(value.created_at, "creation date");
   const ids = new Set();
-  const memories = value.memories.map((item, index) => validateMemory(item, index, ids));
-  const capsule = { format: CAPSULE_FORMAT, created_at: value.created_at,
+  const memories = value.memories.map((item, index) =>
+    validateMemory(item, index, ids, value.format === CAPSULE_FORMAT));
+  const capsule = { format: value.format, created_at: value.created_at,
     recipient, from, letter, memories };
   if (new TextEncoder().encode(JSON.stringify(capsule)).length > MAX_PLAINTEXT_BYTES) {
     throw new Error("Capsule exceeds size limit");
@@ -96,37 +155,51 @@ function assertTimestamp(value, label) {
       Number.isNaN(Date.parse(value))) throw new Error(`Invalid ${label}`);
 }
 
-function validateMemory(item, index, ids) {
+function validateMemory(item, index, ids, withAudio) {
   if (!item || typeof item !== "object" || Array.isArray(item) ||
       typeof item.id !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(item.id) ||
       ids.has(item.id)) throw new Error(`Invalid memory ${index + 1}`);
+  if (!withAudio && item.audio != null) throw new Error(`Invalid memory ${index + 1}`);
   ids.add(item.id);
-  return {
+  const memory = {
     id: item.id,
     title: assertText(item.title, "memory title", 100),
     when: assertText(item.when, "memory date", 80, false),
     story: assertText(item.story, "memory story", 2400),
     photo: validatePhoto(item.photo ?? null)
   };
+  if (withAudio) memory.audio = validateAudio(item.audio ?? null);
+  return memory;
+}
+
+function currentCapsule(value) {
+  const validated = validateCapsule(value);
+  if (validated.format === CAPSULE_FORMAT) return validated;
+  return validateCapsule({ ...validated, format: CAPSULE_FORMAT,
+    memories: validated.memories.map(memory => ({ ...memory, audio: null })) });
 }
 
 // A checkpoint accepts unfinished writing, including a memory currently being edited.
 // It is a separate encrypted format and cannot be mistaken for a finished gift.
 export function validateDraft(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-      value.format !== DRAFT_FORMAT || !Array.isArray(value.memories) ||
+      ![DRAFT_FORMAT, LEGACY_DRAFT_FORMAT].includes(value.format) ||
+      !Array.isArray(value.memories) ||
       value.memories.length > MAX_MEMORIES || !value.pending ||
       typeof value.pending !== "object" || Array.isArray(value.pending)) {
     throw new Error("Invalid draft");
   }
   assertTimestamp(value.saved_at, "save date");
   const ids = new Set();
-  const memories = value.memories.map((item, index) => validateMemory(item, index, ids));
+  const withAudio = value.format === DRAFT_FORMAT;
+  const memories = value.memories.map((item, index) =>
+    validateMemory(item, index, ids, withAudio));
+  if (!withAudio && value.pending.audio != null) throw new Error("Invalid pending audio");
   const editingIndex = value.editing_index;
   if (editingIndex !== null && (!Number.isInteger(editingIndex) ||
       editingIndex < 0 || editingIndex >= memories.length)) throw new Error("Invalid edit position");
   const draft = {
-    format: DRAFT_FORMAT, saved_at: value.saved_at,
+    format: value.format, saved_at: value.saved_at,
     recipient: draftText(value.recipient, "recipient", 60),
     from: draftText(value.from, "sender", 60),
     letter: draftText(value.letter, "letter", 1600), memories,
@@ -138,10 +211,19 @@ export function validateDraft(value) {
       photo: validatePhoto(value.pending.photo ?? null)
     }
   };
+  if (withAudio) draft.pending.audio = validateAudio(value.pending.audio ?? null);
   if (new TextEncoder().encode(JSON.stringify(draft)).length > MAX_PLAINTEXT_BYTES) {
     throw new Error("Draft exceeds size limit");
   }
   return draft;
+}
+
+function currentDraft(value) {
+  const validated = validateDraft(value);
+  if (validated.format === DRAFT_FORMAT) return validated;
+  return validateDraft({ ...validated, format: DRAFT_FORMAT,
+    memories: validated.memories.map(memory => ({ ...memory, audio: null })),
+    pending: { ...validated.pending, audio: null } });
 }
 
 function passphraseIsValid(passphrase) {
@@ -173,14 +255,14 @@ async function sealValue(value, passphrase, format) {
 }
 
 export async function sealCapsule(value, passphrase) {
-  return sealValue(validateCapsule(value), passphrase, ENVELOPE_FORMAT);
+  return sealValue(currentCapsule(value), passphrase, ENVELOPE_FORMAT);
 }
 
 export async function sealDraft(value, passphrase) {
-  return sealValue(validateDraft(value), passphrase, DRAFT_ENVELOPE_FORMAT);
+  return sealValue(currentDraft(value), passphrase, DRAFT_ENVELOPE_FORMAT);
 }
 
-async function openValue(input, passphrase, format, validate) {
+async function openValue(input, passphrase, acceptedFormats, validate) {
   if (!globalThis.crypto?.subtle || !passphraseIsValid(passphrase)) {
     throw new Error("A secure browser and a passphrase are required");
   }
@@ -191,7 +273,8 @@ async function openValue(input, passphrase, format, validate) {
     if (!envelope || typeof envelope !== "object" || Array.isArray(envelope) ||
         Object.keys(envelope).sort().join("|") !==
           "cipher|ciphertext|format|iterations|iv|kdf|salt" ||
-        envelope.format !== format || envelope.kdf !== "PBKDF2-SHA256" ||
+        !Object.hasOwn(acceptedFormats, envelope.format) ||
+        envelope.kdf !== "PBKDF2-SHA256" ||
         envelope.iterations !== ITERATIONS || envelope.cipher !== "AES-256-GCM") throw Error();
     const salt = bytesFromBase64(envelope.salt, 16);
     const iv = bytesFromBase64(envelope.iv, 12);
@@ -199,8 +282,9 @@ async function openValue(input, passphrase, format, validate) {
     if (salt.length !== 16 || iv.length !== 12 || ciphertext.length < 17) throw Error();
     const key = await deriveKey(passphrase, salt, "decrypt");
     const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv,
-      additionalData: new TextEncoder().encode(format) }, key, ciphertext);
+      additionalData: new TextEncoder().encode(envelope.format) }, key, ciphertext);
     const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    if (value?.format !== acceptedFormats[envelope.format]) throw Error();
     return validate(value);
   } catch {
     throw new Error("Unable to open this file. Check the passphrase or file type.");
@@ -208,11 +292,17 @@ async function openValue(input, passphrase, format, validate) {
 }
 
 export async function openCapsule(input, passphrase) {
-  return openValue(input, passphrase, ENVELOPE_FORMAT, validateCapsule);
+  return openValue(input, passphrase, {
+    [LEGACY_ENVELOPE_FORMAT]: LEGACY_CAPSULE_FORMAT,
+    [ENVELOPE_FORMAT]: CAPSULE_FORMAT
+  }, validateCapsule);
 }
 
 export async function openDraft(input, passphrase) {
-  return openValue(input, passphrase, DRAFT_ENVELOPE_FORMAT, validateDraft);
+  return openValue(input, passphrase, {
+    [LEGACY_DRAFT_ENVELOPE_FORMAT]: LEGACY_DRAFT_FORMAT,
+    [DRAFT_ENVELOPE_FORMAT]: DRAFT_FORMAT
+  }, validateDraft);
 }
 
 function terms(value) {
@@ -244,10 +334,10 @@ export const FICTIONAL_SAMPLE = Object.freeze({ format: CAPSULE_FORMAT,
   letter: "For every ordinary day that became extraordinary because we were together. These are a few moments I never want us to lose.",
   memories: [
     { id: "sample-1", title: "The blue umbrella", when: "One rainy Saturday",
-      story: "We walked home under a blue umbrella that was too small for both of us. You laughed when the rain won anyway, and we stopped for hot chocolate.", photo: null },
+      story: "We walked home under a blue umbrella that was too small for both of us. You laughed when the rain won anyway, and we stopped for hot chocolate.", photo: null, audio: null },
     { id: "sample-2", title: "Our first garden", when: "Early spring",
-      story: "We planted mint in a little clay pot by the kitchen window. You insisted it needed a name, so we called it Captain Mint.", photo: null },
+      story: "We planted mint in a little clay pot by the kitchen window. You insisted it needed a name, so we called it Captain Mint.", photo: null, audio: null },
     { id: "sample-3", title: "A note in the suitcase", when: "Before the long trip",
-      story: "I tucked a note into your suitcase that said you were brave. You found it after arriving and sent me a picture of the sunset.", photo: null }
+      story: "I tucked a note into your suitcase that said you were brave. You found it after arriving and sent me a picture of the sunset.", photo: null, audio: null }
   ]
 });
