@@ -9,6 +9,8 @@
 
 Created by **Daniel Jacob Read IV** and stewarded by **ĀRU Intelligence Inc.**
 
+**New separate preview:** [Remembrance Capsule](https://aruintelligence.github.io/aru-remembrance-field/capsule/) lets someone make a local memory gift from a letter, stories, and optional photos, then share a passphrase-protected file. The recipient can browse or ask for matching source memories. It is a [functional product prototype](capsule/README.md) with deterministic retrieval, distinct from the experimental field simulation below.
+
 > **Research scope:** This project is a symbolic, visual simulation. Its field variables and named states are software constructs, not measurements of consciousness, intelligence, psychology, or physical reality.
 
 [![ĀRU Remembrance Field live simulation](assets/remembrance-field-preview.jpg)](https://aruintelligence.github.io/aru-remembrance-field/)
