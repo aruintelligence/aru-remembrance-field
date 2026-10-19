@@ -1,0 +1,9 @@
+{
+  "format": "aru-remembrance-capsule-draft-sealed/1",
+  "kdf": "PBKDF2-SHA256",
+  "iterations": 310000,
+  "cipher": "AES-256-GCM",
+  "salt": "a4DL3nWgv0iQdyD4h3vVyw==",
+  "iv": "Ut0N22OC9n5UgJp+",
+  "ciphertext": "Iivus3CaNqBNelT4Ri+YKWckVh2d3/ogecFTEl5IJ6c1ZMVgGi0soT8btTY1vOVqKHlJ3IRDQv3XVB7MYs+JLaXYsUsGFqqm840SaIxnsGfB49KI8WIsNOJP1z7UWvaSzlBBe1aMOkn/gNgWdEkCshN6UV6lBUo67lalUDBLnvUNq1NRGpqPZi/opeRL1icrhz4nz2EtRDqXfOf9Bdl0M42ymPKzTv722gz2rgkGXSXLboTyGuJtHccS4LqVqdWJYNIjR0i1QjlSoMIRvP7zNZWG0XfRaP75ANEWj5G6cl1tA7MRkyOFw5CviiPzE8H7kg6Js1PVEF2sjL5j61DTmBoUghbMlUyEOmdefcMEFzE="
+}
