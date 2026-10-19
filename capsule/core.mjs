@@ -3,10 +3,14 @@ export const LEGACY_CAPSULE_FORMAT = "aru-remembrance-capsule/1";
 export const LEGACY_ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/1";
 export const LEGACY_DRAFT_FORMAT = "aru-remembrance-capsule-draft/1";
 export const LEGACY_DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/1";
-export const CAPSULE_FORMAT = "aru-remembrance-capsule/2";
-export const ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/2";
-export const DRAFT_FORMAT = "aru-remembrance-capsule-draft/2";
-export const DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/2";
+export const VOICE_CAPSULE_FORMAT = "aru-remembrance-capsule/2";
+export const VOICE_ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/2";
+export const VOICE_DRAFT_FORMAT = "aru-remembrance-capsule-draft/2";
+export const VOICE_DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/2";
+export const CAPSULE_FORMAT = "aru-remembrance-capsule/3";
+export const ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/3";
+export const DRAFT_FORMAT = "aru-remembrance-capsule-draft/3";
+export const DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/3";
 export const MAX_MEMORIES = 8;
 export const MAX_PHOTO_BYTES = 600_000;
 export const MAX_AUDIO_BYTES = 1_000_000;
@@ -80,11 +84,13 @@ function canonicalAudioType(type, name = "") {
   const aliases = { "audio/mp4": "audio/mp4", "audio/m4a": "audio/mp4",
     "audio/x-m4a": "audio/mp4", "audio/mpeg": "audio/mpeg",
     "audio/mp3": "audio/mpeg", "audio/wav": "audio/wav",
-    "audio/wave": "audio/wav", "audio/x-wav": "audio/wav" };
-  if (type) return aliases[type.toLowerCase()] ?? null;
+    "audio/wave": "audio/wav", "audio/x-wav": "audio/wav",
+    "audio/webm": "audio/webm" };
+  if (type) return aliases[type.split(";")[0].trim().toLowerCase()] ?? null;
   if (/\.m4a$/i.test(name)) return "audio/mp4";
   if (/\.mp3$/i.test(name)) return "audio/mpeg";
   if (/\.wav$/i.test(name)) return "audio/wav";
+  if (/\.webm$/i.test(name)) return "audio/webm";
   return null;
 }
 
@@ -105,6 +111,16 @@ function validAudio(bytes, type) {
     (bytes[1] & 0x06) !== 0);
   if (type === "audio/wav") return bytes.length >= 12 &&
     marker(bytes, 0, "RIFF") && marker(bytes, 8, "WAVE");
+  if (type === "audio/webm") {
+    // EBML header followed by a WebM DocType element; the actual codec still
+    // needs the recipient's browser to decode it.
+    if (bytes.length < 16 || ![0x1a, 0x45, 0xdf, 0xa3].every((v, i) => bytes[i] === v)) return false;
+    for (let i = 4; i < Math.min(bytes.length - 6, 128); i++) {
+      if (bytes[i] === 0x42 && bytes[i + 1] === 0x82 && bytes[i + 2] === 0x84 &&
+          marker(bytes, i + 3, "webm")) return true;
+    }
+    return false;
+  }
   return false;
 }
 
@@ -112,16 +128,17 @@ export function audioFromBytes(input, type, name = "") {
   const bytes = new Uint8Array(input);
   const canonical = canonicalAudioType(type, name);
   if (!canonical || bytes.length > MAX_AUDIO_BYTES || !validAudio(bytes, canonical)) {
-    throw new Error("Choose an M4A, MP3, or WAV recording under 1 MB");
+    throw new Error("Choose an M4A, MP3, WAV, or WebM recording under 1 MB");
   }
   return `data:${canonical};base64,${base64FromBytes(bytes)}`;
 }
 
-function validateAudio(value) {
+function validateAudio(value, allowWebm) {
   if (value === null) return null;
   if (typeof value !== "string" || value.length > 1_350_000) throw new Error("Invalid audio");
-  const match = /^data:(audio\/(?:mp4|mpeg|wav));base64,([A-Za-z0-9+/=]+)$/.exec(value);
-  if (!match || !validAudio(bytesFromBase64(match[2], MAX_AUDIO_BYTES), match[1])) {
+  const match = /^data:(audio\/(?:mp4|mpeg|wav|webm));base64,([A-Za-z0-9+/=]+)$/.exec(value);
+  if (!match || (!allowWebm && match[1] === "audio/webm") ||
+      !validAudio(bytesFromBase64(match[2], MAX_AUDIO_BYTES), match[1])) {
     throw new Error("Invalid audio");
   }
   return value;
@@ -129,7 +146,7 @@ function validateAudio(value) {
 
 export function validateCapsule(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-      ![CAPSULE_FORMAT, LEGACY_CAPSULE_FORMAT].includes(value.format) ||
+      ![CAPSULE_FORMAT, VOICE_CAPSULE_FORMAT, LEGACY_CAPSULE_FORMAT].includes(value.format) ||
       !Array.isArray(value.memories) ||
       value.memories.length < 1 || value.memories.length > MAX_MEMORIES) {
     throw new Error("Invalid capsule");
@@ -140,7 +157,8 @@ export function validateCapsule(value) {
   assertTimestamp(value.created_at, "creation date");
   const ids = new Set();
   const memories = value.memories.map((item, index) =>
-    validateMemory(item, index, ids, value.format === CAPSULE_FORMAT));
+    validateMemory(item, index, ids, value.format !== LEGACY_CAPSULE_FORMAT,
+      value.format === CAPSULE_FORMAT));
   const capsule = { format: value.format, created_at: value.created_at,
     recipient, from, letter, memories };
   if (new TextEncoder().encode(JSON.stringify(capsule)).length > MAX_PLAINTEXT_BYTES) {
@@ -155,7 +173,7 @@ function assertTimestamp(value, label) {
       Number.isNaN(Date.parse(value))) throw new Error(`Invalid ${label}`);
 }
 
-function validateMemory(item, index, ids, withAudio) {
+function validateMemory(item, index, ids, withAudio, allowWebm) {
   if (!item || typeof item !== "object" || Array.isArray(item) ||
       typeof item.id !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(item.id) ||
       ids.has(item.id)) throw new Error(`Invalid memory ${index + 1}`);
@@ -168,7 +186,7 @@ function validateMemory(item, index, ids, withAudio) {
     story: assertText(item.story, "memory story", 2400),
     photo: validatePhoto(item.photo ?? null)
   };
-  if (withAudio) memory.audio = validateAudio(item.audio ?? null);
+  if (withAudio) memory.audio = validateAudio(item.audio ?? null, allowWebm);
   return memory;
 }
 
@@ -176,14 +194,14 @@ function currentCapsule(value) {
   const validated = validateCapsule(value);
   if (validated.format === CAPSULE_FORMAT) return validated;
   return validateCapsule({ ...validated, format: CAPSULE_FORMAT,
-    memories: validated.memories.map(memory => ({ ...memory, audio: null })) });
+    memories: validated.memories.map(memory => ({ ...memory, audio: memory.audio ?? null })) });
 }
 
 // A checkpoint accepts unfinished writing, including a memory currently being edited.
 // It is a separate encrypted format and cannot be mistaken for a finished gift.
 export function validateDraft(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-      ![DRAFT_FORMAT, LEGACY_DRAFT_FORMAT].includes(value.format) ||
+      ![DRAFT_FORMAT, VOICE_DRAFT_FORMAT, LEGACY_DRAFT_FORMAT].includes(value.format) ||
       !Array.isArray(value.memories) ||
       value.memories.length > MAX_MEMORIES || !value.pending ||
       typeof value.pending !== "object" || Array.isArray(value.pending)) {
@@ -191,9 +209,9 @@ export function validateDraft(value) {
   }
   assertTimestamp(value.saved_at, "save date");
   const ids = new Set();
-  const withAudio = value.format === DRAFT_FORMAT;
+  const withAudio = value.format !== LEGACY_DRAFT_FORMAT;
   const memories = value.memories.map((item, index) =>
-    validateMemory(item, index, ids, withAudio));
+    validateMemory(item, index, ids, withAudio, value.format === DRAFT_FORMAT));
   if (!withAudio && value.pending.audio != null) throw new Error("Invalid pending audio");
   const editingIndex = value.editing_index;
   if (editingIndex !== null && (!Number.isInteger(editingIndex) ||
@@ -211,7 +229,8 @@ export function validateDraft(value) {
       photo: validatePhoto(value.pending.photo ?? null)
     }
   };
-  if (withAudio) draft.pending.audio = validateAudio(value.pending.audio ?? null);
+  if (withAudio) draft.pending.audio = validateAudio(value.pending.audio ?? null,
+    value.format === DRAFT_FORMAT);
   if (new TextEncoder().encode(JSON.stringify(draft)).length > MAX_PLAINTEXT_BYTES) {
     throw new Error("Draft exceeds size limit");
   }
@@ -222,8 +241,8 @@ function currentDraft(value) {
   const validated = validateDraft(value);
   if (validated.format === DRAFT_FORMAT) return validated;
   return validateDraft({ ...validated, format: DRAFT_FORMAT,
-    memories: validated.memories.map(memory => ({ ...memory, audio: null })),
-    pending: { ...validated.pending, audio: null } });
+    memories: validated.memories.map(memory => ({ ...memory, audio: memory.audio ?? null })),
+    pending: { ...validated.pending, audio: validated.pending.audio ?? null } });
 }
 
 function passphraseIsValid(passphrase) {
@@ -294,6 +313,7 @@ async function openValue(input, passphrase, acceptedFormats, validate) {
 export async function openCapsule(input, passphrase) {
   return openValue(input, passphrase, {
     [LEGACY_ENVELOPE_FORMAT]: LEGACY_CAPSULE_FORMAT,
+    [VOICE_ENVELOPE_FORMAT]: VOICE_CAPSULE_FORMAT,
     [ENVELOPE_FORMAT]: CAPSULE_FORMAT
   }, validateCapsule);
 }
@@ -301,6 +321,7 @@ export async function openCapsule(input, passphrase) {
 export async function openDraft(input, passphrase) {
   return openValue(input, passphrase, {
     [LEGACY_DRAFT_ENVELOPE_FORMAT]: LEGACY_DRAFT_FORMAT,
+    [VOICE_DRAFT_ENVELOPE_FORMAT]: VOICE_DRAFT_FORMAT,
     [DRAFT_ENVELOPE_FORMAT]: DRAFT_FORMAT
   }, validateDraft);
 }

@@ -1,7 +1,7 @@
 import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_AUDIO_BYTES,
   MAX_FILE_BYTES, MAX_MEMORIES, MAX_PHOTO_BYTES, audioFromBytes, openCapsule,
   openDraft, photoFromBytes, recallMemories, sealCapsule, sealDraft,
-  validateCapsule, validateDraft } from "./core.mjs?v=e381150ab7390005b23ec2d24a9dbda1cc3810894f11adf1576b8c4ef2b4138d";
+  validateCapsule, validateDraft } from "./core.mjs?v=342747fb9592ae4cfe27a7dd7b3c59403c498618efc71af3835b54ee5afa62b0";
 
 const $ = id => document.getElementById(id);
 let memories = [];
@@ -9,6 +9,12 @@ let editingIndex = null;
 let openedCapsule = null;
 let pendingPhoto = null;
 let pendingAudio = null;
+let recorder = null;
+let recordingStream = null;
+let recordingTimer = null;
+let recordingRequested = false;
+let captureAttempt = 0;
+const MAX_RECORDING_SECONDS = 30;
 
 function status(target, message, error = false) {
   const node = $(target);
@@ -32,6 +38,7 @@ function element(tag, className, content) {
 }
 
 function draft() {
+  if (recordingRequested || recorder) throw Error("Stop the voice recording before previewing or sealing your gift.");
   if (editingIndex !== null || pendingPhoto || pendingAudio ||
       $("memory-photo").files[0] || $("memory-audio").files[0] ||
       ["memory-title", "memory-when", "memory-story"].some(id => $(id).value.trim())) {
@@ -42,7 +49,135 @@ function draft() {
     from: $("from").value, letter: $("letter").value, memories });
 }
 
+function showAudioPreview(audio) {
+  const player = $("audio-preview");
+  player.hidden = !audio;
+  if (audio) player.src = audio;
+  else { player.removeAttribute("src"); player.load(); }
+  $("discard-recording").hidden = !pendingAudio;
+}
+
+function stopTracks() {
+  recordingStream?.getTracks().forEach(track => track.stop());
+  recordingStream = null;
+}
+
+function recordingControls() {
+  $("record-voice").disabled = recordingRequested || !!recorder;
+  $("memory-audio").disabled = recordingRequested || !!recorder;
+  $("stop-recording").hidden = !recorder || recorder.state !== "recording";
+}
+
+function abortRecording() {
+  captureAttempt++;
+  recordingRequested = false;
+  if (recordingTimer) clearInterval(recordingTimer);
+  recordingTimer = null;
+  if (recorder) {
+    recorder.onstop = null;
+    recorder.onerror = null;
+    recorder.ondataavailable = null;
+    if (recorder.state !== "inactive") recorder.stop();
+  }
+  recorder = null;
+  stopTracks();
+  recordingControls();
+  status("record-status", "");
+  $("record-clock").textContent = "";
+}
+
+function stopRecording() {
+  if (!recorder || recorder.state !== "recording") return;
+  recorder.stop();
+  recordingControls();
+  status("record-status", "Finishing your recording…");
+  $("record-clock").textContent = "";
+}
+
+async function startRecording() {
+  if (recordingRequested || recorder) return;
+  if (!navigator.mediaDevices?.getUserMedia || !globalThis.MediaRecorder) {
+    status("record-status", "Direct recording is unavailable here. Choose a voice file instead.", true);
+    return;
+  }
+  const mimeType = typeof MediaRecorder.isTypeSupported === "function" ?
+    ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
+      .find(type => MediaRecorder.isTypeSupported(type)) : "audio/mp4";
+  if (!mimeType) {
+    status("record-status", "This browser has no supported recording format. Choose a voice file instead.", true);
+    return;
+  }
+  const attempt = ++captureAttempt;
+  recordingRequested = true;
+  recordingControls();
+  status("record-status", "Asking for microphone access…");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (attempt !== captureAttempt) { stream.getTracks().forEach(track => track.stop()); return; }
+    recordingStream = stream;
+    const current = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 64_000 });
+    recorder = current;
+    const chunks = [];
+    let bytes = 0;
+    let recordingError = "";
+    const startedAt = Date.now();
+    current.ondataavailable = event => {
+      if (!event.data?.size) return;
+      chunks.push(event.data);
+      bytes += event.data.size;
+      if (bytes > MAX_AUDIO_BYTES && current.state === "recording") {
+        recordingError = "Recording exceeded 1 MB. Try a shorter note or choose a file.";
+        stopRecording();
+      }
+    };
+    current.onerror = () => {
+      abortRecording();
+      status("record-status", "The recording stopped unexpectedly. Try again or choose a file.", true);
+    };
+    current.onstop = async () => {
+      if (recorder !== current) return;
+      if (recordingTimer) clearInterval(recordingTimer);
+      recordingTimer = null;
+      stopTracks();
+      try {
+        if (recordingError) throw Error(recordingError);
+        const blob = new Blob(chunks, { type: current.mimeType || mimeType });
+        if (!blob.size || blob.size > MAX_AUDIO_BYTES) throw Error("Recording is empty or exceeded 1 MB. Try a shorter note.");
+        const audio = audioFromBytes(await blob.arrayBuffer(), blob.type);
+        if (recorder !== current) return;
+        pendingAudio = audio;
+        $("memory-audio").value = "";
+        showAudioPreview(audio);
+        $("pending-audio-hint").textContent = "Recorded voice attached to this memory. Play it back, then add the memory or save a private draft.";
+        status("record-status", "Voice note ready to play. Save the memory and download a gift or private draft to keep it.");
+      } catch (error) {
+        status("record-status", error.message, true);
+      } finally {
+        if (recorder === current) { recorder = null; recordingControls(); }
+      }
+    };
+    current.start(1000);
+    recordingRequested = false;
+    recordingControls();
+    status("record-status", "Recording now. Press Stop when you are done.");
+    const tick = () => {
+      if (recorder !== current || current.state !== "recording") return;
+      const seconds = Math.floor((Date.now() - startedAt) / 1000);
+      if (seconds >= MAX_RECORDING_SECONDS) { stopRecording(); return; }
+      $("record-clock").textContent = `${seconds} of ${MAX_RECORDING_SECONDS} seconds`;
+    };
+    tick();
+    recordingTimer = setInterval(tick, 500);
+  } catch (error) {
+    abortRecording();
+    status("record-status", error.name === "NotAllowedError" ?
+      "Microphone access was declined. You can choose a voice file instead." :
+      "Could not start recording. Try again or choose a voice file.", true);
+  }
+}
+
 function clearMemoryForm() {
+  abortRecording();
   for (const id of ["memory-title", "memory-when", "memory-story", "memory-photo", "memory-audio"]) {
     $(id).value = "";
   }
@@ -51,6 +186,7 @@ function clearMemoryForm() {
   pendingAudio = null;
   $("pending-photo-hint").textContent = "";
   $("pending-audio-hint").textContent = "";
+  showAudioPreview(null);
   $("save-memory").textContent = "Add memory";
   $("cancel-edit").hidden = true;
 }
@@ -75,6 +211,7 @@ function renderMemoryList() {
     edit.type = "button";
     edit.setAttribute("aria-label", `Edit ${memory.title}`);
     edit.addEventListener("click", () => {
+      abortRecording();
       editingIndex = index;
       pendingPhoto = null;
       pendingAudio = null;
@@ -85,6 +222,7 @@ function renderMemoryList() {
       $("memory-story").value = memory.story;
       $("memory-photo").value = "";
       $("memory-audio").value = "";
+      showAudioPreview(memory.audio);
       $("save-memory").textContent = "Save changes";
       $("cancel-edit").hidden = false;
       renderMemoryList();
@@ -125,6 +263,7 @@ async function saveMemory() {
   const button = $("save-memory");
   button.disabled = true;
   try {
+    if (recordingRequested || recorder) throw Error("Stop the voice recording before adding this memory.");
     const photoFile = $("memory-photo").files[0];
     let photo = pendingPhoto || (editingIndex === null ? null : memories[editingIndex].photo);
     if (photoFile) {
@@ -227,6 +366,7 @@ function downloadJson(envelope, filename) {
 }
 
 async function checkpoint() {
+  if (recordingRequested || recorder) throw Error("Stop the voice recording before saving a private draft.");
   const selected = $("memory-photo").files[0];
   if (selected) {
     if (selected.size > MAX_PHOTO_BYTES) throw Error("Choose a photo under 600 KB.");
@@ -261,7 +401,8 @@ async function saveCheckpoint() {
 }
 
 function hasUnsavedWork() {
-  return memories.length > 0 || pendingPhoto !== null || pendingAudio !== null ||
+  return recordingRequested || !!recorder || memories.length > 0 ||
+    pendingPhoto !== null || pendingAudio !== null ||
     $("memory-photo").files.length > 0 || $("memory-audio").files.length > 0 ||
     ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story"]
       .some(id => $(id).value.trim());
@@ -278,6 +419,7 @@ async function resumeCheckpoint() {
       status("draft-status", "Current work kept. The saved draft was not loaded.");
       return;
     }
+    abortRecording();
     $("recipient").value = restored.recipient;
     $("from").value = restored.from;
     $("letter").value = restored.letter;
@@ -295,7 +437,8 @@ async function resumeCheckpoint() {
     $("pending-photo-hint").textContent = pendingPhoto ?
       "A photo from your saved draft is attached to the unfinished memory. Choose a new file to replace it." : "";
     $("pending-audio-hint").textContent = pendingAudio ?
-      "A voice recording from your saved draft is attached. Choose a new file to replace it." : "";
+      "A voice recording from your saved draft is attached. Play it back or choose a new recording to replace it." : "";
+    showAudioPreview(pendingAudio || (editingIndex === null ? null : memories[editingIndex].audio));
     $("save-memory").textContent = editingIndex === null ? "Add memory" : "Save changes";
     $("cancel-edit").hidden = editingIndex === null;
     renderMemoryList();
@@ -367,6 +510,21 @@ function ask() {
 $("create-tab").addEventListener("click", () => switchTab("create"));
 $("open-tab").addEventListener("click", () => switchTab("open"));
 $("save-memory").addEventListener("click", saveMemory);
+$("record-voice").addEventListener("click", startRecording);
+$("stop-recording").addEventListener("click", stopRecording);
+$("discard-recording").addEventListener("click", () => {
+  pendingAudio = null;
+  showAudioPreview(editingIndex === null ? null : memories[editingIndex].audio);
+  $("pending-audio-hint").textContent = "Recording discarded. The original voice note, if any, is still attached to this memory.";
+  status("record-status", "Recording discarded from this page session.");
+});
+$("memory-audio").addEventListener("change", () => {
+  if (!$("memory-audio").files[0]) return;
+  pendingAudio = null;
+  showAudioPreview(null);
+  $("pending-audio-hint").textContent = "Selected file will replace the attached voice note when you add this memory or save a private draft.";
+});
+window.addEventListener("pagehide", abortRecording);
 $("save-draft").addEventListener("click", saveCheckpoint);
 $("resume-draft").addEventListener("click", resumeCheckpoint);
 $("cancel-edit").addEventListener("click", () => { clearMemoryForm(); renderMemoryList(); });

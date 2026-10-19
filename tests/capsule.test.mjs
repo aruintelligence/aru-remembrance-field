@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, LEGACY_CAPSULE_FORMAT,
-  LEGACY_DRAFT_FORMAT, MAX_AUDIO_BYTES, MAX_MEMORIES, audioFromBytes,
+  LEGACY_DRAFT_FORMAT, VOICE_CAPSULE_FORMAT, VOICE_DRAFT_FORMAT,
+  MAX_AUDIO_BYTES, MAX_MEMORIES, audioFromBytes,
   openCapsule, openDraft, photoFromBytes, recallMemories, sealCapsule,
   sealDraft, validateCapsule, validateDraft } from
   "../capsule/core.mjs";
@@ -43,6 +44,25 @@ test("a gift sealed by the original release still opens after draft support is a
   const resealed = await sealCapsule(oldGift, "a new versioned passphrase 2026");
   const reopened = await openCapsule(resealed, "a new versioned passphrase 2026");
   assert.deepEqual(reopened, sample());
+});
+
+test("a version 2 voice gift and private draft remain readable and upgrade without losing audio", async () => {
+  const oldGiftFile = readFileSync(new URL("./fixtures/capsule-v2-sealed.json", import.meta.url), "utf8");
+  const oldGift = await openCapsule(oldGiftFile, "previous voice gift phrase 2026");
+  assert.equal(oldGift.format, VOICE_CAPSULE_FORMAT);
+  assert.ok(oldGift.memories[0].audio.startsWith("data:audio/mp4;base64,"));
+  const newGift = await openCapsule(await sealCapsule(oldGift, "updated voice gift phrase 2026"),
+    "updated voice gift phrase 2026");
+  assert.equal(newGift.format, CAPSULE_FORMAT);
+  assert.equal(newGift.memories[0].audio, oldGift.memories[0].audio);
+
+  const oldDraftFile = readFileSync(new URL("./fixtures/capsule-draft-v2-sealed.json", import.meta.url), "utf8");
+  const oldDraft = await openDraft(oldDraftFile, "previous voice draft phrase 2026");
+  assert.equal(oldDraft.format, VOICE_DRAFT_FORMAT);
+  const newDraft = await openDraft(await sealDraft(oldDraft, "updated voice draft phrase 2026"),
+    "updated voice draft phrase 2026");
+  assert.equal(newDraft.format, DRAFT_FORMAT);
+  assert.equal(newDraft.pending.audio, oldDraft.pending.audio);
 });
 
 test("wrong passphrase, changed ciphertext, unsupported parameters, and plaintext fail", async () => {
@@ -121,10 +141,11 @@ test("a private draft from the previous release opens and upgrades on the next s
   assert.equal(restored.pending.story, "Still writing");
 });
 
-test("real M4A, MP3, and WAV samples are recognized and encrypted voice survives gift and draft", async () => {
+test("real M4A, MP3, WAV, and WebM samples survive gift and private draft", async () => {
   const formats = [
     ["m4a", "", "audio/mp4"], ["mp3", "audio/mpeg", "audio/mpeg"],
-    ["wav", "audio/wav", "audio/wav"]
+    ["wav", "audio/wav", "audio/wav"],
+    ["webm", "audio/webm;codecs=opus", "audio/webm"]
   ];
   for (const [extension, type, canonical] of formats) {
     const bytes = readFileSync(new URL(`./fixtures/voice-sample.${extension}`, import.meta.url));
@@ -156,6 +177,19 @@ test("voice data rejects spoofed types, malformed headers, and files beyond the 
   const legacy = legacySample();
   legacy.memories[0].audio = audioFromBytes(mp3, "audio/mpeg", "voice.mp3");
   assert.throws(() => validateCapsule(legacy), /Invalid memory/);
+  const webm = readFileSync(new URL("./fixtures/voice-sample.webm", import.meta.url));
+  const webmAudio = audioFromBytes(webm, "", "voice.webm");
+  const oldGift = sample();
+  oldGift.format = VOICE_CAPSULE_FORMAT;
+  oldGift.memories[0].audio = webmAudio;
+  assert.throws(() => validateCapsule(oldGift), /Invalid audio/);
+  const oldDraft = unfinishedDraft();
+  oldDraft.format = VOICE_DRAFT_FORMAT;
+  oldDraft.pending.audio = webmAudio;
+  assert.throws(() => validateDraft(oldDraft), /Invalid audio/);
+  assert.throws(() => audioFromBytes(mp3, "audio/webm", "fake.webm"), /Choose an M4A/);
+  assert.throws(() => audioFromBytes(new TextEncoder().encode("\x1aE\xdf\xa3 <script>webm"),
+    "audio/webm", "fake.webm"), /Choose an M4A/);
 });
 
 test("an unfinished letter and unsaved memory survive an encrypted private checkpoint", async () => {
