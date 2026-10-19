@@ -3411,6 +3411,55 @@ test('Review Desk withholds a result for an invalid checkpoint and labels captur
   assert.equal(noHash.elements.get('review-desk-download').disabled, true);
 });
 
+test('source probe exposes a withheld conflict that flips DIFFER to MATCH without changing input files', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const app = boot();
+  const saved = JSON.stringify([...app.saved]);
+  const reference = fixture('example-evidence-reference-conflict.json');
+  const receipt = fixture('example-evidence-excerpt.json');
+  await auditSavedReceipts(app, reference, [auditFile(receipt), auditFile('{broken')]);
+  assert.equal(app.elements.get('source-probe-run').disabled, false);
+  vm.runInContext('runSourceRemovalProbe()', app.context);
+  const output = app.elements.get('source-probe-result');
+  assert.match(output.children[0].textContent, /Probed 2 supplied sources against 2 receipts/);
+  const [excerpt, failed] = output.children[1].children;
+  assert.match(excerpt.children[0].textContent, /Receipt #1 · DIFFER/);
+  assert.match(excerpt.children[1].textContent, /1 verdict flip; 2 computed answer\/citation changes/);
+  assert.match(excerpt.children[2].children[1].children[1].textContent,
+    /Source #2: DIFFER → MATCH; computed answer\/citations changed/);
+  assert.match(failed.children[1].textContent, /FAIL: This receipt did not replay/);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+  assert.equal(fixture('example-evidence-reference-conflict.json'), reference);
+  assert.equal(fixture('example-evidence-excerpt.json'), receipt);
+
+  app.context.document.getElementById('audit-receipts').files = [auditFile(receipt)];
+  vm.runInContext('runSourceRemovalProbe()', app.context);
+  assert.equal(app.elements.get('source-probe-run').disabled, true);
+  assert.match(app.elements.get('source-probe-result').textContent, /Selection changed/);
+});
+
+test('source probe separates full-snapshot verdict changes from answer changes and respects a checkpoint', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const reference = fixture('example-verdict-witness-reference-unrelated.json');
+  const receipt = fixture('example-evidence-receipt.json');
+  const app = boot({}, {crypto: {}});
+  await auditSavedReceipts(app, reference, [auditFile(receipt)]);
+  vm.runInContext('runSourceRemovalProbe()', app.context);
+  const card = app.elements.get('source-probe-result').children[1].children[0];
+  assert.match(card.children[1].textContent, /1 verdict flip; 1 computed answer\/citation change; 1 verdict-only flip/);
+  assert.match(card.children[2].children[1].children[1].textContent,
+    /Source #2: DIFFER → MATCH; computed answer\/citations unchanged/);
+  assert.equal(app.elements.get('review-desk-download').disabled, true);
+
+  const invalidCheckpoint = JSON.stringify({format: 'aru-evidence-ledger-checkpoint',
+    version: 1, encoding: 'aru-evidence-ledger-checkpoint-1', sha256: '0'.repeat(64)});
+  const withCheckpoint = boot();
+  await auditSavedReceipts(withCheckpoint, reference, [auditFile(receipt)], invalidCheckpoint);
+  assert.equal(withCheckpoint.elements.get('source-probe-run').disabled, true);
+  assert.match(withCheckpoint.elements.get('review-desk-audit-status').textContent,
+    /No receipts were audited/);
+});
+
 test('local cross-check refuses a tab whose saved reference changed after file verification', async () => {
   const reference = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-reference-baseline.json'), 'utf8'));
   const excerpt = fs.readFileSync(path.join(__dirname, '..', 'research', 'example-evidence-excerpt.json'), 'utf8');
