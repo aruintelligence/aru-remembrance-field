@@ -1,0 +1,40 @@
+{
+  "format": "aru-reviewer-judgment",
+  "version": 1,
+  "revision": "aru-reviewer-judgment-1",
+  "browser_script_sha256": "9b556429a4ac990014cb8f2647b57330eda434e50cec8086a891326888228752",
+  "order_method": "fixed_fallback",
+  "scenario_order": [
+    "all_match",
+    "recorded_fail",
+    "paired_difference",
+    "checker_disagreement",
+    "checkpoint"
+  ],
+  "answers": [
+    {
+      "scenario": "all_match",
+      "choice": "consistency"
+    },
+    {
+      "scenario": "recorded_fail",
+      "choice": "all_pass"
+    },
+    {
+      "scenario": "paired_difference",
+      "choice": "difference"
+    },
+    {
+      "scenario": "checker_disagreement",
+      "choice": "unconfirmed"
+    },
+    {
+      "scenario": "checkpoint",
+      "choice": "agreement"
+    }
+  ],
+  "score": {
+    "correct": 4,
+    "total": 5
+  }
+}
