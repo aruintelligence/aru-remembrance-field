@@ -2,7 +2,7 @@
   "format": "aru-reviewer-judgment",
   "version": 1,
   "revision": "aru-reviewer-judgment-1",
-  "browser_script_sha256": "b136120aba27b306d065ed29259d906bf46dde3339abbb66a990de6a2919627c",
+  "browser_script_sha256": "00bed4d6554634043da082b3a6f1e781a8b6b32fb670373d8cd8ed48ab3b6617",
   "order_method": "fixed_fallback",
   "scenario_order": [
     "all_match",

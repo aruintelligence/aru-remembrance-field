@@ -363,6 +363,18 @@
     .review-gate p { min-height: 3.4em; line-height: 1.5; }
     .review-gate .ledger-actions button { flex: 1 1 9rem; }
     .review-desk .review-limit { border-top: 1px solid #64748b; padding-top: 0.8rem; color: #fef3c7; }
+    .source-probe { margin: 1rem 0; padding: 0.8rem; border: 1px solid #38bdf8; border-radius: 10px; background: #071427; }
+    .source-probe h3 { color: #cffafe; margin: 0; font-size: 0.96rem; }
+    .source-probe .probe-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 0.65rem; margin-top: 0.7rem; }
+    .source-probe .probe-card { border: 1px solid #64748b; border-radius: 8px; padding: 0.65rem; background: #0b1530; min-width: 0; }
+    .source-probe .probe-card[data-flip="true"] { border-color: #fbbf24; }
+    .source-probe .probe-card h4 { margin: 0; color: #f8fafc; }
+    .source-probe .probe-card p { margin: 0.35rem 0; }
+    .source-probe details { color: #cbd5e1; font-size: 0.82rem; overflow-wrap: anywhere; }
+    .source-probe details summary { color: #a5f3fc; cursor: pointer; min-height: 44px; padding: 0.65rem 0; }
+    .source-probe details summary:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+    .source-probe ul { padding-left: 1.25rem; margin: 0; }
+    .source-probe li { margin: 0.3rem 0; }
     .review-desk a { color: #a5f3fc; text-underline-offset: 3px; }
     .review-desk a:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
     #receipt-verifier[open] { max-height: min(65vh, 760px); }
@@ -562,6 +574,13 @@
           </div>
         </div>
       </div>
+      <section class="source-probe" aria-labelledby="source-probe-title">
+        <h3 id="source-probe-title">Which supplied sources change the result?</h3>
+        <p>After auditing, withhold one reference record at a time from a temporary copy. See whether each receipt's verdict or computed answer and citations change. The original files and saved capture are untouched.</p>
+        <button type="button" id="source-probe-run" onclick="runSourceRemovalProbe()" disabled>Probe one-source removals</button>
+        <div id="source-probe-result" role="status" aria-live="polite">Audit the selected files to enable this probe.</div>
+        <p>A verdict-only flip means the receipt's exact snapshot changed while its computed answer and citations stayed the same. These are hypothetical removals from the supplied reference, not evidence that any real source was omitted. An altered copy would no longer agree with a supplied checkpoint. No single-source result establishes completeness, independence, or truth.</p>
+      </section>
       <p class="review-limit"><strong>Outside this review:</strong> who authored or independently held the files, whether relevant evidence is missing, and whether the underlying claims are true. A capture can replay as MATCH while a receipt is DIFFER or FAIL.</p>
       <p><a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/review-desk-protocol.md">Reproduce the review and read its limits</a></p>
     </section>
@@ -2537,6 +2556,7 @@ let evidenceBatchCaptureReplayRequest = 0;
 let reviewDeskAudit = null;
 let reviewDeskReplay = null;
 let reviewDeskIssue = null;
+let sourceProbeData = null;
 
 function openReviewDesk() {
   document.getElementById("receipt-verifier").open = true;
@@ -2579,6 +2599,11 @@ function renderReviewDesk() {
   const replay = document.getElementById("review-desk-capture");
   const replayStatus = document.getElementById("review-desk-capture-status");
   const readyToCompare = !!lastEvidenceBatchCapture && !!capture;
+  document.getElementById("source-probe-run").disabled = !sourceProbeData;
+  if (reviewDeskIssue && !sourceProbeData) {
+    document.getElementById("source-probe-result").textContent =
+      `Probe unavailable: ${reviewDeskIssue}`;
+  }
   document.getElementById("review-desk-download").disabled = !lastEvidenceBatchCapture;
   document.getElementById("review-desk-compare").disabled = !readyToCompare;
   if (reviewDeskReplay?.kind === "match") {
@@ -2597,6 +2622,85 @@ function renderReviewDesk() {
       lastEvidenceBatchCapture ? "Audit complete. Download its capture or choose a saved one." :
         reviewDeskAudit ? document.getElementById("audit-capture-status").textContent :
           "Audit the supplied files before checking a saved capture.";
+  }
+}
+
+function sourceProbeAnswers(receipt, records) {
+  return receipt.format === "aru-evidence-brief-receipt" ?
+    evaluateEvidenceBrief(receipt.names, records).map(item => item.answer) :
+    evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, records));
+}
+
+function sourceRemovalFindings(records, rows) {
+  return rows.map(({receipt, verdict}, index) => {
+    if (!receipt) return {index: index + 1, verdict, skipped: true};
+    const originalAnswer = sourceProbeAnswers(receipt, records);
+    const flips = [];
+    const answerChanges = [];
+    const verdictOnly = [];
+    for (const source of records) {
+      const without = records.filter(record => record.id !== source.id);
+      const nextVerdict = compareEvidenceToReference(receipt, without).match ? "MATCH" : "DIFFER";
+      const answerChanged = JSON.stringify(originalAnswer) !==
+        JSON.stringify(sourceProbeAnswers(receipt, without));
+      if (nextVerdict !== verdict) flips.push({id: source.id, verdict: nextVerdict});
+      if (answerChanged) answerChanges.push(source.id);
+      else if (nextVerdict !== verdict) verdictOnly.push(source.id);
+    }
+    return {index: index + 1, verdict, flips, answerChanges, verdictOnly};
+  });
+}
+
+function runSourceRemovalProbe() {
+  const data = sourceProbeData;
+  const output = document.getElementById("source-probe-result");
+  if (!data || document.getElementById("reference-file").files?.[0] !== data.referenceFile ||
+      document.getElementById("checkpoint-file").files?.[0] !== data.checkpointFile ||
+      document.getElementById("audit-receipts").files?.length !== data.files.length ||
+      !data.files.every((file, index) => document.getElementById("audit-receipts").files[index] === file)) {
+    invalidateEvidenceBatchAudit("Selection changed. Audit the selected files again.");
+    return;
+  }
+  try {
+    const findings = sourceRemovalFindings(data.records, data.rows);
+    const summary = document.createElement("p");
+    summary.textContent = `Probed ${data.records.length} supplied source${data.records.length === 1 ? "" : "s"} against ${data.rows.length} receipt${data.rows.length === 1 ? "" : "s"}. Each trial withholds exactly one source; no files were changed.`;
+    const cards = document.createElement("div"); cards.className = "probe-cards";
+    for (const item of findings) {
+      const card = document.createElement("article"); card.className = "probe-card";
+      card.dataset.flip = String(!!item.flips?.length);
+      const title = document.createElement("h4"); title.textContent = `Receipt #${item.index} · ${item.verdict}`;
+      card.appendChild(title);
+      const note = document.createElement("p");
+      if (item.skipped) {
+        note.textContent = "FAIL: This receipt did not replay, so no source-removal conclusion is available.";
+      } else {
+        note.textContent = `${item.flips.length} verdict flip${item.flips.length === 1 ? "" : "s"}; ` +
+          `${item.answerChanges.length} computed answer/citation change${item.answerChanges.length === 1 ? "" : "s"}; ` +
+          `${item.verdictOnly.length} verdict-only flip${item.verdictOnly.length === 1 ? "" : "s"}.`;
+      }
+      card.appendChild(note);
+      if (!item.skipped && data.records.length) {
+        const details = document.createElement("details");
+        const heading = document.createElement("summary");
+        heading.textContent = "See tested source IDs and outcomes";
+        details.appendChild(heading);
+        const list = document.createElement("ul");
+        for (const source of data.records) {
+          const flip = item.flips.find(row => row.id === source.id);
+          const changed = item.answerChanges.includes(source.id);
+          const line = document.createElement("li");
+          line.textContent = `Source #${source.id}: ${flip ? `${item.verdict} → ${flip.verdict}` : "verdict unchanged"}; ` +
+            `computed answer/citations ${changed ? "changed" : "unchanged"}.`;
+          list.appendChild(line);
+        }
+        details.appendChild(list); card.appendChild(details);
+      }
+      cards.appendChild(card);
+    }
+    output.replaceChildren(); output.appendChild(summary); output.appendChild(cards);
+  } catch (_) {
+    output.textContent = "Probe unavailable: this selection could not be recomputed. Audit the files again.";
   }
 }
 
@@ -2668,6 +2772,8 @@ function invalidateEvidenceBatchAudit(message = "Receipt selection changed. Audi
   ++evidenceBatchAuditRequest;
   reviewDeskAudit = null;
   reviewDeskIssue = null;
+  sourceProbeData = null;
+  document.getElementById("source-probe-result").textContent = "Selection changed. Audit the new files before probing sources.";
   document.getElementById("audit-result").textContent = message;
   invalidateEvidenceBatchCapture("Selection changed. Run the audit again before downloading a capture.");
   invalidateReferenceTransition();
@@ -3516,6 +3622,8 @@ async function runEvidenceBatchAudit() {
   const request = ++evidenceBatchAuditRequest;
   reviewDeskAudit = null;
   reviewDeskIssue = null;
+  sourceProbeData = null;
+  document.getElementById("source-probe-result").textContent = "Audit in progress. Source probe waits for a completed audit.";
   invalidateEvidenceBatchCapture("Checking files before a capture can be downloaded…");
   const output = document.getElementById("audit-result");
   const referenceInput = document.getElementById("reference-file");
@@ -3570,6 +3678,7 @@ async function runEvidenceBatchAudit() {
     const seenText = new Map();
     const selectedValues = [baseline];
     const rows = [];
+    const probeRows = [];
     const receiptBytes = [];
     let capturable = true;
     const totals = {MATCH: 0, DIFFER: 0, FAIL: 0};
@@ -3578,6 +3687,7 @@ async function runEvidenceBatchAudit() {
       let verdict = "FAIL";
       let detail;
       let duplicateOf;
+      let validReceipt = null;
       try {
         const {bytes, raw} = await readEvidenceAuditBytes(file, `Receipt #${index + 1}`);
         if (!stillCurrent()) return;
@@ -3592,6 +3702,7 @@ async function runEvidenceBatchAudit() {
         }
         verifyEvidenceBundle(receipt);
         const outcome = compareEvidenceToReference(receipt, baseline.records);
+        validReceipt = receipt;
         verdict = outcome.match ? "MATCH" : "DIFFER";
         detail = outcome.detail;
       } catch (error) {
@@ -3602,6 +3713,7 @@ async function runEvidenceBatchAudit() {
       totals[verdict]++;
       rows.push({number: index + 1, name: file.name || `Receipt #${index + 1}`,
         verdict, detail, duplicateOf});
+      probeRows.push({receipt: validReceipt, verdict});
     }
     if (!stillCurrent()) return;
     const summary = document.createElement("p");
@@ -3636,6 +3748,9 @@ async function runEvidenceBatchAudit() {
     output.appendChild(summary);
     output.appendChild(scroller);
     reviewDeskAudit = {totals, repeats, checkpointSelected: !!checkpointFile};
+    sourceProbeData = {records: baseline.records, rows: probeRows, referenceFile, checkpointFile, files};
+    document.getElementById("source-probe-result").textContent =
+      "Audit complete. Run the one-source probe to inspect this supplied reference.";
     renderReviewDesk();
     if (!capturable) {
       document.getElementById("audit-capture-status").textContent =
