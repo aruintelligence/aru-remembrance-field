@@ -2093,6 +2093,10 @@ test('two-reference lens traces an omitted conflict, full-snapshot change, and u
   assert.match(cards[1].children[2].textContent, /full receipt requires an exact ordered snapshot/);
   assert.match(cards[2].children[2].textContent, /not valid JSON.*No reference verdict/);
   assert.match(cards[0].children[3].textContent, /Minimum added-source set.*#2.*1 subset tested.*not proof of chronology/);
+  assert.match(cards[0].children[4].textContent,
+    /Verdict witness: smallest added-source set.*#2.*excerpt checks its answer and cited records.*does not establish custody/);
+  assert.match(cards[1].children[4].textContent,
+    /Verdict witness: smallest added-source set.*#2.*full receipt checks an exact ordered snapshot/);
   assert.equal(cards[2].children.length, 3, 'a failed replay has no answer-change claim');
   assert.equal(JSON.stringify([...app.saved]), saved);
   const allText = element => [element.textContent, ...(element.children || []).flatMap(allText)];
@@ -2135,6 +2139,39 @@ test('addition witness finds a minimum pair and tied alternatives but declines e
     {status: 'unavailable', reason: 'not-addition-only'});
   assert.deepEqual(examine('What is color?', [], Array.from({length: 7}, (_, index) =>
     record(index + 1, 'color', 'teal'))),
+    {status: 'unavailable', reason: 'too-many-additions'});
+});
+
+test('browser verdict witness distinguishes unchanged answer, ties, completion, and unavailable edits', () => {
+  const app = boot();
+  const record = (id, key, value) => ({id, key, value, time: 1700000000000 + id,
+    status: 'active', imported: false});
+  const color = record(1, 'color', 'private teal');
+  const city = record(2, 'city', 'private Portland');
+  const amber = record(2, 'color', 'private amber');
+  const green = record(3, 'color', 'private green');
+  const examine = (receipt, before, after) => {
+    app.context.sample = receipt;
+    app.context.before = {records: before};
+    app.context.after = {records: after};
+    return JSON.parse(JSON.stringify(vm.runInContext(
+      'referenceVerdictAddedSourceWitness(sample, before, after)', app.context)));
+  };
+  const full = {format: 'aru-evidence-question-receipt', question: 'What is color?',
+    records: [color]};
+  assert.deepEqual(examine(full, [color], [color, city]),
+    {status: 'witness', minimum_size: 1, sets: [[2]], total_sets: 1, tested_subsets: 1});
+  assert.deepEqual(examine({...full, records: [color, city]}, [color], [color, city]),
+    {status: 'witness', minimum_size: 1, sets: [[2]], total_sets: 1, tested_subsets: 1});
+  const excerpt = {...full, format: 'aru-evidence-answer-excerpt',
+    answer: {kind: 'known', value: 'private teal', sources: [1]}};
+  assert.deepEqual(examine(excerpt, [color], [color, amber, green]),
+    {status: 'witness', minimum_size: 1, sets: [[2], [3]], total_sets: 2, tested_subsets: 2});
+  assert.deepEqual(examine(excerpt, [color], [color, city]), {status: 'unchanged'});
+  assert.deepEqual(examine(full, [color], [{...color, value: 'private amber'}]),
+    {status: 'unavailable', reason: 'not-addition-only'});
+  assert.deepEqual(examine(full, [color], [color, ...Array.from({length: 7}, (_, i) =>
+    record(i + 2, 'city', `private ${i}`))]),
     {status: 'unavailable', reason: 'too-many-additions'});
 });
 
@@ -2191,6 +2228,10 @@ test('lens can show DIFFER to MATCH and leave an excerpt MATCH when only an unre
   assert.equal(output.children[3].children[0].children[1].textContent, 'A: MATCH → B: MATCH');
   assert.equal(output.children[3].children[1].children[1].textContent, 'A: MATCH → B: DIFFER');
   assert.match(output.children[3].children[0].children[2].textContent, /computed answer and cited sources agree/);
+  assert.match(output.children[3].children[0].children[4].textContent, /Verdict unchanged under A and B/);
+  assert.match(output.children[3].children[1].children[3].textContent, /Computed answer unchanged/);
+  assert.match(output.children[3].children[1].children[4].textContent,
+    /Verdict witness.*#2.*full receipt checks an exact ordered snapshot.*computed answer is unchanged/);
 
   const nextOnly = {...JSON.parse(a), next_source_id: 8};
   output = await traceSavedReferences(app, a, JSON.stringify(nextOnly), [auditFile(full)]);
