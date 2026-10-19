@@ -31,13 +31,13 @@ test('archived kit replays a capture through Node and independent Python outside
   assert.equal(created.status, 0, created.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(kit, 'manifest.json'), 'utf8'));
   assert.equal(manifest.browser_script_sha256, JSON.parse(fs.readFileSync(capture, 'utf8')).browser_script_sha256);
-  assert.equal(manifest.files.length, 11);
+  assert.equal(manifest.files.length, 13);
   assert.deepEqual(fs.readdirSync(kit).sort(), ['README.md', 'index.html', 'manifest.json', 'tools']);
   assert.equal(fs.existsSync(path.join(kit, 'research')), false);
   assert.equal(fs.existsSync(path.join(kit, 'capture.json')), false);
   const verified = node([path.join(kit, 'tools', 'verifier-kit.cjs'), 'check', kit, capture], dir);
   assert.equal(verified.status, 0, verified.stderr);
-  assert.match(verified.stdout, /KIT MATCH: 11 archived files.*supplied capture/);
+  assert.match(verified.stdout, /KIT MATCH: 13 archived files.*supplied capture/);
   const args = [reference, ...receipts, '--checkpoint', checkpoint, '--check-capture', capture];
   const replay = node([path.join(kit, 'tools', 'audit-evidence-batch.cjs'), ...args], dir);
   assert.equal(replay.status, 0, replay.stderr);
@@ -49,6 +49,14 @@ test('archived kit replays a capture through Node and independent Python outside
   const decision = node([path.join(kit, 'tools', 'review-evidence.cjs'), ...args, '--json'], dir);
   assert.equal(decision.status, 0, decision.stderr);
   assert.equal(JSON.parse(decision.stdout).receipt_assessment, 'all_receipts_match');
+  const practice = fixture('example-reviewer-judgment.json');
+  const practiceCheck = node([path.join(kit, 'tools', 'verify-reviewer-judgment.cjs'), practice], dir);
+  assert.equal(practiceCheck.status, 0, practiceCheck.stderr);
+  assert.match(practiceCheck.stdout, /4\/5 recorded choices/);
+  const practiceSummary = node([path.join(kit, 'tools', 'analyze-reviewer-judgments.cjs'),
+    '--json', practice], dir);
+  assert.equal(practiceSummary.status, 0, practiceSummary.stderr);
+  assert.equal(JSON.parse(practiceSummary.stdout).files, 1);
 
   const another = path.join(dir, 'same-kit');
   assert.equal(node([kitTool, 'create', capture, another]).status, 0);

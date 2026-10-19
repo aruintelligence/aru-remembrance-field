@@ -46,6 +46,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - A browser-side verifier for shared answer receipts and excerpts, with no import or command-line setup
 - An optional reference-ledger comparison that detects omitted conflicts in an excerpt when the checker already holds the relevant sources
 - A one-click synthetic trust lab that contrasts internal replay, reference comparison, and earlier checkpoint matching across five controls
+- A private reviewer judgment exercise with five interpretation decisions, delayed feedback, an optional code-bound report, and an offline scoring tool
 - A bounded, local batch audit for up to 20 shared answer receipts against one saved reference and optional prior checkpoint, with per-file results and repeated-text flags
 - A browser download of the batch's file hashes and verdicts that can be replayed with the command-line auditor
 - A local browser comparison of a saved audit capture against the original selected files, with no command-line setup
@@ -69,6 +70,15 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 Open the [live demonstration](https://aruintelligence.github.io/aru-remembrance-field/).
 
 Select **Run the evidence challenge** near the top of the page to see five synthetic cases checked by the actual browser verifier. An answer can pass internal replay while an omitted conflict makes it differ from the reference. A receipt and reference changed together can match each other but differ from an earlier checkpoint. A superseded older assertion should still permit the same cited answer. The table shows all three checks and the resulting accept/reject decision. It uses no personal ledger data and does not write browser storage. See the [trust lab protocol](research/evidence-trust-lab-protocol.md) for the exact controls and limits.
+
+Under **Verify a shared answer receipt**, open **Reviewer judgment**, start five synthetic decisions, and lock each choice before the explanations appear. The exercise does not inspect your ledger. You may download a JSON report after the fifth decision when secure hashing is available. To check a downloaded report and summarize one or more locally held reports:
+
+```bash
+node tools/verify-reviewer-judgment.cjs research/example-reviewer-judgment.json
+node tools/analyze-reviewer-judgments.cjs --json research/example-reviewer-judgment.json
+```
+
+The example is simulated, not a human response. The [reviewer judgment protocol](research/reviewer-judgment-protocol.md) describes the scenarios, privacy boundary, reproducible counterexamples, and a possible prospective study. Reports can be edited; neither a keyed score nor a file count establishes reviewer understanding, unique participants, custody, or the truth of an assertion. An [offline verifier kit](research/verifier-kit-protocol.md) made from a current capture also preserves the exercise checker for later scoring with that archived page.
 
 To run a local copy:
 

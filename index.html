@@ -351,6 +351,14 @@
     .review-path p { margin: 0.45rem 0; }
     .review-path a { display: inline-block; min-height: 44px; padding: 0.7rem 0; color: #a5f3fc; font-weight: 700; text-underline-offset: 3px; }
     .review-path a:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+    .judgment-card { padding: 0.85rem; border: 1px solid #67e8f9; border-radius: 10px; background: #0b1530; }
+    .judgment-card fieldset { min-width: 0; margin: 0.7rem 0; padding: 0; border: 0; }
+    .judgment-card legend { color: #f8fafc; font-weight: 700; line-height: 1.5; }
+    .judgment-card .judgment-option { display: flex; align-items: flex-start; gap: 0.7rem; margin: 0.5rem 0; padding: 0.7rem; border: 1px solid #64748b; border-radius: 8px; font-weight: 400; line-height: 1.5; cursor: pointer; }
+    .judgment-card .judgment-option:has(input:checked) { border-color: #fbbf24; background: rgba(120,53,15,0.25); }
+    .judgment-card .judgment-option input { width: 1.2rem; min-height: 1.2rem; margin: 0.15rem 0 0; flex: 0 0 auto; accent-color: #fbbf24; }
+    .judgment-card .judgment-option:focus-within { outline: 2px solid #67e8f9; outline-offset: 2px; }
+    .judgment-feedback { padding: 0.6rem 0.75rem; border-left: 3px solid #38bdf8; background: rgba(8,47,73,0.45); }
     .transition-summary { padding: 0.8rem; border: 1px solid #38bdf8; border-radius: 10px; background: rgba(8,47,73,0.46); }
     .transition-changes { margin: 0.6rem 0 0.85rem; padding-left: 1.4rem; color: #cbd5e1; font-size: 0.82rem; line-height: 1.5; }
     .transition-changes li { margin: 0.25rem 0; overflow-wrap: anywhere; }
@@ -508,6 +516,16 @@
       <div class="ledger-actions"><button type="button" onclick="runEvidenceTrustLab()">Run five cases</button></div>
       <div id="trust-lab-result" role="status" aria-live="polite">Run the challenge to see which checks catch an omitted conflict or a forged reference.</div>
       <p>An earlier checkpoint matters only when kept independently. This lab tests software consistency under synthetic inputs, not whether any real-world statement is true.</p>
+    </section>
+    <section class="evidence-question" id="reviewer-judgment-lab" aria-labelledby="reviewer-judgment-title">
+      <h2 id="reviewer-judgment-title">Reviewer judgment · five private practice decisions</h2>
+      <p>Read five synthetic audit summaries and choose the conclusion each supports. The answers stay hidden until the end. This exercise never reads your evidence files or browser memory and does not save your choices unless you explicitly download them.</p>
+      <div class="ledger-actions">
+        <button type="button" onclick="startReviewerJudgment()">Start or restart</button>
+        <button type="button" id="reviewer-judgment-download" onclick="downloadReviewerJudgment()" disabled>Download choices JSON</button>
+      </div>
+      <div id="reviewer-judgment-result" role="status" aria-live="polite">Start the exercise when you are ready.</div>
+      <p>A score measures answers to these five examples, not expertise, real-world claim accuracy, or an independent study. The optional file contains scenario IDs, choices, a score, ordering method, and the page script fingerprint; it can be edited by its holder.</p>
     </section>
     <p>Choose a question, brief, correction, correction-chain, or compact correction packet JSON. This browser replays the supplied change; a compact packet is checked against this browser's own ledger. The file is read on this device and is not uploaded by this app.</p>
     <label for="receipt-file">Receipt JSON (up to 1 MiB)</label>
@@ -2285,6 +2303,138 @@ async function runEvidenceTrustLab() {
     output.appendChild(scroller);
   } catch (error) {
     if (request === trustLabRequest) output.textContent = `Could not run the challenge: ${error.message || "unknown error"}`;
+  }
+}
+
+const REVIEW_JUDGMENT_SCENARIOS = [
+  {id: "all_match", summary: "Synthetic capture replay: MATCH. Receipt counts: 2 MATCH, 0 DIFFER, 0 FAIL.",
+    question: "What does this result establish?", options: [
+      ["consistency", "The supplied files and rules reproduced the recorded outcomes."],
+      ["truth", "Both underlying assertions are factually true."],
+      ["custody", "An independent party held the files before this review."]],
+    correct: "consistency", explanation: "Replay checks consistency with the selected files and rules. It does not establish truth or independent custody."},
+  {id: "recorded_fail", summary: "Synthetic capture replay: MATCH. Receipt counts: 1 MATCH, 0 DIFFER, 1 FAIL.",
+    question: "What happened to the receipt set?", options: [
+      ["all_pass", "Every receipt passed the audit."],
+      ["one_failed", "The capture reproduced, including one failed receipt."],
+      ["no_check", "No receipt bytes were checked."]],
+    correct: "one_failed", explanation: "A capture can match while recording a FAIL. Read receipt counts separately from capture replay."},
+  {id: "paired_difference", summary: "Synthetic transition replay: MATCH. A: 2 MATCH. B: 1 MATCH, 1 DIFFER.",
+    question: "Which assessment follows for reference B?", options: [
+      ["all_match", "Both B receipts match."],
+      ["chronology", "B was independently proved to be later than A."],
+      ["difference", "One B receipt differs under the supplied reference." ]],
+    correct: "difference", explanation: "B has a recorded DIFFER. A and B are comparison labels, not verified dates."},
+  {id: "checker_disagreement", summary: "Synthetic independent review: the Node and Python checkers disagree on a selected input.",
+    question: "What should the combined reviewer return?", options: [
+      ["positive", "A positive assessment because one checker matched."],
+      ["unconfirmed", "UNCONFIRMED; investigate the disagreement."],
+      ["truth", "The assertion is false."]],
+    correct: "unconfirmed", explanation: "A disagreement withholds a positive software assessment. It does not settle the assertion's truth."},
+  {id: "checkpoint", summary: "Synthetic review: a selected reference matches a checkpoint file supplied alongside it.",
+    question: "What can that matching checkpoint establish by itself?", options: [
+      ["timestamp", "When the checkpoint was created and who held it."],
+      ["complete", "That the reference contains every relevant assertion."],
+      ["agreement", "That the supplied checkpoint agrees with the selected reference."]],
+    correct: "agreement", explanation: "A matching checkpoint checks these bytes. Independent custody and timing require evidence outside this pair."}
+];
+
+let reviewerJudgmentState = null;
+
+function startReviewerJudgment() {
+  const order = REVIEW_JUDGMENT_SCENARIOS.map(item => item.id);
+  let orderMethod = "fixed_fallback";
+  if (globalThis.crypto?.getRandomValues) {
+    for (let index = order.length - 1; index > 0; index--) {
+      const random = globalThis.crypto.getRandomValues(new Uint32Array(1))[0];
+      const swap = random % (index + 1);
+      [order[index], order[swap]] = [order[swap], order[index]];
+    }
+    orderMethod = "crypto_shuffle";
+  }
+  reviewerJudgmentState = {order, orderMethod, answers: [], selected: null, report: null};
+  document.getElementById("reviewer-judgment-download").disabled = true;
+  renderReviewerJudgment();
+}
+
+function selectReviewerJudgment(choice) {
+  const state = reviewerJudgmentState;
+  if (!state || state.answers.length >= state.order.length) return;
+  const scenario = REVIEW_JUDGMENT_SCENARIOS.find(item => item.id === state.order[state.answers.length]);
+  if (!scenario.options.some(([id]) => id === choice)) return;
+  state.selected = choice;
+  state.submitButton.disabled = false;
+}
+
+function renderReviewerJudgment() {
+  const state = reviewerJudgmentState;
+  const output = document.getElementById("reviewer-judgment-result");
+  const index = state.answers.length;
+  const scenario = REVIEW_JUDGMENT_SCENARIOS.find(item => item.id === state.order[index]);
+  const card = document.createElement("div"); card.className = "judgment-card";
+  const progress = document.createElement("p");
+  progress.textContent = `Decision ${index + 1} of ${state.order.length}. Feedback appears after all five decisions.`;
+  const summary = document.createElement("p"); summary.textContent = scenario.summary;
+  const fieldset = document.createElement("fieldset");
+  const legend = document.createElement("legend"); legend.textContent = scenario.question;
+  fieldset.appendChild(legend);
+  for (const [id, label] of scenario.options) {
+    const option = document.createElement("label"); option.className = "judgment-option";
+    const input = document.createElement("input");
+    input.type = "radio"; input.name = "reviewer-judgment-choice"; input.value = id;
+    input.onchange = () => selectReviewerJudgment(id);
+    const caption = document.createElement("span"); caption.textContent = label;
+    option.appendChild(input); option.appendChild(caption); fieldset.appendChild(option);
+  }
+  const submit = document.createElement("button"); submit.type = "button";
+  submit.id = "reviewer-judgment-submit"; submit.disabled = true;
+  submit.textContent = index === state.order.length - 1 ? "Finish and see explanations" : "Lock choice and continue";
+  submit.onclick = submitReviewerJudgment;
+  card.appendChild(progress); card.appendChild(summary); card.appendChild(fieldset);
+  card.appendChild(submit); output.replaceChildren(); output.appendChild(card);
+  state.submitButton = submit;
+}
+
+async function submitReviewerJudgment() {
+  const state = reviewerJudgmentState;
+  if (!state || state.answers.length >= state.order.length || !state.selected) return;
+  const scenario = REVIEW_JUDGMENT_SCENARIOS.find(item => item.id === state.order[state.answers.length]);
+  state.answers.push({scenario: scenario.id, choice: state.selected});
+  state.selected = null;
+  if (state.answers.length < state.order.length) { renderReviewerJudgment(); return; }
+  const score = {correct: state.answers.filter(row =>
+    REVIEW_JUDGMENT_SCENARIOS.find(item => item.id === row.scenario).correct === row.choice).length,
+  total: state.order.length};
+  if (globalThis.crypto?.subtle && auditScriptAtLoad) {
+    try {
+      const browser_script_sha256 = await evidenceAuditSHA256(new TextEncoder().encode(auditScriptAtLoad));
+      if (reviewerJudgmentState !== state) return;
+      state.report = {format: "aru-reviewer-judgment", version: 1,
+        revision: "aru-reviewer-judgment-1", browser_script_sha256,
+        order_method: state.orderMethod, scenario_order: state.order, answers: state.answers, score};
+      document.getElementById("reviewer-judgment-download").disabled = false;
+    } catch (_) { /* The debrief remains available when secure hashing is unavailable. */ }
+  }
+  if (reviewerJudgmentState !== state) return;
+  const output = document.getElementById("reviewer-judgment-result");
+  const title = document.createElement("p");
+  title.textContent = `${score.correct} of ${score.total} interpretations matched the fixed exercise key. ` +
+    (state.report ? "You may download your choices." : "Download unavailable without secure browser hashing.");
+  const list = document.createElement("ol"); list.className = "transition-changes";
+  for (const answer of state.answers) {
+    const item = REVIEW_JUDGMENT_SCENARIOS.find(row => row.id === answer.scenario);
+    const choice = item.options.find(([id]) => id === answer.choice)[1];
+    const correct = item.options.find(([id]) => id === item.correct)[1];
+    const row = document.createElement("li"); row.className = "judgment-feedback";
+    row.textContent = `${item.summary} Your choice: ${choice} ${answer.choice === item.correct ? "Correct." : `Supported conclusion: ${correct}`} ${item.explanation}`;
+    list.appendChild(row);
+  }
+  output.replaceChildren(); output.appendChild(title); output.appendChild(list);
+}
+
+function downloadReviewerJudgment() {
+  if (reviewerJudgmentState?.report) {
+    downloadJSON(reviewerJudgmentState.report, "aru-reviewer-judgment.json");
   }
 }
 

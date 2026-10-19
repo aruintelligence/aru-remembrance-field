@@ -18,6 +18,8 @@ const CODE_FILES = [
   "tools/independent-evidence-batch.py",
   "tools/probe-normalization.py",
   "tools/review-evidence.cjs",
+  "tools/verify-reviewer-judgment.cjs",
+  "tools/analyze-reviewer-judgments.cjs",
   "tools/verifier-kit.cjs"
 ];
 const FILES = [...CODE_FILES, "README.md"];
@@ -25,7 +27,8 @@ const README = `# ĀRU offline verifier kit
 
 This folder preserves the exact browser page and the Node and independent Python
 batch checkers for a version 2 or 3 browser audit capture, a paired transition capture,
-or a private transition capture. It contains no selected
+or a private transition capture. It also preserves the optional reviewer judgment
+exercise's fixed key and report checker. It contains no selected
 reference, checkpoint, receipt, or capture file. Keep those originals separately
 and provide them explicitly when replaying a capture.
 
@@ -46,6 +49,10 @@ node tools/review-evidence.cjs /path/to/reference-a.json /path/to/receipt-1.json
 node tools/audit-evidence-batch.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json
 python3 tools/independent-evidence-batch.py /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json
 node tools/review-evidence.cjs /path/to/reference-a.json /path/to/receipt-1.json --reference-b /path/to/reference-b.json --check-sealed /path/to/private-capture.json --opening-key /private/path/opening-key.json --json
+
+# To score an optional practice report made with the archived page:
+node tools/verify-reviewer-judgment.cjs /path/to/reviewer-judgment.json
+node tools/analyze-reviewer-judgments.cjs --json /path/to/reviewer-judgment-1.json /path/to/reviewer-judgment-2.json
 \`\`\`
 
 Omit \`--checkpoint\` when the original capture has no checkpoint. Supply all
@@ -69,6 +76,9 @@ capture and code separately if those properties matter. The private capture
 does not contain raw file hashes but reveals verdicts, repeats, counts, and
 the browser script fingerprint. Anyone with its opening key can test guesses
 about private facts. Do not package or publish the key with the capture.
+The judgment report checker checks the exercise key and recorded score, not
+who answered, whether a human participated, or whether choices were edited.
+Counts from multiple reports are file counts, not unique people.
 `;
 
 function sha256(bytes) {

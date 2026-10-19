@@ -11,6 +11,7 @@ const { verifyTrajectory } = require('../tools/verify-trajectory.cjs');
 const { verifyMemoryChallenge } = require('../tools/verify-memory-challenge.cjs');
 const { verifyEvidenceReceipt, verifyLedgerCheckpoint } = require('../tools/verify-evidence-receipt.cjs');
 const { verifyBlindTrial } = require('../tools/verify-blind-trial.cjs');
+const { verifyReviewerJudgment } = require('../tools/verify-reviewer-judgment.cjs');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -3272,6 +3273,66 @@ test('the trust lab flags a broken reference rule and handles unavailable hashin
   assert.match(noCrypto.elements.get('trust-lab-result').textContent,
     /Could not run the challenge: Secure browser hashing is unavailable/);
   assert.equal(noCrypto.saved.size, 0);
+});
+
+test('reviewer judgment hides feedback until five choices, exports a private score, and never touches the ledger', async () => {
+  const app = boot();
+  app.fact('private note', 'do not include in judgment');
+  const saved = JSON.stringify([...app.saved]);
+  const claims = JSON.stringify(app.field.claims);
+  vm.runInContext('startReviewerJudgment()', app.context);
+  const result = app.elements.get('reviewer-judgment-result');
+  assert.equal(app.elements.get('reviewer-judgment-download').disabled, true);
+  vm.runInContext('selectReviewerJudgment("unknown")', app.context);
+  await vm.runInContext('submitReviewerJudgment()', app.context);
+  assert.match(result.children[0].children[0].textContent, /Decision 1 of 5/);
+  for (let index = 0; index < 5; index++) {
+    const row = JSON.parse(JSON.stringify(vm.runInContext(
+      '({id: reviewerJudgmentState.order[reviewerJudgmentState.answers.length], ' +
+      'correct: REVIEW_JUDGMENT_SCENARIOS.find(item => item.id === ' +
+      'reviewerJudgmentState.order[reviewerJudgmentState.answers.length]).correct})', app.context)));
+    const fieldset = result.children[0].children[2];
+    const choice = row.id === 'recorded_fail' ? 'all_pass' : row.correct;
+    const option = fieldset.children.find(child => child.children?.[0]?.value === choice);
+    assert.ok(option, row.id);
+    option.children[0].onchange();
+    assert.equal(result.children[0].children[3].disabled, false);
+    await vm.runInContext('submitReviewerJudgment()', app.context);
+    if (index < 4) {
+      assert.match(result.children[0].children[0].textContent, new RegExp(`Decision ${index + 2} of 5`));
+      assert.equal(result.children.length, 1, 'no answer key is shown early');
+    }
+  }
+  assert.match(result.children[0].textContent, /4 of 5 interpretations/);
+  assert.equal(result.children[1].children.length, 5);
+  assert.equal(app.elements.get('reviewer-judgment-download').disabled, false);
+  vm.runInContext('downloadReviewerJudgment()', app.context);
+  const report = JSON.parse(await app.exports[0].text());
+  assert.deepEqual(verifyReviewerJudgment(report).correct, 4);
+  assert.deepEqual(report.scenario_order.slice().sort(),
+    ['all_match', 'checker_disagreement', 'checkpoint', 'paired_difference', 'recorded_fail']);
+  assert.doesNotMatch(JSON.stringify(report), /private note|do not include|teal|Portland/);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+  assert.equal(JSON.stringify(app.field.claims), claims);
+  vm.runInContext('startReviewerJudgment()', app.context);
+  assert.equal(app.elements.get('reviewer-judgment-download').disabled, true);
+  assert.match(result.children[0].children[0].textContent, /Decision 1 of 5/);
+});
+
+test('judgment exercise still debriefs without secure hashing but disables export', async () => {
+  const app = boot({}, {crypto: {}});
+  vm.runInContext('startReviewerJudgment()', app.context);
+  for (let index = 0; index < 5; index++) {
+    const choice = vm.runInContext('REVIEW_JUDGMENT_SCENARIOS.find(item => item.id === ' +
+      'reviewerJudgmentState.order[reviewerJudgmentState.answers.length]).correct', app.context);
+    app.context.choiceForTest = choice;
+    vm.runInContext('selectReviewerJudgment(choiceForTest)', app.context);
+    await vm.runInContext('submitReviewerJudgment()', app.context);
+  }
+  assert.match(app.elements.get('reviewer-judgment-result').children[0].textContent,
+    /5 of 5.*Download unavailable/);
+  assert.equal(app.elements.get('reviewer-judgment-download').disabled, true);
+  assert.equal(app.saved.size, 0);
 });
 
 test('local cross-check refuses a tab whose saved reference changed after file verification', async () => {
