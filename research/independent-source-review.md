@@ -19,6 +19,10 @@ node tools/review-source-probe.cjs research/example-evidence-reference-baseline.
 node tests/source-probe.test.cjs
 ```
 
+To view the same review in the existing page, save the first command's output by appending `> independent-review.json`. In the Review Desk choose the original reference and receipt in that order, run **Audit selected files**, then choose the saved JSON under **Compare a separately computed source map** and select **Compare source maps**. A green **MAP ALIGNS** result shows the browser and supplied JSON have the same file selection and each source-removal outcome. The existing source cards open automatically. A disagreement names the first differing field, receipt position, or source ID without displaying private values. The browser re-reads selected originals before comparison and clears its displayed agreement on file, report, audit, or saved-capture selection changes. Re-audit if files changed. The interface works in a narrow mobile layout with a labeled file input, full-width controls, focusable source details, and status announcements.
+
+The supplied JSON is unsigned and editable. **MAP ALIGNS does not attest that Python ran.** A person seeking independent execution must run the command themselves from a trusted repository copy and preserve the originals. The page's saved-capture comparison is a separate operation; a report's claim of replay is labeled as unchecked until the page also replays the capture. A failed browser capture replay blocks an aligned map message. The browser script fingerprint in historical captures covers the inline verifier rules. It does not cover `source-review-ui.js`, which only compares and presents the report. An original modified and restored between reads can escape detection.
+
 The first report has `assessment: "MATCH"`, `receipt_assessment: "recorded_differences"`, and source #2's removal changes the excerpt from `DIFFER` to `MATCH` with `answer_changed: true`. In the second, removing unrelated source #2 changes the full-snapshot verdict from `DIFFER` to `MATCH` while `answer_changed: false`. The third replays the script- and runtime-bound saved capture and checks the matching checkpoint before accepting the map. The first two do not check a saved capture and say `capture_replay: "not_checked"`. The test suite also checks a matching capture that records a `FAIL`; its failed receipt stays unprobed and `receipt_assessment` remains `recorded_failures`.
 
 For a direct independent Python report, run:
@@ -37,7 +41,8 @@ The focused tests reject or withhold on a wrong checkpoint, altered capture/scri
 
 - **Problem:** a browser-only explanation gives no independent confirmation of which supplied records drive a verdict.
 - **Mechanism:** two language implementations recompute a bounded, value-hidden removal map from identical input bytes; disagreement withholds the map, while a capture replay and receipt outcomes remain distinct.
+- **Review interface:** an on-device comparison turns the separate JSON result into source-by-source, actionable mismatch explanations. It re-reads selected bytes and preserves `DIFFER`, `FAIL`, and legacy-capture cautions. The report's claimed independent execution remains unverified by this interface.
 - **Prior art to investigate:** database lineage, leave-one-out sensitivity, reproducible builds, independent execution, and counterfactual explanations. No patentability or novelty claim has been reviewed.
-- **Unproven:** reviewer comprehension, use on real evidence, source completeness, custody, truth, and market demand.
+- **Unproven:** reviewer comprehension of the aligned-map versus attested-execution distinction, use on real evidence, source completeness, custody, truth, and market demand.
 
 The next highest-value proof is a consented, preregistered reviewer study using the synthetic conflict and verdict-only cases to measure interpretation errors. That would assess people; these software tests do not.
