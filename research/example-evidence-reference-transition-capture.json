@@ -4,7 +4,7 @@
   "capture_a": {
     "format": "aru-evidence-browser-batch-capture",
     "version": 3,
-    "browser_script_sha256": "9b556429a4ac990014cb8f2647b57330eda434e50cec8086a891326888228752",
+    "browser_script_sha256": "b136120aba27b306d065ed29259d906bf46dde3339abbb66a990de6a2919627c",
     "normalization_sha256": "58b0532f6ecaeff4f46376a730d6e8691a4f3e4ba453c4477d00ff3d456e7246",
     "reference_sha256": "442a05ce956f7a196863840d7594c8ea5178e49cf93c20e41124f80ed7c863d6",
     "checkpoint_sha256": "ecabe5f00d4be22e9d1ca9ac2a2d588b918ba162f647dcdb4132dca31b6b79e7",
@@ -32,7 +32,7 @@
   "capture_b": {
     "format": "aru-evidence-browser-batch-capture",
     "version": 3,
-    "browser_script_sha256": "9b556429a4ac990014cb8f2647b57330eda434e50cec8086a891326888228752",
+    "browser_script_sha256": "b136120aba27b306d065ed29259d906bf46dde3339abbb66a990de6a2919627c",
     "normalization_sha256": "58b0532f6ecaeff4f46376a730d6e8691a4f3e4ba453c4477d00ff3d456e7246",
     "reference_sha256": "e5c16838dd082475c05b287d089c630d6f55f10258fbda95800dac6ad8192aea",
     "checkpoint_sha256": null,

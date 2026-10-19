@@ -47,6 +47,7 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 - An optional reference-ledger comparison that detects omitted conflicts in an excerpt when the checker already holds the relevant sources
 - A one-click synthetic trust lab that contrasts internal replay, reference comparison, and earlier checkpoint matching across five controls
 - A private reviewer judgment exercise with five interpretation decisions, delayed feedback, an optional code-bound report, and an offline scoring tool
+- A guided Review Desk that separates selected files, receipt outcomes, and saved-capture replay, with stale results cleared when files change
 - A bounded, local batch audit for up to 20 shared answer receipts against one saved reference and optional prior checkpoint, with per-file results and repeated-text flags
 - A browser download of the batch's file hashes and verdicts that can be replayed with the command-line auditor
 - A local browser comparison of a saved audit capture against the original selected files, with no command-line setup
@@ -68,6 +69,8 @@ The interface lets a visitor enter a remembrance, declaration, or question and o
 ## Try it
 
 Open the [live demonstration](https://aruintelligence.github.io/aru-remembrance-field/).
+
+Select **Review evidence files** near the top of the page to open the **Review Desk**. Choose a reference ledger and 1–20 receipts in order; an independently preserved checkpoint is optional. Run the audit, inspect each receipt row, and optionally download a new capture or compare an existing one. The desk keeps receipt outcomes separate from capture replay: a matching capture can record `DIFFER` or `FAIL`. Selection changes clear the previous result. The [Review Desk protocol](research/review-desk-protocol.md) provides a reproducible `MATCH` plus `FAIL` case and lists what the interface cannot establish.
 
 Select **Run the evidence challenge** near the top of the page to see five synthetic cases checked by the actual browser verifier. An answer can pass internal replay while an omitted conflict makes it differ from the reference. A receipt and reference changed together can match each other but differ from an earlier checkpoint. A superseded older assertion should still permit the same cited answer. The table shows all three checks and the resulting accept/reject decision. It uses no personal ledger data and does not write browser storage. See the [trust lab protocol](research/evidence-trust-lab-protocol.md) for the exact controls and limits.
 

@@ -1,7 +1,7 @@
 {
   "format": "aru-evidence-browser-batch-capture",
   "version": 3,
-  "browser_script_sha256": "9b556429a4ac990014cb8f2647b57330eda434e50cec8086a891326888228752",
+  "browser_script_sha256": "b136120aba27b306d065ed29259d906bf46dde3339abbb66a990de6a2919627c",
   "normalization_sha256": "323db8de0df70c4bb0426f14753ca7708a4cf7f1fbb7886217c2497119d5f278",
   "reference_sha256": "b8f568616a9c956ae3cd2d8d7b1a383ed16ac565bb8471c4dd131a2d9cb56ed3",
   "checkpoint_sha256": null,
