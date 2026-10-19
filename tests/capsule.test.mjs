@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, LEGACY_CAPSULE_FORMAT,
   LEGACY_DRAFT_FORMAT, MAX_AUDIO_BYTES, MAX_MEMORIES, audioFromBytes,
   openCapsule, openDraft, photoFromBytes, recallMemories, sealCapsule,
@@ -8,6 +9,15 @@ import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, LEGACY_CAPSULE_FORMAT,
   "../capsule/core.mjs";
 
 const sample = () => structuredClone(FICTIONAL_SAMPLE);
+
+test("the public page and app use content-based URLs for their current modules", () => {
+  const core = readFileSync(new URL("../capsule/core.mjs", import.meta.url));
+  const app = readFileSync(new URL("../capsule/app.mjs", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../capsule/index.html", import.meta.url), "utf8");
+  const hash = data => createHash("sha256").update(data).digest("hex");
+  assert.ok(app.includes(`from "./core.mjs?v=${hash(core)}";`));
+  assert.ok(html.includes(`src="./app.mjs?v=${hash(app)}"`));
+});
 const legacySample = () => {
   const gift = sample();
   gift.format = LEGACY_CAPSULE_FORMAT;
