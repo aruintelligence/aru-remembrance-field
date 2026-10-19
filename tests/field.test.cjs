@@ -12,9 +12,11 @@ const { verifyMemoryChallenge } = require('../tools/verify-memory-challenge.cjs'
 const { verifyEvidenceReceipt, verifyLedgerCheckpoint } = require('../tools/verify-evidence-receipt.cjs');
 const { verifyBlindTrial } = require('../tools/verify-blind-trial.cjs');
 const { verifyReviewerJudgment } = require('../tools/verify-reviewer-judgment.cjs');
+const { reviewSourceMap } = require('../tools/review-source-probe.cjs');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const source = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const sourceReviewUI = fs.readFileSync(path.join(__dirname, '..', 'source-review-ui.js'), 'utf8');
 
 function boot(values = {}, options = {}) {
   const saved = options.sharedSaved || new Map(Object.entries(values));
@@ -40,6 +42,14 @@ function boot(values = {}, options = {}) {
       this.textContent = '';
       this.innerHTML = '';
       this.className = '';
+      this.listeners = new Map();
+    }
+    addEventListener(event, callback) {
+      if (!this.listeners.has(event)) this.listeners.set(event, []);
+      this.listeners.get(event).push(callback);
+    }
+    async emit(event) {
+      for (const callback of this.listeners.get(event) || []) await callback({target: this});
     }
     appendChild(child) { this.children.push(child); child.parent = this; }
     replaceChildren() { this.children = []; }
@@ -89,6 +99,7 @@ function boot(values = {}, options = {}) {
     setTimeout(callback) { callback(); }
   });
   vm.runInContext(source, context);
+  if (options.sourceReview) vm.runInContext(sourceReviewUI, context);
   return {
     context, saved, elements, exports, window,
     get pendingFrames() { return frames.size; },
@@ -3458,6 +3469,156 @@ test('source probe separates full-snapshot verdict changes from answer changes a
   assert.equal(withCheckpoint.elements.get('source-probe-run').disabled, true);
   assert.match(withCheckpoint.elements.get('review-desk-audit-status').textContent,
     /No receipts were audited/);
+});
+
+test('Review Desk aligns the actual independent report with its browser source map, including a FAIL', async () => {
+  const fixture = name => path.join(__dirname, '..', 'research', name);
+  const read = name => fs.readFileSync(fixture(name), 'utf8');
+  const report = reviewSourceMap({reference: fixture('example-evidence-reference-baseline.json'),
+    receipts: [fixture('example-evidence-excerpt.json'), fixture('example-judgment-fail-receipt.json')]});
+  assert.equal(report.assessment, 'MATCH');
+  assert.equal(report.receipt_assessment, 'recorded_failures');
+  const app = boot({}, {sourceReview: true});
+  const priorStorage = JSON.stringify([...app.saved]);
+  await auditSavedReceipts(app, read('example-evidence-reference-baseline.json'),
+    [auditFile(read('example-evidence-excerpt.json')), auditFile(read('example-judgment-fail-receipt.json'))]);
+  const input = app.elements.get('independent-review-file');
+  const button = app.elements.get('independent-review-compare');
+  input.files = [auditFile(JSON.stringify(report), 'independent.json')];
+  await input.emit('change');
+  assert.equal(button.disabled, false);
+  await button.emit('click');
+  const output = app.elements.get('independent-review-result');
+  assert.equal(output.dataset.state, 'aligned');
+  assert.match(output.textContent, /MAP ALIGNS.*1 MATCH, 0 DIFFER, 1 FAIL/);
+  assert.match(output.textContent, /editable report does not prove the independent checker ran/);
+  assert.match(app.elements.get('source-probe-result').children[1].children[1].children[1].textContent,
+    /FAIL: This receipt did not replay/);
+  assert.doesNotMatch(output.textContent, /favorite color|teal|[a-f0-9]{64}/);
+  assert.equal(JSON.stringify([...app.saved]), priorStorage);
+});
+
+test('Review Desk pinpoints altered maps and refuses changed originals, malformed reports, and stale selections', async () => {
+  const fixture = name => path.join(__dirname, '..', 'research', name);
+  const read = name => fs.readFileSync(fixture(name), 'utf8');
+  const report = reviewSourceMap({reference: fixture('example-evidence-reference-conflict.json'),
+    receipts: [fixture('example-evidence-excerpt.json')]});
+  const app = boot({}, {sourceReview: true});
+  await auditSavedReceipts(app, read('example-evidence-reference-conflict.json'),
+    [auditFile(read('example-evidence-excerpt.json'))]);
+  const input = app.elements.get('independent-review-file');
+  const button = app.elements.get('independent-review-compare');
+  const output = app.elements.get('independent-review-result');
+  const tryReport = async data => {
+    input.files = [auditFile(typeof data === 'string' ? data : JSON.stringify(data))];
+    await input.emit('change');
+    await button.emit('click');
+    return output.textContent;
+  };
+  const tampered = structuredClone(report);
+  tampered.source_map.rows[0].removals[1].verdict = 'DIFFER';
+  assert.match(await tryReport(tampered), /source #2: removal verdict differs/);
+  assert.equal(output.dataset.state, 'unconfirmed');
+  const alteredAnswer = structuredClone(report);
+  alteredAnswer.source_map.rows[0].removals[1].answer_changed = false;
+  assert.match(await tryReport(alteredAnswer), /source #2: answer\/citation change differs/);
+  const alteredScript = structuredClone(report);
+  alteredScript.source_map.selection.browser_script_sha256 = '0'.repeat(64);
+  assert.match(await tryReport(alteredScript), /Browser verifier script differs/);
+  const alteredProfile = structuredClone(report);
+  alteredProfile.source_map.selection.normalization_sha256 = '0'.repeat(64);
+  assert.match(await tryReport(alteredProfile), /Selected-name runtime profile differs/);
+  const alteredOrder = structuredClone(report);
+  alteredOrder.source_map.selection.receipts[0].sha256 = '0'.repeat(64);
+  assert.match(await tryReport(alteredOrder), /Receipt #1 file bytes or order differ/);
+  const alteredSource = structuredClone(report);
+  alteredSource.source_map.source_ids.reverse();
+  assert.match(await tryReport(alteredSource), /Source ID or order differs at position 1/);
+  assert.match(await tryReport({format: 'aru-independent-source-review', version: 1,
+    assessment: 'UNCONFIRMED', reason: 'checker_disagreement',
+    not_established: report.not_established}), /two checker implementations disagreed/);
+  assert.match(await tryReport('{"format":1,"format":2}'), /duplicate JSON object name/);
+  assert.match(await tryReport('{'), /not valid JSON/);
+  assert.match(await tryReport(report), /MAP ALIGNS/);
+  const reference = app.elements.get('reference-file').files[0];
+  reference.arrayBuffer = auditFile(read('example-evidence-reference-conflict.json') + '\n').arrayBuffer;
+  assert.match(await tryReport(report), /original file's bytes changed after the browser audit/);
+  assert.equal(output.dataset.state, 'unconfirmed');
+  app.elements.get('audit-receipts').files = [auditFile(read('example-evidence-excerpt.json'))];
+  vm.runInContext('invalidateEvidenceBatchAudit()', app.context);
+  await app.elements.get('audit-receipts').emit('change');
+  assert.equal(output.dataset.state, 'pending');
+  assert.match(await tryReport(report), /Run the browser audit with secure hashing/);
+});
+
+test('independent map comparison rejects receipt order and keeps legacy capture replay separate', async () => {
+  const fixture = name => path.join(__dirname, '..', 'research', name);
+  const read = name => fs.readFileSync(fixture(name), 'utf8');
+  const report = reviewSourceMap({reference: fixture('example-evidence-reference-baseline.json'),
+    receipts: [fixture('example-evidence-excerpt.json'), fixture('example-evidence-receipt.json')],
+    checkpoint: fixture('example-evidence-ledger-checkpoint.json'),
+    capture: fixture('example-evidence-browser-batch-capture-v1.json')});
+  const app = boot({}, {sourceReview: true});
+  const baseline = read('example-evidence-reference-baseline.json');
+  const checkpoint = read('example-evidence-ledger-checkpoint.json');
+  const excerpt = read('example-evidence-excerpt.json');
+  const full = read('example-evidence-receipt.json');
+  await auditSavedReceipts(app, baseline, [auditFile(full), auditFile(excerpt)], checkpoint);
+  const input = app.elements.get('independent-review-file');
+  input.files = [auditFile(JSON.stringify(report))];
+  await input.emit('change');
+  const button = app.elements.get('independent-review-compare');
+  const output = app.elements.get('independent-review-result');
+  await button.emit('click');
+  assert.match(output.textContent, /Receipt #1 file bytes or order differ/);
+  await auditSavedReceipts(app, baseline, [auditFile(excerpt), auditFile(full)], checkpoint);
+  await button.emit('click');
+  assert.equal(output.dataset.state, 'aligned');
+  assert.match(output.textContent, /report claims a saved-capture replay; this page has not checked/);
+  const captureInput = app.elements.get('audit-capture-file');
+  captureInput.files = [auditFile(read('example-evidence-browser-batch-capture-v1.json'))];
+  vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+  await captureInput.emit('change');
+  assert.equal(output.dataset.state, 'pending');
+  await vm.runInContext('verifySavedBatchCapture()', app.context);
+  await button.emit('click');
+  assert.match(output.textContent, /A saved capture for these originals was replayed here; the report does not identify which capture/);
+  assert.match(app.elements.get('review-desk-capture-status').textContent,
+    /Legacy capture has no script fingerprint/);
+  captureInput.files = [auditFile(JSON.stringify({...JSON.parse(read('example-evidence-browser-batch-capture-v1.json')),
+    reference_sha256: '0'.repeat(64)}))];
+  vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+  await captureInput.emit('change');
+  await vm.runInContext('verifySavedBatchCapture()', app.context);
+  await button.emit('click');
+  assert.equal(output.dataset.state, 'unconfirmed');
+  assert.match(output.textContent, /saved capture failed its browser replay/);
+});
+
+test('a slow independent report read cannot publish an agreement after report selection changes', async () => {
+  const fixture = name => path.join(__dirname, '..', 'research', name);
+  const read = name => fs.readFileSync(fixture(name), 'utf8');
+  const report = reviewSourceMap({reference: fixture('example-evidence-reference-conflict.json'),
+    receipts: [fixture('example-evidence-excerpt.json')]});
+  const app = boot({}, {sourceReview: true});
+  await auditSavedReceipts(app, read('example-evidence-reference-conflict.json'),
+    [auditFile(read('example-evidence-excerpt.json'))]);
+  const input = app.elements.get('independent-review-file');
+  const button = app.elements.get('independent-review-compare');
+  const output = app.elements.get('independent-review-result');
+  let finish;
+  input.files = [{size: 200, arrayBuffer: () => new Promise(resolve => { finish = resolve; })}];
+  await input.emit('change');
+  const pending = button.emit('click');
+  input.files = [auditFile(JSON.stringify(report))];
+  await input.emit('change');
+  const bytes = Buffer.from(JSON.stringify(report));
+  finish(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  await pending;
+  assert.equal(output.dataset.state, 'pending');
+  assert.doesNotMatch(output.textContent, /MAP ALIGNS/);
+  await button.emit('click');
+  assert.equal(output.dataset.state, 'aligned');
 });
 
 test('local cross-check refuses a tab whose saved reference changed after file verification', async () => {

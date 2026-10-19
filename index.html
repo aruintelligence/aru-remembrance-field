@@ -375,13 +375,24 @@
     .source-probe details summary:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
     .source-probe ul { padding-left: 1.25rem; margin: 0; }
     .source-probe li { margin: 0.3rem 0; }
+    .independent-review { margin-top: 1rem; padding: clamp(0.7rem, 2vw, 1rem); border: 1px solid #64748b; border-radius: 10px; background: #0b1530; }
+    .independent-review h4 { margin: 0; color: #cffafe; font-size: 0.95rem; }
+    .independent-review p { line-height: 1.55; }
+    .independent-review code { overflow-wrap: anywhere; color: #fef3c7; }
+    .independent-review label { display: block; font-weight: 700; margin: 0.8rem 0 0.35rem; }
+    .independent-review input[type="file"] { max-width: 100%; }
+    .independent-review .ledger-actions button { flex: 1 1 13rem; }
+    .independent-review .comparison-result { margin-top: 0.8rem; padding: 0.7rem; border-left: 4px solid #64748b; border-radius: 6px; background: #071427; overflow-wrap: anywhere; }
+    .independent-review .comparison-result[data-state="aligned"] { border-color: #4ade80; }
+    .independent-review .comparison-result[data-state="unconfirmed"] { border-color: #fb7185; }
+    .independent-review .comparison-result[data-state="caution"] { border-color: #fbbf24; }
     .review-desk a { color: #a5f3fc; text-underline-offset: 3px; }
     .review-desk a:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
     #receipt-verifier[open] { max-height: min(65vh, 760px); }
     @media (max-width: 580px) {
       .field-label { padding: 0.65rem 0.75rem 0.3rem; }
       .field-label .demo-launch { margin-top: 0.35rem; padding: 0.4rem 0.7rem; }
-      #receipt-verifier[open] { max-height: 52vh; }
+      #receipt-verifier[open] { max-height: 82vh; }
       .review-desk .review-gates { grid-template-columns: 1fr; }
     }
     .judgment-card { padding: 0.85rem; border: 1px solid #67e8f9; border-radius: 10px; background: #0b1530; }
@@ -560,7 +571,7 @@
           <h3>2 · Receipt outcomes</h3>
           <p id="review-desk-audit-status" role="status" aria-live="polite">No audit completed on these files.</p>
           <div class="ledger-actions">
-            <button type="button" onclick="runEvidenceBatchAudit()">Audit selected files</button>
+            <button type="button" id="review-desk-audit-run" onclick="runEvidenceBatchAudit()">Audit selected files</button>
             <button type="button" onclick="jumpToReviewInput('audit-result')">See receipt rows</button>
           </div>
         </div>
@@ -579,6 +590,15 @@
         <p>After auditing, withhold one reference record at a time from a temporary copy. See whether each receipt's verdict or computed answer and citations change. The original files and saved capture are untouched.</p>
         <button type="button" id="source-probe-run" onclick="runSourceRemovalProbe()" disabled>Probe one-source removals</button>
         <div id="source-probe-result" role="status" aria-live="polite">Audit the selected files to enable this probe.</div>
+        <div class="independent-review" aria-labelledby="independent-review-title">
+          <h4 id="independent-review-title">Compare a separately computed source map</h4>
+          <p>Run the independent command on these same original files, in the same receipt order: <code>node tools/review-source-probe.cjs reference.json receipt-1.json ... --json &gt; independent-review.json</code>. Add <code>--checkpoint checkpoint.json</code> if selected above. Choose the saved JSON here. This page checks the file hashes and every source-removal result against its current audit. <a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/independent-source-review.md">Step-by-step guide</a></p>
+          <label for="independent-review-file">Independent review JSON (up to 1 MiB)</label>
+          <input id="independent-review-file" type="file" accept=".json,application/json">
+          <div class="ledger-actions"><button type="button" id="independent-review-compare" disabled>Compare source maps</button></div>
+          <div id="independent-review-result" class="comparison-result" data-state="pending" role="status" aria-live="polite">Choose a report and audit the original files above.</div>
+          <p>A matching map means this browser agrees with the supplied report. JSON can be edited: this page cannot prove the Python checker ran or who supplied the files. Run the command yourself before relying on an independent comparison. No selected file is uploaded by this app.</p>
+        </div>
         <p>A verdict-only flip means the receipt's exact snapshot changed while its computed answer and citations stayed the same. These are hypothetical removals from the supplied reference, not evidence that any real source was omitted. An altered copy would no longer agree with a supplied checkpoint. No single-source result establishes completeness, independence, or truth.</p>
       </section>
       <p class="review-limit"><strong>Outside this review:</strong> who authored or independently held the files, whether relevant evidence is missing, and whether the underlying claims are true. A capture can replay as MATCH while a receipt is DIFFER or FAIL.</p>
@@ -627,7 +647,7 @@
       <label for="audit-receipts">Answer receipt JSON files (1–20, up to 1 MiB each and 4 MiB combined)</label>
       <input id="audit-receipts" type="file" accept=".json,application/json" multiple onchange="invalidateEvidenceBatchAudit()">
       <div class="ledger-actions">
-        <button type="button" onclick="runEvidenceBatchAudit()">Audit selected receipts</button>
+        <button type="button" id="audit-run" onclick="runEvidenceBatchAudit()">Audit selected receipts</button>
         <button type="button" id="audit-capture-download" onclick="downloadEvidenceBatchCapture()" disabled>Download audit capture</button>
       </div>
       <div id="audit-result" role="status" aria-live="polite" tabindex="-1">Choose a reference and answer receipts to run a local audit.</div>
@@ -5206,5 +5226,6 @@ restoreMessages();
 syncVisualMotion();
 setInterval(autonomousReflection, 12000);
 </script>
+<script src="source-review-ui.js"></script>
 </body>
 </html>
