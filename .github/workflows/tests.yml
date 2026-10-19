@@ -16,6 +16,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: node tests/field.test.cjs
+      - run: node --test tests/capsule.test.mjs
       - run: node tests/evidence-batch-audit.test.cjs
       - run: node tests/independent-batch-audit.test.cjs
       - run: node tests/verifier-kit.test.cjs

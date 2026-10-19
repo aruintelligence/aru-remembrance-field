@@ -1,0 +1,27 @@
+# Remembrance Capsule · product preview
+
+[Open the capsule preview](https://aruintelligence.github.io/aru-remembrance-field/capsule/). This is a separate, local-only gift experience alongside the Remembrance Field research simulation. It is a functional prototype, not an AI chat service or a finished commerce product.
+
+## Make and open a gift
+
+1. Enter the recipient's name, your name, a letter, and one to eight memories. Add optional PNG, JPEG, or WebP photos of up to 600 KB each.
+2. Preview the gift. Choose a unique passphrase of at least 12 characters and select **Seal and download**. The browser downloads a versioned JSON file encrypted with AES-256-GCM and a key derived with PBKDF2-SHA256 (310,000 iterations, random 16-byte salt, random 12-byte IV).
+3. Give the recipient the file and tell them the passphrase **separately**. They choose **Open a gift**, select the file, and enter the passphrase. They can read, copy, and ask questions about the written memories. The question feature returns matching source cards or refuses to invent an answer. It is deterministic word matching, not a language model. **Edit a copy** loads an opened gift into the maker form; it never overwrites the original file and requires a new sealed download to preserve changes.
+
+The fictional sample is available without a file or passphrase. No real person's story or photo is bundled. To run a local checkout, serve the repository over localhost (for example, `python3 -m http.server 8000`) and open `http://localhost:8000/capsule/`; browser module loading and Web Crypto may not work from `file://`.
+
+## Boundaries
+
+- The app makes no API calls or uploads and does not store the draft, passphrase, or opened gift in browser storage. Loading the hosted page itself requires a network connection. Refreshing loses the draft. Save copies of the downloaded file deliberately; lost passphrases cannot be recovered here.
+- The sealed file contains encrypted stories and photos. Anyone with both file and passphrase can decrypt, copy, and reshare them. A guessable passphrase is susceptible to offline guessing; PBKDF2 does not turn a weak passphrase into a strong one. This prototype has not had an external security audit.
+- Encryption detects changes to the sealed bytes when opened with the correct passphrase. It does not identify the author, prove a story true, prevent the maker from changing stories before export, or guarantee confidentiality on a compromised device.
+- The recipient must trust the page serving this code. The GitHub Pages site is an ordinary web origin whose future code could change. A locally reviewed checkout can be served without internet. The file itself is portable because the source and documented format are in this repository.
+- Memories are limited to eight, individual stories to 2,400 characters, photos to 600 KB, and a sealed file to 10 MB. No accounts, collaboration, payment, live AI model, or cross-device sync are implemented.
+
+## Reproducible checks
+
+```bash
+node --test tests/capsule.test.mjs
+```
+
+The tests cover encrypt/decrypt, fresh salts and IVs, wrong passphrases, changed ciphertext, unsupported parameters, bounded imports, rejected SVG/spoofed images, and cited lexical recall. A passing local test does not establish commercial readiness or independent security validation.
