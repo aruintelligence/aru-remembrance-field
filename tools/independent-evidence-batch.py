@@ -404,15 +404,7 @@ def sealed_transition_from_capture(transition, key_bytes):
             "changed_receipts": transition["changed_receipts"]}
 
 
-def addition_witness(a, b, receipt):
-    def answers(records):
-        if receipt["format"] == "aru-evidence-brief-receipt":
-            return [lookup(name, records) for name in receipt["names"]]
-        return answer(receipt["question"], records)
-
-    target = answers(b["records"])
-    if same(answers(a["records"]), target):
-        return {"status": "unchanged"}
+def minimum_added_sources(a, b, reproduces_target):
     base_ids = {record["id"] for record in a["records"]}
     common = [record for record in b["records"] if record["id"] in base_ids]
     if not same(a["records"], common):
@@ -430,7 +422,7 @@ def addition_witness(a, b, receipt):
             chosen_ids = set(chosen)
             hybrid = [record for record in b["records"] if record["id"] in base_ids or
                       record["id"] in chosen_ids]
-            if not same(answers(hybrid), target):
+            if not reproduces_target(hybrid):
                 continue
             minimum_size = size
             total_sets += 1
@@ -444,7 +436,27 @@ def addition_witness(a, b, receipt):
             "total_sets": total_sets, "tested_subsets": tested_subsets}
 
 
-def explain_transition_additions(a_file, b_file, receipt_files, a_report, b_report):
+def addition_witness(a, b, receipt):
+    def answers(records):
+        if receipt["format"] == "aru-evidence-brief-receipt":
+            return [lookup(name, records) for name in receipt["names"]]
+        return answer(receipt["question"], records)
+
+    target = answers(b["records"])
+    if same(answers(a["records"]), target):
+        return {"status": "unchanged"}
+    return minimum_added_sources(a, b, lambda records: same(answers(records), target))
+
+
+def verdict_addition_witness(a, b, receipt):
+    target = matches_reference(receipt, b)
+    if matches_reference(receipt, a) == target:
+        return {"status": "unchanged"}
+    return minimum_added_sources(a, b, lambda records:
+                                 matches_reference(receipt, {**b, "records": records}) == target)
+
+
+def explain_transition_additions(a_file, b_file, receipt_files, a_report, b_report, verdict=False):
     a_bytes = read_limited(a_file, "Reference A")
     b_bytes = read_limited(b_file, "Reference B")
     require(sha256(a_bytes) == a_report["reference_sha256"] and
@@ -461,12 +473,14 @@ def explain_transition_additions(a_file, b_file, receipt_files, a_report, b_repo
         require(sha256(data) == a_report["receipts"][index]["sha256"] and
                 sha256(data) == b_report["receipts"][index]["sha256"],
                 "receipt bytes changed during answer-change analysis")
-        if a_report["receipts"][index]["verdict"] == "FAIL":
+        if (a_report["receipts"][index]["verdict"] == "FAIL" or
+                b_report["receipts"][index]["verdict"] == "FAIL"):
             rows.append({"index": index + 1, "status": "unavailable", "reason": "receipt-failed"})
             continue
         receipt = parse(data)
         verify_receipt(receipt)
-        rows.append({"index": index + 1, **addition_witness(a, b, receipt)})
+        rows.append({"index": index + 1, **(verdict_addition_witness(a, b, receipt) if verdict
+                                          else addition_witness(a, b, receipt))})
     return rows
 
 
@@ -481,12 +495,13 @@ def run(argv=None):
     parser.add_argument("--check-sealed")
     parser.add_argument("--opening-key")
     parser.add_argument("--explain-additions", action="store_true")
+    parser.add_argument("--explain-verdicts", action="store_true")
     parser.add_argument("--check-capture")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
         require(not (args.checkpoint_b or args.check_transition or args.check_sealed or
-                     args.explain_additions) or args.reference_b,
+                     args.explain_additions or args.explain_verdicts) or args.reference_b,
                 "paired options require --reference-b")
         require(bool(args.check_sealed) == bool(args.opening_key),
                 "--check-sealed and --opening-key must be supplied together")
@@ -512,9 +527,16 @@ def run(argv=None):
                         "sealed transition capture differs from independently recomputed files, outcomes, or browser script")
             influence = (explain_transition_additions(args.reference, args.reference_b,
                          args.receipts, report, other) if args.explain_additions else None)
+            verdict_influence = (explain_transition_additions(args.reference, args.reference_b,
+                                 args.receipts, report, other, verdict=True)
+                                 if args.explain_verdicts else None)
             if args.json:
-                print(json.dumps({"transition": sealed or transition, "answer_influence": influence}
-                      if influence is not None else sealed or transition, indent=2, ensure_ascii=False))
+                print(json.dumps({"transition": sealed or transition,
+                                  **({"answer_influence": influence} if influence is not None else {}),
+                                  **({"verdict_influence": verdict_influence}
+                                     if verdict_influence is not None else {})}
+                      if influence is not None or verdict_influence is not None else sealed or transition,
+                      indent=2, ensure_ascii=False))
             else:
                 for label, side in (("A", report), ("B", other)):
                     totals = side["totals"]
@@ -537,6 +559,22 @@ def run(argv=None):
                                   (f" ({row['reason']})" if row.get("reason") else "") + ".")
                     print("Witnesses model only added sources under these rules; they do not "
                           "establish chronology, authorship, or truth.")
+                if verdict_influence is not None:
+                    for row in verdict_influence:
+                        if row["status"] == "witness":
+                            sets = "; ".join(" + ".join(f"#{identifier}" for identifier in group)
+                                             for group in row["sets"])
+                            more = row["total_sets"] - len(row["sets"])
+                            print(f"#{row['index']} verdict witness: {row['minimum_size']} added "
+                                  f"source{'s' if row['minimum_size'] != 1 else ''} "
+                                  f"per minimum set; {sets}" + (f"; {more} more" if more else "") +
+                                  f"; {row['tested_subsets']} "
+                                  f"subset{'s' if row['tested_subsets'] != 1 else ''} tested.")
+                        else:
+                            print(f"#{row['index']} verdict witness: {row['status']}" +
+                                  (f" ({row['reason']})" if row.get("reason") else "") + ".")
+                    print("Verdict witnesses replay this receipt's full-snapshot or excerpt rule "
+                          "against selected source additions; they do not establish factual truth or custody.")
                 if args.check_transition:
                     print("TRANSITION CAPTURE MATCH: independent Python replay agrees. "
                           + ("Selected-name profiles agree. " if transition["version"] == 2 else

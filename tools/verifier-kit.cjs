@@ -51,7 +51,9 @@ node tools/review-evidence.cjs /path/to/reference-a.json /path/to/receipt-1.json
 Omit \`--checkpoint\` when the original capture has no checkpoint. Supply all
 receipts in their original order. Add \`--explain-additions\` to either paired
 auditor command to recompute the bounded added-source answer witness; this
-view is not stored in the capture. A CAPTURE MATCH can reproduce DIFFER or FAIL
+view is not stored in the capture. Add \`--explain-verdicts\` to recompute a
+separate added-source verdict witness, even when the computed answer is unchanged.
+Use both flags to compare their scopes. A CAPTURE MATCH can reproduce DIFFER or FAIL
 rows, so inspect every outcome. The review command runs both auditors and emits
 one compact result with replay and receipt outcomes as separate fields. It
 also compares selected names under Node and Python, withholds a positive result

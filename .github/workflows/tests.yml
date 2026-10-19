@@ -26,6 +26,7 @@ jobs:
       - run: node tests/sealed-transition.test.cjs
       - run: node tests/unambiguous-json.test.cjs
       - run: node tests/addition-witness.test.cjs
+      - run: node tests/verdict-witness.test.cjs
       - run: node tests/benchmark.test.cjs
       - run: node tests/falsifier.test.cjs
       - run: node tests/blind-analyzer.test.cjs
@@ -49,6 +50,8 @@ jobs:
       - run: node tools/challenge-multisource-evidence.cjs --seed 20261017 --runs 500 --json
       - run: node tools/audit-evidence-batch.cjs research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --reference-b research/example-evidence-reference-conflict.json --check-transition research/example-evidence-reference-transition-capture.json --explain-additions
       - run: python3 tools/independent-evidence-batch.py research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --reference-b research/example-evidence-reference-conflict.json --check-transition research/example-evidence-reference-transition-capture.json --explain-additions
+      - run: node tools/audit-evidence-batch.cjs research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --reference-b research/example-verdict-witness-reference-unrelated.json --check-transition research/example-verdict-witness-capture.json --explain-additions --explain-verdicts
+      - run: python3 tools/independent-evidence-batch.py research/example-evidence-reference-baseline.json research/example-evidence-excerpt.json research/example-evidence-receipt.json --checkpoint research/example-evidence-ledger-checkpoint.json --reference-b research/example-verdict-witness-reference-unrelated.json --check-transition research/example-verdict-witness-capture.json --explain-additions --explain-verdicts
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-brief.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction.json
       - run: node tools/verify-evidence-receipt.cjs research/example-evidence-correction-chain.json

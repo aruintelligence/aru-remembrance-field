@@ -361,6 +361,7 @@
     .transition-card p { margin: 0.45rem 0 0; }
     .transition-card .transition-verdict { font: 700 0.8rem/1.5 'JetBrains Mono', monospace; color: #a5f3fc; }
     .transition-influence { padding: 0.65rem 0.75rem; border-left: 3px solid #38bdf8; border-radius: 6px; background: rgba(8,47,73,0.5); color: #e0f2fe; font-size: 0.82rem; line-height: 1.5; }
+    .transition-influence.verdict-influence { border-left-color: #fbbf24; background: rgba(120,53,15,0.2); color: #fef3c7; }
     .sealed-panel { margin-top: 1rem; padding: 0.9rem; border: 1px solid #4ade80; border-radius: 10px; background: rgba(20,83,45,0.18); }
     .sealed-panel h4 { margin: 0 0 0.4rem; color: #bbf7d0; }
     .sealed-panel p { line-height: 1.55; }
@@ -557,7 +558,7 @@
       </aside>
       <section class="evidence-question" id="reference-transition">
         <h3>Trace a verdict across two references</h3>
-        <p>Keep the selected reference and receipts above as B. Choose a second reference as A to replay those same receipts against both. Optional checkpoints are checked against their respective references before any verdict is compared. The view names changed source IDs and fields, answer kinds, and citation changes without displaying fact names or values.</p>
+        <p>Keep the selected reference and receipts above as B. Choose a second reference as A to replay those same receipts against both. Optional checkpoints are checked against their respective references before any verdict is compared. The view names changed source IDs and fields, answer kinds, and citation changes without displaying fact names or values. For up to six added sources, each receipt gets separate minimum source sets for the verdict and computed answer. A full snapshot can change verdict with no answer change.</p>
         <label for="transition-reference-a">Reference A ledger JSON (up to 1 MiB)</label>
         <input id="transition-reference-a" type="file" accept=".json,application/json" onchange="invalidateReferenceTransition()">
         <label for="transition-checkpoint-a">Reference A checkpoint JSON (optional, up to 1 MiB)</label>
@@ -2594,12 +2595,7 @@ function referenceReceiptTrace(receipt, a, b, ledgerChanged) {
 
 // Exact subset search for addition-only references. Filtering B's order by A's IDs
 // and a chosen subset must reconstruct A for the empty set and B for the full set.
-function referenceAddedSourceWitness(receipt, a, b) {
-  const answers = records => receipt.format === "aru-evidence-brief-receipt" ?
-    evaluateEvidenceBrief(receipt.names, records).map(row => row.answer) :
-    evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, records));
-  const target = answers(b.records);
-  if (sameEvidenceCaptureValue(answers(a.records), target)) return {status: "unchanged"};
+function referenceMinimumAddedSources(a, b, reproducesTarget) {
   const baseIds = new Set(a.records.map(record => record.id));
   const common = b.records.filter(record => baseIds.has(record.id));
   if (!sameFactLedger(a.records, common)) {
@@ -2618,7 +2614,7 @@ function referenceAddedSourceWitness(receipt, a, b) {
       testedSubsets++;
       const chosenIds = new Set(chosen);
       const hybrid = b.records.filter(record => baseIds.has(record.id) || chosenIds.has(record.id));
-      if (!sameEvidenceCaptureValue(answers(hybrid), target)) continue;
+      if (!reproducesTarget(hybrid)) continue;
       minimumSize = size;
       totalSets++;
       if (sets.length < 3) sets.push(chosen);
@@ -2627,6 +2623,46 @@ function referenceAddedSourceWitness(receipt, a, b) {
   if (minimumSize === null) return {status: "unavailable", reason: "no-witness"};
   return {status: "witness", minimum_size: minimumSize, sets,
     total_sets: totalSets, tested_subsets: testedSubsets};
+}
+
+function referenceAddedSourceWitness(receipt, a, b) {
+  const answers = records => receipt.format === "aru-evidence-brief-receipt" ?
+    evaluateEvidenceBrief(receipt.names, records).map(row => row.answer) :
+    evidenceAnswerSummary(resolveEvidenceQuestion(receipt.question, records));
+  const target = answers(b.records);
+  if (sameEvidenceCaptureValue(answers(a.records), target)) return {status: "unchanged"};
+  return referenceMinimumAddedSources(a, b, records =>
+    sameEvidenceCaptureValue(answers(records), target));
+}
+
+function referenceVerdictAddedSourceWitness(receipt, a, b) {
+  const matches = records => compareEvidenceToReference(receipt, records).match;
+  const target = matches(b.records);
+  if (matches(a.records) === target) return {status: "unchanged"};
+  return referenceMinimumAddedSources(a, b, records => matches(records) === target);
+}
+
+function referenceVerdictWitnessText(result, receipt, answerResult) {
+  if (result.status === "unchanged") {
+    return "Verdict unchanged under A and B. The sources or computed answer may still differ; inspect the trace and answer test separately.";
+  }
+  if (result.status === "unavailable") {
+    return result.reason === "too-many-additions" ?
+      "Verdict witness unavailable: more than six sources were added. No partial search result is shown." :
+      result.reason === "not-addition-only" ?
+        "Verdict witness unavailable: sources were edited, removed, or reordered. The observed verdicts still apply." :
+        "Verdict witness unavailable: no added-source subset reproduced B's verdict.";
+  }
+  const sets = result.sets.map(ids => ids.map(id => `#${id}`).join(" + ")).join("; ");
+  const scope = receipt.format === "aru-evidence-answer-excerpt" ?
+    "The excerpt checks its answer and cited records." :
+    "The full receipt checks an exact ordered snapshot.";
+  return `Verdict witness: smallest added-source set${result.total_sets === 1 ? "" : "s"} reproducing B's verdict: ${sets}` +
+    `${result.total_sets > result.sets.length ? `; ${result.total_sets - result.sets.length} more` : ""}. ` +
+    `${result.minimum_size} source${result.minimum_size === 1 ? "" : "s"} per set; ` +
+    `${result.tested_subsets} subset${result.tested_subsets === 1 ? "" : "s"} tested. ${scope} ` +
+    (answerResult.status === "unchanged" ? "The computed answer is unchanged. " : "") +
+    "This only replays the supplied files and rules; it does not establish custody, chronology, or factual truth.";
 }
 
 function referenceWitnessText(result) {
@@ -2927,7 +2963,8 @@ async function traceReferenceTransition() {
         const after = compareEvidenceToReference(receipt, b.records).match ? "MATCH" : "DIFFER";
         rows.push({index: index + 1, before, after, duplicateOf,
           detail: referenceReceiptTrace(receipt, a, b, !sameFactLedger(a.records, b.records)),
-          influence: referenceAddedSourceWitness(receipt, a, b)});
+          influence: referenceAddedSourceWitness(receipt, a, b),
+          verdictInfluence: referenceVerdictAddedSourceWitness(receipt, a, b), receiptFormat: receipt.format});
       } catch (_) {
         if (!stillCurrent()) return;
         if (stage === "read") capturable = false;
@@ -2980,6 +3017,11 @@ async function traceReferenceTransition() {
         influence.className = "transition-influence";
         influence.textContent = referenceWitnessText(row.influence);
         card.appendChild(influence);
+        const verdictInfluence = document.createElement("p");
+        verdictInfluence.className = "transition-influence verdict-influence";
+        verdictInfluence.textContent = referenceVerdictWitnessText(row.verdictInfluence,
+          {format: row.receiptFormat}, row.influence);
+        card.appendChild(verdictInfluence);
       }
       cards.appendChild(card);
     }
