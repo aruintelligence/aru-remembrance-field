@@ -1,11 +1,12 @@
-import { CAPSULE_FORMAT, FICTIONAL_SAMPLE, MAX_FILE_BYTES, MAX_MEMORIES,
-  MAX_PHOTO_BYTES, openCapsule, photoFromBytes, recallMemories, sealCapsule,
-  validateCapsule } from "./core.mjs";
+import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_FILE_BYTES,
+  MAX_MEMORIES, MAX_PHOTO_BYTES, openCapsule, openDraft, photoFromBytes,
+  recallMemories, sealCapsule, sealDraft, validateCapsule, validateDraft } from "./core.mjs";
 
 const $ = id => document.getElementById(id);
 let memories = [];
 let editingIndex = null;
 let openedCapsule = null;
+let pendingPhoto = null;
 
 function status(target, message, error = false) {
   const node = $(target);
@@ -29,6 +30,10 @@ function element(tag, className, content) {
 }
 
 function draft() {
+  if (editingIndex !== null || pendingPhoto || $("memory-photo").files[0] ||
+      ["memory-title", "memory-when", "memory-story"].some(id => $(id).value.trim())) {
+    throw Error("Add or cancel the unfinished memory before previewing or sealing your gift. You can save a private draft at any time.");
+  }
   return validateCapsule({ format: CAPSULE_FORMAT,
     created_at: new Date().toISOString(), recipient: $("recipient").value,
     from: $("from").value, letter: $("letter").value, memories });
@@ -39,6 +44,8 @@ function clearMemoryForm() {
     $(id).value = "";
   }
   editingIndex = null;
+  pendingPhoto = null;
+  $("pending-photo-hint").textContent = "";
   $("save-memory").textContent = "Add memory";
   $("cancel-edit").hidden = true;
 }
@@ -63,6 +70,8 @@ function renderMemoryList() {
     edit.setAttribute("aria-label", `Edit ${memory.title}`);
     edit.addEventListener("click", () => {
       editingIndex = index;
+      pendingPhoto = null;
+      $("pending-photo-hint").textContent = "";
       $("memory-title").value = memory.title;
       $("memory-when").value = memory.when;
       $("memory-story").value = memory.story;
@@ -92,7 +101,7 @@ async function saveMemory() {
   button.disabled = true;
   try {
     const photoFile = $("memory-photo").files[0];
-    let photo = editingIndex === null ? null : memories[editingIndex].photo;
+    let photo = pendingPhoto || (editingIndex === null ? null : memories[editingIndex].photo);
     if (photoFile) {
       if (photoFile.size > MAX_PHOTO_BYTES) throw Error("Choose a photo under 600 KB.");
       photo = photoFromBytes(await photoFile.arrayBuffer(), photoFile.type);
@@ -160,6 +169,85 @@ function showGift(capsule, label) {
     "auto" : "smooth", block: "start" });
 }
 
+function downloadJson(envelope, filename) {
+  const blob = new Blob([JSON.stringify(envelope, null, 2) + "\n"],
+    { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = element("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+async function checkpoint() {
+  const selected = $("memory-photo").files[0];
+  if (selected) {
+    if (selected.size > MAX_PHOTO_BYTES) throw Error("Choose a photo under 600 KB.");
+    pendingPhoto = photoFromBytes(await selected.arrayBuffer(), selected.type);
+  }
+  return validateDraft({ format: DRAFT_FORMAT, saved_at: new Date().toISOString(),
+    recipient: $("recipient").value, from: $("from").value, letter: $("letter").value,
+    memories, editing_index: editingIndex,
+    pending: { title: $("memory-title").value, when: $("memory-when").value,
+      story: $("memory-story").value, photo: pendingPhoto } });
+}
+
+async function saveCheckpoint() {
+  const button = $("save-draft");
+  button.disabled = true;
+  try {
+    const passphrase = $("draft-passphrase").value;
+    if (passphrase !== $("draft-confirm").value) throw Error("Draft passphrases do not match.");
+    const envelope = await sealDraft(await checkpoint(), passphrase);
+    downloadJson(envelope, `remembrance-private-draft-${new Date().toISOString().slice(0, 10)}.json`);
+    $("draft-passphrase").value = "";
+    $("draft-confirm").value = "";
+    status("draft-status", "Private draft downloaded, including the memory you are editing. Keep the file and its passphrase; save another checkpoint after further changes.");
+  } catch (error) { status("draft-status", error.message, true); }
+  finally { button.disabled = false; }
+}
+
+function hasUnsavedWork() {
+  return memories.length > 0 || pendingPhoto !== null || $("memory-photo").files.length > 0 ||
+    ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story"]
+      .some(id => $(id).value.trim());
+}
+
+async function resumeCheckpoint() {
+  const button = $("resume-draft");
+  button.disabled = true;
+  try {
+    const file = $("draft-file").files[0];
+    if (!file || file.size > MAX_FILE_BYTES) throw Error("Choose a private draft JSON file under 10 MB.");
+    const restored = await openDraft(await file.text(), $("restore-passphrase").value);
+    if (hasUnsavedWork() && !confirm("Replace the unfinished work currently on this page with this saved draft?")) {
+      status("draft-status", "Current work kept. The saved draft was not loaded.");
+      return;
+    }
+    $("recipient").value = restored.recipient;
+    $("from").value = restored.from;
+    $("letter").value = restored.letter;
+    memories = restored.memories;
+    editingIndex = restored.editing_index;
+    pendingPhoto = restored.pending.photo;
+    $("memory-title").value = restored.pending.title;
+    $("memory-when").value = restored.pending.when;
+    $("memory-story").value = restored.pending.story;
+    $("memory-photo").value = "";
+    $("pending-photo-hint").textContent = pendingPhoto ?
+      "A photo from your saved draft is attached to the unfinished memory. Choose a new file to replace it." : "";
+    $("save-memory").textContent = editingIndex === null ? "Add memory" : "Save changes";
+    $("cancel-edit").hidden = editingIndex === null;
+    renderMemoryList();
+    status("draft-status", "Private draft restored locally. Continue editing, then save a new draft or seal the finished gift.");
+    $("recipient").focus();
+  } catch (error) { status("draft-status", error.message, true); }
+  finally { button.disabled = false; $("restore-passphrase").value = ""; }
+}
+
 async function downloadGift() {
   const button = $("download");
   button.disabled = true;
@@ -168,16 +256,7 @@ async function downloadGift() {
     const passphrase = $("passphrase").value;
     if (passphrase !== $("confirm-passphrase").value) throw Error("Passphrases do not match.");
     const envelope = await sealCapsule(capsule, passphrase);
-    const blob = new Blob([JSON.stringify(envelope, null, 2) + "\n"],
-      { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = element("a");
-    anchor.href = url;
-    anchor.download = `remembrance-capsule-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    downloadJson(envelope, `remembrance-capsule-${new Date().toISOString().slice(0, 10)}.json`);
     $("passphrase").value = "";
     $("confirm-passphrase").value = "";
     status("create-status", "Sealed file downloaded. Save a second copy somewhere you control, and share the passphrase separately. It cannot be recovered here.");
@@ -229,6 +308,8 @@ function ask() {
 $("create-tab").addEventListener("click", () => switchTab("create"));
 $("open-tab").addEventListener("click", () => switchTab("open"));
 $("save-memory").addEventListener("click", saveMemory);
+$("save-draft").addEventListener("click", saveCheckpoint);
+$("resume-draft").addEventListener("click", resumeCheckpoint);
 $("cancel-edit").addEventListener("click", () => { clearMemoryForm(); renderMemoryList(); });
 $("preview").addEventListener("click", () => {
   try { const capsule = draft(); switchTab("open");
@@ -239,6 +320,7 @@ $("download").addEventListener("click", downloadGift);
 $("open-capsule").addEventListener("click", openGift);
 $("edit-opened").addEventListener("click", () => {
   if (!openedCapsule) return;
+  if (hasUnsavedWork() && !confirm("Replace the unfinished work currently on this page with an editable copy of this gift?")) return;
   $("recipient").value = openedCapsule.recipient;
   $("from").value = openedCapsule.from;
   $("letter").value = openedCapsule.letter;
