@@ -9,6 +9,7 @@ let editingIndex = null;
 let openedCapsule = null;
 let pendingPhoto = null;
 let pendingAudio = null;
+let preparedGift = null;
 let recorder = null;
 let recordingStream = null;
 let recordingTimer = null;
@@ -37,11 +38,26 @@ function element(tag, className, content) {
   return node;
 }
 
+function hasUnfinishedMemory() {
+  return editingIndex !== null || pendingPhoto || pendingAudio ||
+    $("memory-photo").files[0] || $("memory-audio").files[0] ||
+    ["memory-title", "memory-when", "memory-story"].some(id => $(id).value.trim());
+}
+
+function giftSnapshot() {
+  return JSON.stringify([$("recipient").value, $("from").value, $("letter").value, memories]);
+}
+
+function invalidatePreparedGift() {
+  if (!preparedGift) return;
+  preparedGift = null;
+  $("share-ready").hidden = true;
+  status("create-status", "Gift changed. Seal it again before sharing or downloading a new copy.");
+}
+
 function draft() {
   if (recordingRequested || recorder) throw Error("Stop the voice recording before previewing or sealing your gift.");
-  if (editingIndex !== null || pendingPhoto || pendingAudio ||
-      $("memory-photo").files[0] || $("memory-audio").files[0] ||
-      ["memory-title", "memory-when", "memory-story"].some(id => $(id).value.trim())) {
+  if (hasUnfinishedMemory()) {
     throw Error("Add or cancel the unfinished memory before previewing or sealing your gift. You can save a private draft at any time.");
   }
   return validateCapsule({ format: CAPSULE_FORMAT,
@@ -96,6 +112,7 @@ function stopRecording() {
 
 async function startRecording() {
   if (recordingRequested || recorder) return;
+  invalidatePreparedGift();
   if (!navigator.mediaDevices?.getUserMedia || !globalThis.MediaRecorder) {
     status("record-status", "Direct recording is unavailable here. Choose a voice file instead.", true);
     return;
@@ -149,7 +166,7 @@ async function startRecording() {
         $("memory-audio").value = "";
         showAudioPreview(audio);
         $("pending-audio-hint").textContent = "Recorded voice attached to this memory. Play it back, then add the memory or save a private draft.";
-        status("record-status", "Voice note ready to play. Save the memory and download a gift or private draft to keep it.");
+        status("record-status", "Voice note ready to play. Save the memory, then seal a gift or private draft to keep it.");
       } catch (error) {
         status("record-status", error.message, true);
       } finally {
@@ -211,6 +228,7 @@ function renderMemoryList() {
     edit.type = "button";
     edit.setAttribute("aria-label", `Edit ${memory.title}`);
     edit.addEventListener("click", () => {
+      invalidatePreparedGift();
       abortRecording();
       editingIndex = index;
       pendingPhoto = null;
@@ -233,6 +251,7 @@ function renderMemoryList() {
     remove.setAttribute("aria-label", `Remove ${memory.title}`);
     remove.addEventListener("click", () => {
       memories.splice(index, 1);
+      invalidatePreparedGift();
       clearMemoryForm();
       renderMemoryList();
       status("create-status", "Memory removed from this page session.");
@@ -248,6 +267,7 @@ function renderMemoryList() {
           return;
         }
         memories[index] = { ...memories[index], audio: null };
+        invalidatePreparedGift();
         renderMemoryList();
         status("create-status", "Voice note removed from this page session. Save a new private draft or gift to keep the change.");
       });
@@ -286,6 +306,7 @@ async function saveMemory() {
       if (memories.length >= MAX_MEMORIES) throw Error("The capsule holds eight memories.");
       memories.push(check.memories[0]);
     } else memories[editingIndex] = check.memories[0];
+    invalidatePreparedGift();
     clearMemoryForm();
     renderMemoryList();
     status("create-status", "Memory saved in this page session. Download the capsule to keep it.");
@@ -352,9 +373,7 @@ function showGift(capsule, label) {
     "auto" : "smooth", block: "start" });
 }
 
-function downloadJson(envelope, filename) {
-  const blob = new Blob([JSON.stringify(envelope, null, 2) + "\n"],
-    { type: "application/json" });
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const anchor = element("a");
   anchor.href = url;
@@ -362,7 +381,12 @@ function downloadJson(envelope, filename) {
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+function downloadJson(envelope, filename) {
+  downloadBlob(new Blob([JSON.stringify(envelope, null, 2) + "\n"],
+    { type: "application/json" }), filename);
 }
 
 async function checkpoint() {
@@ -419,6 +443,7 @@ async function resumeCheckpoint() {
       status("draft-status", "Current work kept. The saved draft was not loaded.");
       return;
     }
+    invalidatePreparedGift();
     abortRecording();
     $("recipient").value = restored.recipient;
     $("from").value = restored.from;
@@ -448,20 +473,92 @@ async function resumeCheckpoint() {
   finally { button.disabled = false; $("restore-passphrase").value = ""; }
 }
 
-async function downloadGift() {
-  const button = $("download");
-  button.disabled = true;
+function preparedGiftIsCurrent() {
+  if (preparedGift && !recordingRequested && !recorder && !hasUnfinishedMemory() &&
+      preparedGift.snapshot === giftSnapshot()) return true;
+  invalidatePreparedGift();
+  status("create-status", "The gift has changed. Seal it again before using the prepared file.", true);
+  return false;
+}
+
+function showPreparedGift() {
+  $("share-ready").hidden = false;
+  $("share-filename").textContent = preparedGift.filename;
+  let canShare = false;
+  try { canShare = !!preparedGift.file && !!navigator.share &&
+    !!navigator.canShare?.({ files: [preparedGift.file] }); }
+  catch { /* The download option remains available. */ }
+  $("share-file").hidden = !canShare;
+  $("share-fallback").hidden = canShare;
+}
+
+async function sealGift(download) {
+  $("download").disabled = true;
+  $("prepare-share").disabled = true;
   try {
     const capsule = draft();
+    const snapshot = giftSnapshot();
     const passphrase = $("passphrase").value;
+    if (!passphrase && !$("confirm-passphrase").value && preparedGift && preparedGiftIsCurrent()) {
+      if (download) downloadBlob(preparedGift.blob, preparedGift.filename);
+      status("create-status", download ? "Prepared encrypted file downloaded again." :
+        "Your encrypted file is already ready. Share or download it below.");
+      return;
+    }
     if (passphrase !== $("confirm-passphrase").value) throw Error("Passphrases do not match.");
+    preparedGift = null;
+    $("share-ready").hidden = true;
     const envelope = await sealCapsule(capsule, passphrase);
-    downloadJson(envelope, `remembrance-capsule-${new Date().toISOString().slice(0, 10)}.json`);
+    if (snapshot !== giftSnapshot() || hasUnfinishedMemory() || recordingRequested || recorder) {
+      throw Error("The gift changed while sealing. Seal it again to include the latest edits.");
+    }
+    const filename = `remembrance-capsule-${new Date().toISOString().slice(0, 10)}.json`;
+    const contents = JSON.stringify(envelope, null, 2) + "\n";
+    const file = typeof File === "function" ?
+      new File([contents], filename, { type: "application/json" }) : null;
+    const blob = file || new Blob([contents], { type: "application/json" });
+    if (blob.size > MAX_FILE_BYTES) throw Error("This gift exceeds the 27 MB file limit.");
+    preparedGift = { file, blob, filename, snapshot };
     $("passphrase").value = "";
     $("confirm-passphrase").value = "";
-    status("create-status", "Sealed file downloaded. Save a second copy somewhere you control, and share the passphrase separately. It cannot be recovered here.");
+    showPreparedGift();
+    if (download) downloadBlob(blob, filename);
+    status("create-status", download ?
+      "Sealed file downloaded. Keep a copy, or share the prepared file. Give its passphrase separately." :
+      $("share-file").hidden ?
+        "Sealed file ready. Download it and share from your device. Give its passphrase separately." :
+        "Sealed file ready. Tap Share sealed file, or download it. Give its passphrase separately.");
   } catch (error) { status("create-status", error.message, true); }
-  finally { button.disabled = false; }
+  finally { $("download").disabled = false; $("prepare-share").disabled = false; }
+}
+
+function sharePreparedGift() {
+  if (!preparedGiftIsCurrent()) return;
+  let sharing;
+  try {
+    if (!navigator.share || !navigator.canShare?.({ files: [preparedGift.file] })) {
+      throw Error("File sharing unavailable");
+    }
+    // No await before share(): browsers require this call within the tap's user activation.
+    sharing = navigator.share({ files: [preparedGift.file] });
+  } catch {
+    status("create-status", "This browser cannot share the file. Download the prepared file instead.", true);
+    return;
+  }
+  $("share-file").disabled = true;
+  status("create-status", "Choose where to send the encrypted file. The passphrase is not included.");
+  sharing.then(() => status("create-status",
+    "Share sheet closed. Confirm the file arrived, then give the passphrase separately.")).catch(error => {
+    status("create-status", error.name === "AbortError" ?
+      "Sharing canceled. The encrypted file is still ready." :
+      "Could not share the file. Download the prepared copy instead.", error.name !== "AbortError");
+  }).finally(() => { $("share-file").disabled = false; });
+}
+
+function downloadPreparedGift() {
+  if (!preparedGiftIsCurrent()) return;
+  downloadBlob(preparedGift.blob, preparedGift.filename);
+  status("create-status", "Prepared encrypted file downloaded. Give the passphrase separately.");
 }
 
 async function openGift() {
@@ -530,10 +627,19 @@ $("resume-draft").addEventListener("click", resumeCheckpoint);
 $("cancel-edit").addEventListener("click", () => { clearMemoryForm(); renderMemoryList(); });
 $("preview").addEventListener("click", () => {
   try { const capsule = draft(); switchTab("open");
-    showGift(capsule, "Preview only · Download a sealed file to keep and share it."); }
+    showGift(capsule, "Preview only · Seal a file to keep or share this gift."); }
   catch (error) { status("create-status", error.message, true); }
 });
-$("download").addEventListener("click", downloadGift);
+$("download").addEventListener("click", () => sealGift(true));
+$("prepare-share").addEventListener("click", () => sealGift(false));
+$("share-file").addEventListener("click", sharePreparedGift);
+$("download-prepared").addEventListener("click", downloadPreparedGift);
+for (const id of ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story"]) {
+  $(id).addEventListener("input", invalidatePreparedGift);
+}
+for (const id of ["memory-photo", "memory-audio"]) {
+  $(id).addEventListener("change", invalidatePreparedGift);
+}
 $("open-capsule").addEventListener("click", openGift);
 $("edit-opened").addEventListener("click", () => {
   if (!openedCapsule) return;
@@ -542,6 +648,7 @@ $("edit-opened").addEventListener("click", () => {
   $("from").value = openedCapsule.from;
   $("letter").value = openedCapsule.letter;
   memories = structuredClone(openedCapsule.memories);
+  invalidatePreparedGift();
   clearMemoryForm();
   renderMemoryList();
   $("passphrase").value = "";
