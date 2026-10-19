@@ -70,7 +70,13 @@ test("offline shell is pinned to the current HTML and both current modules", () 
   assert.match(worker, new RegExp(`"\\./app\\.mjs\\?v=${appHash}"`));
   assert.match(worker, new RegExp(`"\\./core\\.mjs\\?v=${coreHash}"`));
   assert.ok(worker.includes(`const DIGESTS = ["${htmlHash}", "${appHash}", "${coreHash}"];`));
-  assert.ok(worker.includes(`aru-capsule-reader-${hash(`${coreHash}\n${appHash}\n${htmlHash}`)}`));
+  const normalized = worker.replace(/aru-capsule-reader-[a-f0-9]{64}/,
+    `aru-capsule-reader-${"0".repeat(64)}`)
+    .replace(/app\.mjs\?v=[a-f0-9]{64}/, `app.mjs?v=${"0".repeat(64)}`)
+    .replace(/core\.mjs\?v=[a-f0-9]{64}/, `core.mjs?v=${"0".repeat(64)}`)
+    .replace(/const DIGESTS = \[[^\n]+;/,
+      `const DIGESTS = ["${"0".repeat(64)}", "${"0".repeat(64)}", "${"0".repeat(64)}"];`);
+  assert.ok(worker.includes(`aru-capsule-reader-${hash(`${coreHash}\n${appHash}\n${htmlHash}\n${hash(normalized)}`)}`));
 });
 
 test("an installed reader serves its verified shell offline and ignores all other requests", async () => {

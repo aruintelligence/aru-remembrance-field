@@ -29,9 +29,21 @@ if (versionedHtml !== html) writeFileSync(htmlPath, versionedHtml);
 
 // The service worker installs one consistent snapshot of the page and its modules.
 // Updating any one of these files changes its cache name and installs a new shell.
-const shellHash = hash(Buffer.from(`${coreHash}\n${appHash}\n${hash(Buffer.from(versionedHtml))}`));
 const htmlHash = hash(Buffer.from(versionedHtml));
 const worker = readFileSync(workerPath, "utf8");
+// Include worker logic in the cache identity, without hashing its own generated
+// cache name. A worker-only change must never rewrite the previous good cache.
+const zeros = "0".repeat(64);
+let workerTemplate = replaceOnce(worker, /const CACHE_NAME = "aru-capsule-reader-[a-f0-9]{64}";/,
+  `const CACHE_NAME = "aru-capsule-reader-${zeros}";`, "offline cache template");
+workerTemplate = replaceOnce(workerTemplate, /"\.\/app\.mjs\?v=[a-f0-9]{64}"/,
+  `"./app.mjs?v=${zeros}"`, "offline app template");
+workerTemplate = replaceOnce(workerTemplate, /"\.\/core\.mjs\?v=[a-f0-9]{64}"/,
+  `"./core.mjs?v=${zeros}"`, "offline core template");
+workerTemplate = replaceOnce(workerTemplate,
+  /const DIGESTS = \["[a-f0-9]{64}", "[a-f0-9]{64}", "[a-f0-9]{64}"\];/,
+  `const DIGESTS = ["${zeros}", "${zeros}", "${zeros}"];`, "offline digests template");
+const shellHash = hash(Buffer.from(`${coreHash}\n${appHash}\n${htmlHash}\n${hash(Buffer.from(workerTemplate))}`));
 let versionedWorker = replaceOnce(worker,
   /const CACHE_NAME = "aru-capsule-reader-[a-f0-9]{64}";/,
   `const CACHE_NAME = "aru-capsule-reader-${shellHash}";`, "offline cache");

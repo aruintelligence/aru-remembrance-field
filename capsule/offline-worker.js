@@ -1,6 +1,6 @@
 // An opt-in offline copy of the reader code. Never cache user content or requests
 // outside this exact, versioned app shell.
-const CACHE_NAME = "aru-capsule-reader-e742e27c2ff77ecae0ceb650fe99a873032ce1f0973e957b888b20cadee10e23";
+const CACHE_NAME = "aru-capsule-reader-dc6c6fd23339d9470faccc15e5757b074373fc4821001bc132ccd903e0294f0a";
 const SHELL = [
   "./",
   "./app.mjs?v=517782845f186ae0e6604fa7276a3f9bf2eb83980d7995b8e8519a2761747eef",
