@@ -580,6 +580,33 @@ function showSample() {
   showGift(FICTIONAL_SAMPLE, "Fictional written sample · Add your own voice note when creating a gift.");
 }
 
+async function saveOfflineReader() {
+  const button = $("save-offline-reader");
+  if (!navigator.serviceWorker) {
+    status("offline-status", "Offline saving is unavailable in this browser. You can still use the reader online.", true);
+    return;
+  }
+  button.disabled = true;
+  status("offline-status", "Saving the reader code on this device…");
+  let timeout;
+  try {
+    const registration = await navigator.serviceWorker.register("./offline-worker.js",
+      { scope: "./", updateViaCache: "none" });
+    // ready stays pending if installation fails, so bound the wait and report a failure.
+    const active = await Promise.race([
+      navigator.serviceWorker.ready.then(ready => ready.active),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(Error("timeout")), 20_000); })
+    ]);
+    if (!active) throw Error("no active worker");
+    status("offline-status", "Reader saved on this device. Bookmark this page and keep the sealed file and passphrase separately. Your browser may clear offline data.");
+  } catch {
+    status("offline-status", "Could not save the reader here. Check your connection and browser settings, then try again.", true);
+  } finally {
+    clearTimeout(timeout);
+    button.disabled = false;
+  }
+}
+
 function ask() {
   const answer = $("answer");
   answer.replaceChildren();
@@ -658,6 +685,7 @@ $("edit-opened").addEventListener("click", () => {
   $("recipient").focus();
 });
 $("sample").addEventListener("click", showSample);
+$("save-offline-reader").addEventListener("click", saveOfflineReader);
 $("hero-sample").addEventListener("click", () => { showSample(); $("make").scrollIntoView(); });
 $("ask").addEventListener("click", ask);
 $("memory-question").addEventListener("keydown", event => {
