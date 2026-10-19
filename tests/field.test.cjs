@@ -36,6 +36,7 @@ function boot(values = {}, options = {}) {
       this.children = [];
       this.value = '';
       this.style = {};
+      this.dataset = {};
       this.textContent = '';
       this.innerHTML = '';
       this.className = '';
@@ -45,8 +46,8 @@ function boot(values = {}, options = {}) {
     remove() {
       if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this);
     }
-    scrollIntoView() {}
-    focus() {}
+    scrollIntoView() { this.scrolled = true; }
+    focus() { this.focused = true; }
     setAttribute(name, value) { (this.attributes ||= {})[name] = value; }
     getAttribute(name) { return this.attributes?.[name] ?? null; }
     getContext() { return canvasContext; }
@@ -3333,6 +3334,81 @@ test('judgment exercise still debriefs without secure hashing but disables expor
     /5 of 5.*Download unavailable/);
   assert.equal(app.elements.get('reviewer-judgment-download').disabled, true);
   assert.equal(app.saved.size, 0);
+});
+
+test('Review Desk guides the existing audit and never promotes a matching capture with FAIL to an all-pass result', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const app = boot();
+  vm.runInContext('openReviewDesk()', app.context);
+  assert.equal(app.elements.get('receipt-verifier').open, true);
+  assert.equal(app.elements.get('review-desk-title').focused, true);
+  vm.runInContext('jumpToReviewInput("reference-file")', app.context);
+  assert.equal(app.elements.get('reference-file').focused, true);
+  assert.equal(app.elements.get('review-desk-audit').dataset.state, 'pending');
+  const saved = JSON.stringify([...app.saved]);
+  await auditSavedReceipts(app, fixture('example-evidence-reference-baseline.json'),
+    [auditFile(fixture('example-evidence-excerpt.json')),
+      auditFile(fixture('example-judgment-fail-receipt.json'))],
+    fixture('example-evidence-ledger-checkpoint.json'));
+  assert.equal(app.elements.get('review-desk-inputs').dataset.state, 'ready');
+  assert.equal(app.elements.get('review-desk-audit').dataset.state, 'caution');
+  assert.match(app.elements.get('review-desk-audit-status').textContent,
+    /1 MATCH, 0 DIFFER, 1 FAIL.*Supplied checkpoint agrees.*Inspect the affected rows/);
+  assert.equal(app.elements.get('review-desk-compare').disabled, true);
+  assert.equal(app.elements.get('review-desk-download').disabled, false);
+  vm.runInContext('downloadEvidenceBatchCapture()', app.context);
+  const capture = JSON.parse(await app.exports[0].text());
+  const input = app.context.document.getElementById('audit-capture-file');
+  input.files = [auditFile(JSON.stringify(capture))];
+  vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+  assert.equal(app.elements.get('review-desk-compare').disabled, false);
+  await vm.runInContext('verifySavedBatchCapture()', app.context);
+  assert.equal(app.elements.get('review-desk-capture').dataset.state, 'ready');
+  assert.match(app.elements.get('review-desk-capture-status').textContent,
+    /CAPTURE MATCH.*Check the receipt outcomes separately/);
+  assert.match(app.elements.get('review-desk-audit-status').textContent, /1 FAIL/);
+
+  const {browser_script_sha256, normalization_sha256, ...legacy} = capture;
+  input.files = [auditFile(JSON.stringify({...legacy, version: 1}))];
+  vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+  await vm.runInContext('verifySavedBatchCapture()', app.context);
+  assert.match(app.elements.get('review-desk-capture-status').textContent,
+    /CAPTURE MATCH.*Legacy capture has no script fingerprint/);
+
+  input.files = [auditFile(JSON.stringify({...capture, browser_script_sha256: '0'.repeat(64)}))];
+  vm.runInContext('invalidateEvidenceBatchCaptureReplay()', app.context);
+  await vm.runInContext('verifySavedBatchCapture()', app.context);
+  assert.equal(app.elements.get('review-desk-capture').dataset.state, 'unconfirmed');
+  assert.match(app.elements.get('review-desk-capture-status').textContent, /UNCONFIRMED/);
+  app.context.document.getElementById('audit-receipts').files =
+    [auditFile(fixture('example-evidence-excerpt.json'))];
+  vm.runInContext('invalidateEvidenceBatchAudit()', app.context);
+  assert.equal(app.elements.get('review-desk-audit').dataset.state, 'pending');
+  assert.equal(app.elements.get('review-desk-capture').dataset.state, 'pending');
+  assert.equal(app.elements.get('review-desk-compare').disabled, true);
+  assert.equal(app.elements.get('review-desk-download').disabled, true);
+  assert.equal(JSON.stringify([...app.saved]), saved);
+});
+
+test('Review Desk withholds a result for an invalid checkpoint and labels capture unavailability', async () => {
+  const fixture = name => fs.readFileSync(path.join(__dirname, '..', 'research', name), 'utf8');
+  const reference = fixture('example-evidence-reference-baseline.json');
+  const excerpt = fixture('example-evidence-excerpt.json');
+  const app = boot();
+  await auditSavedReceipts(app, reference, [auditFile(excerpt)],
+    JSON.stringify({...JSON.parse(fixture('example-evidence-ledger-checkpoint.json')),
+      sha256: '0'.repeat(64)}));
+  assert.equal(app.elements.get('review-desk-audit').dataset.state, 'unconfirmed');
+  assert.match(app.elements.get('review-desk-audit-status').textContent,
+    /reference ledger differs from the selected checkpoint.*No receipts were audited/);
+  assert.equal(app.elements.get('review-desk-compare').disabled, true);
+  assert.equal(app.elements.get('review-desk-download').disabled, true);
+  const noHash = boot({}, {crypto: {}});
+  await auditSavedReceipts(noHash, reference, [auditFile(excerpt)]);
+  assert.equal(noHash.elements.get('review-desk-audit').dataset.state, 'ready');
+  assert.match(noHash.elements.get('review-desk-capture-status').textContent,
+    /secure browser hashing is required/);
+  assert.equal(noHash.elements.get('review-desk-download').disabled, true);
 });
 
 test('local cross-check refuses a tab whose saved reference changed after file verification', async () => {

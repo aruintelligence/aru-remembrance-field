@@ -150,6 +150,7 @@
     .motion-toggle:focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
     .demo-launch { display: inline-block; margin-top: 0.65rem; min-height: 44px; padding: 0.5rem 0.9rem; border-radius: 9999px; border: 1px solid #fbbf24; background: #3b2509; color: #fef3c7; font: 700 0.82rem 'Inter', sans-serif; cursor: pointer; }
     .demo-launch:focus-visible { outline: 2px solid #67e8f9; outline-offset: 3px; }
+    .review-launch { border-color: #67e8f9; color: #cffafe; background: #083344; }
 
     .response-area {
       flex: 1;
@@ -351,6 +352,26 @@
     .review-path p { margin: 0.45rem 0; }
     .review-path a { display: inline-block; min-height: 44px; padding: 0.7rem 0; color: #a5f3fc; font-weight: 700; text-underline-offset: 3px; }
     .review-path a:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+    .review-desk { margin: 0.7rem 0 1.1rem; padding: clamp(0.8rem, 2vw, 1.2rem); border: 1px solid #67e8f9; border-radius: 14px; background: linear-gradient(135deg, #0b1530, #102b38); }
+    .review-desk h2 { color: #cffafe; font-size: 1.15rem; line-height: 1.4; }
+    .review-desk .review-gates { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 0.65rem; margin: 0.85rem 0; }
+    .review-gate { min-width: 0; padding: 0.8rem; border: 1px solid #64748b; border-radius: 10px; background: #071427; }
+    .review-gate[data-state="ready"] { border-color: #4ade80; }
+    .review-gate[data-state="caution"] { border-color: #fbbf24; }
+    .review-gate[data-state="unconfirmed"] { border-color: #fb7185; }
+    .review-gate h3 { color: #f8fafc; font-size: 0.94rem; margin: 0; }
+    .review-gate p { min-height: 3.4em; line-height: 1.5; }
+    .review-gate .ledger-actions button { flex: 1 1 9rem; }
+    .review-desk .review-limit { border-top: 1px solid #64748b; padding-top: 0.8rem; color: #fef3c7; }
+    .review-desk a { color: #a5f3fc; text-underline-offset: 3px; }
+    .review-desk a:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+    #receipt-verifier[open] { max-height: min(65vh, 760px); }
+    @media (max-width: 580px) {
+      .field-label { padding: 0.65rem 0.75rem 0.3rem; }
+      .field-label .demo-launch { margin-top: 0.35rem; padding: 0.4rem 0.7rem; }
+      #receipt-verifier[open] { max-height: 52vh; }
+      .review-desk .review-gates { grid-template-columns: 1fr; }
+    }
     .judgment-card { padding: 0.85rem; border: 1px solid #67e8f9; border-radius: 10px; background: #0b1530; }
     .judgment-card fieldset { min-width: 0; margin: 0.7rem 0; padding: 0; border: 0; }
     .judgment-card legend { color: #f8fafc; font-weight: 700; line-height: 1.5; }
@@ -409,6 +430,7 @@
     <button class="motion-toggle" id="motion-toggle" type="button" role="switch" aria-checked="true" onclick="toggleVisualMotion()">Visual motion: <span id="motion-state" aria-hidden="true">on</span></button>
     <button class="motion-toggle" id="session-toggle" type="button" role="switch" aria-checked="false" onclick="toggleSessionOnly()">Session-only: <span id="session-state" aria-hidden="true">off</span></button>
     <button class="demo-launch" type="button" onclick="runEvidenceTrustLab()">Run the evidence challenge</button>
+    <button class="demo-launch review-launch" type="button" aria-controls="receipt-verifier" onclick="openReviewDesk()">Review evidence files</button>
     <p id="session-mode" role="status" aria-live="polite"></p>
     <p id="ledger-sync-alert" role="alert" hidden></p>
   </div>
@@ -510,6 +532,39 @@
 
   <details class="ledger" id="receipt-verifier">
     <summary>Verify a shared answer receipt</summary>
+    <section class="review-desk" id="review-desk" aria-labelledby="review-desk-title">
+      <h2 id="review-desk-title" tabindex="-1">Review Desk · understand an evidence audit</h2>
+      <p>Select one reference and 1–20 original receipts in their intended order. A separately kept checkpoint is optional. These files stay on this device.</p>
+      <div class="review-gates">
+        <div class="review-gate" id="review-desk-inputs" data-state="pending">
+          <h3>1 · Supplied files</h3>
+          <p id="review-desk-input-status" role="status" aria-live="polite">Choose a reference and ordered receipts.</p>
+          <div class="ledger-actions">
+            <button type="button" onclick="jumpToReviewInput('reference-file')">Choose reference</button>
+            <button type="button" onclick="jumpToReviewInput('audit-receipts')">Choose receipts</button>
+          </div>
+        </div>
+        <div class="review-gate" id="review-desk-audit" data-state="pending">
+          <h3>2 · Receipt outcomes</h3>
+          <p id="review-desk-audit-status" role="status" aria-live="polite">No audit completed on these files.</p>
+          <div class="ledger-actions">
+            <button type="button" onclick="runEvidenceBatchAudit()">Audit selected files</button>
+            <button type="button" onclick="jumpToReviewInput('audit-result')">See receipt rows</button>
+          </div>
+        </div>
+        <div class="review-gate" id="review-desk-capture" data-state="pending">
+          <h3>3 · Saved capture replay</h3>
+          <p id="review-desk-capture-status" role="status" aria-live="polite">Audit first, then compare a saved capture if you have one.</p>
+          <div class="ledger-actions">
+            <button type="button" id="review-desk-download" onclick="downloadEvidenceBatchCapture()" disabled>Download new capture</button>
+            <button type="button" onclick="jumpToReviewInput('audit-capture-file')">Choose capture</button>
+            <button type="button" id="review-desk-compare" onclick="verifySavedBatchCapture()" disabled>Compare capture</button>
+          </div>
+        </div>
+      </div>
+      <p class="review-limit"><strong>Outside this review:</strong> who authored or independently held the files, whether relevant evidence is missing, and whether the underlying claims are true. A capture can replay as MATCH while a receipt is DIFFER or FAIL.</p>
+      <p><a href="https://github.com/aruintelligence/aru-remembrance-field/blob/main/research/review-desk-protocol.md">Reproduce the review and read its limits</a></p>
+    </section>
     <section class="evidence-question" id="evidence-trust-lab">
       <h2>Evidence trust lab · five synthetic cases</h2>
       <p>See where a self-consistent answer can still mislead. These fixed examples run through the same receipt, reference, and checkpoint checks as uploaded files. They do not use or change your personal ledger.</p>
@@ -556,7 +611,7 @@
         <button type="button" onclick="runEvidenceBatchAudit()">Audit selected receipts</button>
         <button type="button" id="audit-capture-download" onclick="downloadEvidenceBatchCapture()" disabled>Download audit capture</button>
       </div>
-      <div id="audit-result" role="status" aria-live="polite">Choose a reference and answer receipts to run a local audit.</div>
+      <div id="audit-result" role="status" aria-live="polite" tabindex="-1">Choose a reference and answer receipts to run a local audit.</div>
       <p id="audit-capture-status" role="status" aria-live="polite">Run the audit before downloading a capture.</p>
       <label for="audit-capture-file">Saved audit capture JSON (up to 1 MiB)</label>
       <input id="audit-capture-file" type="file" accept=".json,application/json" onchange="invalidateEvidenceBatchCaptureReplay()">
@@ -2479,6 +2534,72 @@ async function compareVerifiedEvidenceToReference() {
 let evidenceBatchAuditRequest = 0;
 let lastEvidenceBatchCapture = null;
 let evidenceBatchCaptureReplayRequest = 0;
+let reviewDeskAudit = null;
+let reviewDeskReplay = null;
+let reviewDeskIssue = null;
+
+function openReviewDesk() {
+  document.getElementById("receipt-verifier").open = true;
+  renderReviewDesk();
+  document.getElementById("review-desk").scrollIntoView({block: "nearest"});
+  document.getElementById("review-desk-title").focus();
+}
+
+function jumpToReviewInput(id) {
+  const input = document.getElementById(id);
+  input.scrollIntoView({block: "center"});
+  input.focus();
+}
+
+function renderReviewDesk() {
+  const reference = document.getElementById("reference-file").files?.[0];
+  const checkpoint = document.getElementById("checkpoint-file").files?.[0];
+  const count = document.getElementById("audit-receipts").files?.length || 0;
+  const capture = document.getElementById("audit-capture-file").files?.[0];
+  const inputs = document.getElementById("review-desk-inputs");
+  inputs.dataset.state = reference && count >= 1 && count <= 20 ? "ready" : "pending";
+  document.getElementById("review-desk-input-status").textContent =
+    `${reference ? "Reference selected" : "Reference needed"}; ${count} ordered receipt${count === 1 ? "" : "s"} selected${count > 20 ? " (20 maximum)" : ""}. ${checkpoint ? "Checkpoint selected; its provenance is not checked." : "No checkpoint selected."}`;
+
+  const audit = document.getElementById("review-desk-audit");
+  const auditStatus = document.getElementById("review-desk-audit-status");
+  if (reviewDeskAudit) {
+    const {totals, repeats, checkpointSelected} = reviewDeskAudit;
+    audit.dataset.state = totals.DIFFER || totals.FAIL || repeats ? "caution" : "ready";
+    auditStatus.textContent = `${totals.MATCH} MATCH, ${totals.DIFFER} DIFFER, ${totals.FAIL} FAIL. ` +
+      `${repeats} identical-byte repeat${repeats === 1 ? "" : "s"}. ` +
+      (checkpointSelected ? "Supplied checkpoint agrees." : "No checkpoint checked.") +
+      (totals.DIFFER || totals.FAIL ? " Inspect the affected rows below." :
+        " All selected receipts match this supplied reference.");
+  } else {
+    audit.dataset.state = reviewDeskIssue ? "unconfirmed" : "pending";
+    auditStatus.textContent = reviewDeskIssue || "No audit completed on the current selection.";
+  }
+
+  const replay = document.getElementById("review-desk-capture");
+  const replayStatus = document.getElementById("review-desk-capture-status");
+  const readyToCompare = !!lastEvidenceBatchCapture && !!capture;
+  document.getElementById("review-desk-download").disabled = !lastEvidenceBatchCapture;
+  document.getElementById("review-desk-compare").disabled = !readyToCompare;
+  if (reviewDeskReplay?.kind === "match") {
+    replay.dataset.state = "ready";
+    replayStatus.textContent = `CAPTURE MATCH: Saved version ${reviewDeskReplay.version} capture reproduced from these files. ` +
+      (reviewDeskReplay.version === 1 ? "Legacy capture has no script fingerprint. " :
+        reviewDeskReplay.version === 2 ? "Original browser runtime was not recorded. " :
+          "Script and selected-name profile agree. ") +
+      "Check the receipt outcomes separately.";
+  } else if (reviewDeskReplay?.kind === "unconfirmed") {
+    replay.dataset.state = "unconfirmed";
+    replayStatus.textContent = "UNCONFIRMED: The saved capture did not reproduce. See the detailed findings below.";
+  } else {
+    replay.dataset.state = "pending";
+    replayStatus.textContent = readyToCompare ? "Saved capture selected. Compare it with this audit." :
+      lastEvidenceBatchCapture ? "Audit complete. Download its capture or choose a saved one." :
+        reviewDeskAudit ? document.getElementById("audit-capture-status").textContent :
+          "Audit the supplied files before checking a saved capture.";
+  }
+}
+
 let referenceTransitionRequest = 0;
 let lastReferenceTransitionCapture = null;
 let referenceTransitionReplayRequest = 0;
@@ -2528,11 +2649,13 @@ function invalidateSealedReplay(message = "Private capture or key selection chan
 }
 function invalidateEvidenceBatchCaptureReplay(message = "Saved capture selection changed. Compare it again.") {
   ++evidenceBatchCaptureReplayRequest;
+  reviewDeskReplay = null;
   document.getElementById("audit-capture-verify").disabled =
     !lastEvidenceBatchCapture || !document.getElementById("audit-capture-file").files?.[0];
   const output = document.getElementById("audit-capture-verification");
   output.replaceChildren();
   output.textContent = message;
+  renderReviewDesk();
 }
 function invalidateEvidenceBatchCapture(message) {
   lastEvidenceBatchCapture = null;
@@ -2543,6 +2666,8 @@ function invalidateEvidenceBatchCapture(message) {
 
 function invalidateEvidenceBatchAudit(message = "Receipt selection changed. Audit the selected files again.") {
   ++evidenceBatchAuditRequest;
+  reviewDeskAudit = null;
+  reviewDeskIssue = null;
   document.getElementById("audit-result").textContent = message;
   invalidateEvidenceBatchCapture("Selection changed. Run the audit again before downloading a capture.");
   invalidateReferenceTransition();
@@ -3357,6 +3482,7 @@ async function verifySavedBatchCapture() {
         saved.format !== "aru-evidence-browser-batch-capture" ||
         ![1, 2, 3].includes(saved.version)) {
       output.textContent = "FAIL: Unsupported saved capture format or version.";
+      reviewDeskReplay = {kind: "unconfirmed"}; renderReviewDesk();
       return;
     }
     const {browser_script_sha256, normalization_sha256, ...legacy} = audit.payload;
@@ -3366,6 +3492,7 @@ async function verifySavedBatchCapture() {
     const findings = evidenceCaptureFindings(saved, expected);
     if (findings.length) {
       showEvidenceCaptureFindings(output, findings);
+      reviewDeskReplay = {kind: "unconfirmed"}; renderReviewDesk();
       return;
     }
     const totals = audit.payload.totals;
@@ -3376,13 +3503,19 @@ async function verifySavedBatchCapture() {
       (totals.differ || totals.fail ? "The audit contains DIFFER or FAIL results; review those rows. " :
         "All audited receipts matched this selected reference. ") +
       "This consistency check does not prove origin, completeness, or factual truth.";
+    reviewDeskReplay = {kind: "match", version: saved.version}; renderReviewDesk();
   } catch (error) {
-    if (stillCurrent()) output.textContent = `FAIL: ${error.message || "Could not read the saved capture."}`;
+    if (stillCurrent()) {
+      output.textContent = `FAIL: ${error.message || "Could not read the saved capture."}`;
+      reviewDeskReplay = {kind: "unconfirmed"}; renderReviewDesk();
+    }
   }
 }
 
 async function runEvidenceBatchAudit() {
   const request = ++evidenceBatchAuditRequest;
+  reviewDeskAudit = null;
+  reviewDeskIssue = null;
   invalidateEvidenceBatchCapture("Checking files before a capture can be downloaded…");
   const output = document.getElementById("audit-result");
   const referenceInput = document.getElementById("reference-file");
@@ -3394,16 +3527,19 @@ async function runEvidenceBatchAudit() {
   if (!referenceFile) {
     output.textContent = "Choose a reference ledger JSON file above.";
     document.getElementById("audit-capture-status").textContent = "Choose a reference before creating a capture.";
+    reviewDeskIssue = output.textContent; renderReviewDesk();
     return;
   }
   if (files.length < 1 || files.length > 20) {
     output.textContent = "Choose 1–20 question, excerpt, or brief receipt files.";
     document.getElementById("audit-capture-status").textContent = "Choose 1–20 receipts before creating a capture.";
+    reviewDeskIssue = output.textContent; renderReviewDesk();
     return;
   }
   if (files.reduce((sum, file) => sum + file.size, 0) > 4 * 1024 * 1024) {
     output.textContent = "FAIL: The selected receipts exceed the 4 MiB combined limit.";
     document.getElementById("audit-capture-status").textContent = "Capture unavailable: selected receipts exceed the combined limit.";
+    reviewDeskIssue = output.textContent; renderReviewDesk();
     return;
   }
   const stillCurrent = () => request === evidenceBatchAuditRequest &&
@@ -3427,6 +3563,7 @@ async function runEvidenceBatchAudit() {
         output.textContent = "DIFFER: The reference ledger differs from the selected checkpoint. No receipts were audited.";
         document.getElementById("audit-capture-status").textContent =
           "Capture unavailable: the checkpoint differs from the reference.";
+        reviewDeskIssue = output.textContent; renderReviewDesk();
         return;
       }
     }
@@ -3498,19 +3635,24 @@ async function runEvidenceBatchAudit() {
     output.replaceChildren();
     output.appendChild(summary);
     output.appendChild(scroller);
+    reviewDeskAudit = {totals, repeats, checkpointSelected: !!checkpointFile};
+    renderReviewDesk();
     if (!capturable) {
       document.getElementById("audit-capture-status").textContent =
         "Capture unavailable: every selected file must be readable and at most 1 MiB. The audit results remain visible above.";
+      renderReviewDesk();
       return;
     }
     if (!globalThis.crypto?.subtle) {
       document.getElementById("audit-capture-status").textContent =
         "Capture unavailable: secure browser hashing is required. The audit results remain visible above.";
+      renderReviewDesk();
       return;
     }
     if (!auditScriptAtLoad) {
       document.getElementById("audit-capture-status").textContent =
         "Capture unavailable: the loaded browser verifier source could not be read. The audit results remain visible above.";
+      renderReviewDesk();
       return;
     }
     try {
@@ -3540,15 +3682,18 @@ async function runEvidenceBatchAudit() {
         "Audit ready. Choose a saved capture and compare it with these selected files.";
       document.getElementById("audit-capture-status").textContent =
         "Capture ready. Keep the original files in this order for later browser or command-line replay.";
+      renderReviewDesk();
     } catch (error) {
       if (stillCurrent()) document.getElementById("audit-capture-status").textContent =
         `Capture unavailable: ${error.message || "Could not hash the selected files."}`;
+      if (stillCurrent()) renderReviewDesk();
     }
   } catch (error) {
     if (stillCurrent()) {
       output.textContent = `FAIL: ${error.message || "Could not audit the selected files."}`;
       document.getElementById("audit-capture-status").textContent =
         "Capture unavailable: fix the reference or checkpoint and audit again.";
+      reviewDeskIssue = output.textContent; renderReviewDesk();
     }
   }
 }
