@@ -96,13 +96,13 @@ function stopRecording() {
 
 async function startRecording() {
   if (recordingRequested || recorder) return;
-  if (!navigator.mediaDevices?.getUserMedia || !globalThis.MediaRecorder?.isTypeSupported) {
+  if (!navigator.mediaDevices?.getUserMedia || !globalThis.MediaRecorder) {
     status("record-status", "Direct recording is unavailable here. Choose a voice file instead.", true);
     return;
   }
-  const mimeType = ["audio/mp4;codecs=mp4a.40.2", "audio/mp4",
-    "audio/webm;codecs=opus", "audio/webm"]
-    .find(type => MediaRecorder.isTypeSupported(type));
+  const mimeType = typeof MediaRecorder.isTypeSupported === "function" ?
+    ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
+      .find(type => MediaRecorder.isTypeSupported(type)) : "audio/mp4";
   if (!mimeType) {
     status("record-status", "This browser has no supported recording format. Choose a voice file instead.", true);
     return;
