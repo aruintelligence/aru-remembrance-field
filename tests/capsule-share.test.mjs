@@ -53,10 +53,13 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
       printCount++;
     } };
   globalThis.matchMedia = () => ({ matches: true });
+  globalThis.location = { href: "https://aruintelligence.github.io/aru-remembrance-field/capsule/?preview=1#make" };
   const shares = [];
+  const copied = [];
   let supported = true;
   Object.defineProperty(globalThis, "navigator", { configurable: true,
-    value: { canShare: data => supported && data.files[0] instanceof File,
+    value: { clipboard: { writeText: text => { copied.push(text); return Promise.resolve(); } },
+      canShare: data => supported && data.files[0] instanceof File,
       share: data => {
         assert.equal(userActivation, true, "share must start within the user's tap");
         shares.push(data);
@@ -64,6 +67,8 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
       } } });
   await import("../capsule/app.mjs");
   const el = id => document.getElementById(id);
+  await el("copy-opening-steps").click();
+  assert.equal(copied.length, 0, "instructions require a prepared gift");
   el("print-keepsake").click();
   assert.equal(printCount, 0, "there is no printable gift before opening");
   el("hero-sample").click();
@@ -107,6 +112,13 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
   assert.equal(el("share-ready").hidden, false);
   assert.equal(el("share-file").hidden, false);
   assert.equal(el("passphrase").value, "");
+  await el("copy-opening-steps").click();
+  assert.equal(copied.length, 1);
+  assert.match(copied[0], /https:\/\/aruintelligence\.github\.io\/aru-remembrance-field\/capsule\//);
+  for (const privateText of ["?preview", "#make", passphrase, "blue umbrella", "Taylor", "Alex"]) {
+    assert.equal(copied[0].includes(privateText), false);
+  }
+  assert.match(copied[0], /passphrase I give you separately/);
   await el("prepare-share").click();
   assert.equal(el("share-ready").hidden, false);
   el("share-file").click();
@@ -124,6 +136,8 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
   const secondRow = el("memory-list").children[1];
   secondRow.children[1].children[0].click(); // Move the garden before the umbrella.
   assert.equal(el("share-ready").hidden, true);
+  await el("copy-opening-steps").click();
+  assert.equal(copied.length, 1, "a stale gift cannot offer opening steps");
   setPassphrase();
   await el("prepare-share").click();
   el("share-file").click();

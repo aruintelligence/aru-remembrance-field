@@ -1,12 +1,12 @@
 // An opt-in offline copy of the reader code. Never cache user content or requests
 // outside this exact, versioned app shell.
-const CACHE_NAME = "aru-capsule-reader-407fdf10f722bab43dd39e9eb3c37ba75bf6118a8d93f41361737a9c4a13aef8";
+const CACHE_NAME = "aru-capsule-reader-900ae49ae1f42f87b1da7fd58a7f953de20a9b91c7fda0b785727846cf4032ce";
 const SHELL = [
   "./",
-  "./app.mjs?v=bbc2e9646c94a3f45923be2646a6569d1bfa902780ec5506f50a782c66d45f11",
+  "./app.mjs?v=629a66d9a5df40496842831698d5d29069aead7d48f33ffa244f588d3c00e343",
   "./core.mjs?v=c4b5f7c607450d1ce71a7e55d1fc98d0756988fe58d124be3124b716187ca622"
 ];
-const DIGESTS = ["5a42bfee872c5d6047c2376ad8835f97fc637f0ceb13f0133b2eff6c33a59953", "bbc2e9646c94a3f45923be2646a6569d1bfa902780ec5506f50a782c66d45f11", "c4b5f7c607450d1ce71a7e55d1fc98d0756988fe58d124be3124b716187ca622"];
+const DIGESTS = ["9850aaada3b9850e5279f9a50f5b822f809d2ead82e1797c2097e0562f705070", "629a66d9a5df40496842831698d5d29069aead7d48f33ffa244f588d3c00e343", "c4b5f7c607450d1ce71a7e55d1fc98d0756988fe58d124be3124b716187ca622"];
 const PREFIX = "aru-capsule-reader-";
 const absolute = path => new URL(path, self.registration.scope).href;
 
