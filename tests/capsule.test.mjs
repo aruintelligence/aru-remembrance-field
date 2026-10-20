@@ -114,11 +114,27 @@ test("recall cites stored memories and refuses unmatched or vague questions", ()
   assert.equal(matched.kind, "matched");
   assert.deepEqual(matched.matches.map(item => item.id), ["sample-1"]);
   assert.equal(matched.matches[0].story, gift.memories[0].story);
+  assert.deepEqual(matched.matches[0].matchedTerms, ["blue", "umbrella"]);
   assert.deepEqual(recallMemories(gift, "What is her favorite ocean?"),
     { kind: "no_match", matches: [] });
   assert.deepEqual(recallMemories(gift, "What about it?"),
     { kind: "insufficient_question", matches: [] });
   assert.equal(gift.format, CAPSULE_FORMAT);
+});
+
+test("recall prioritizes more distinct details and exposes only authored word matches", () => {
+  const gift = sample();
+  gift.memories[0].title = "The garden";
+  gift.memories[0].story = "We rested outside.";
+  gift.memories[1].title = "The window";
+  gift.memories[1].story = "We planted mint in a garden by the window.";
+  const result = recallMemories(gift, "Where was the mint garden?");
+  assert.equal(result.kind, "matched");
+  assert.equal(result.matches[0].id, "sample-2");
+  assert.deepEqual(result.matches[0].matchedTerms, ["mint", "garden"]);
+  assert.equal(result.matches[1].id, "sample-1");
+  assert.deepEqual(result.matches[1].matchedTerms, ["garden"]);
+  assert.equal(result.matches.every(match => gift.memories.some(memory => memory.id === match.id)), true);
 });
 
 test("suggested questions lead to authored source memories, including generic titles", () => {
