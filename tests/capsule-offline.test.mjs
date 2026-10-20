@@ -65,7 +65,15 @@ function harness(changedAsset = null, networkResult = null) {
       respondWith(promise) { response = promise; } });
     return response;
   };
-  return { cacheStore, calls, lifecycle, request };
+  const message = async data => {
+    let reply;
+    let pending;
+    handlers.get("message")({ data, ports: [{ postMessage(value) { reply = value; } }],
+      waitUntil(promise) { pending = promise; } });
+    if (pending) await pending;
+    return reply;
+  };
+  return { cacheStore, calls, lifecycle, request, message };
 }
 
 test("offline shell is pinned to the current HTML and both current modules", () => {
@@ -136,6 +144,18 @@ test("a failed online navigation falls back to the verified saved reader", async
   const page = await environment.request(`${scope}index.html`, "navigate", "document");
   assert.equal(await page.text(), html.toString());
   assert.equal(environment.calls.network, 1);
+});
+
+test("the active worker reports readiness only while its saved assets pass verification", async () => {
+  const environment = harness();
+  await environment.lifecycle("install");
+  assert.deepEqual(JSON.parse(JSON.stringify(await environment.message({ type: "aru-capsule-reader-verify" }))), {
+    ok: true, htmlDigest: hash(html), appUrl: `${scope}app.mjs?v=${hash(app)}`
+  });
+  assert.equal(await environment.message({ type: "unrelated-message" }), undefined);
+  [...environment.cacheStore.values()][0].set(scope, new Response("changed after install"));
+  assert.deepEqual(JSON.parse(JSON.stringify(await environment.message({ type: "aru-capsule-reader-verify" }))),
+    { ok: false });
 });
 
 test("a mismatched asset aborts install without replacing the previous offline reader", async () => {
