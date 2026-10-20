@@ -250,21 +250,28 @@ function passphraseIsValid(passphrase) {
     passphrase.length <= 256;
 }
 
-async function deriveKey(passphrase, salt, usage) {
-  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase),
-    "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: ITERATIONS,
-    hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, [usage]);
-}
-
-async function sealValue(value, passphrase, format) {
+async function importPassphrase(passphrase) {
   if (!passphraseIsValid(passphrase)) throw new Error("Use a passphrase of 12–256 characters");
   if (!globalThis.crypto?.subtle || !globalThis.crypto?.getRandomValues) {
     throw new Error("A secure browser context is required to seal a capsule");
   }
+  return crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase),
+    "PBKDF2", false, ["deriveKey"]);
+}
+
+async function deriveFromMaterial(material, salt, usage) {
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: ITERATIONS,
+    hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, [usage]);
+}
+
+async function deriveKey(passphrase, salt, usage) {
+  return deriveFromMaterial(await importPassphrase(passphrase), salt, usage);
+}
+
+async function sealWithMaterial(value, material, format) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(passphrase, salt, "encrypt");
+  const key = await deriveFromMaterial(material, salt, "encrypt");
   const plaintext = new TextEncoder().encode(JSON.stringify(value));
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv,
     additionalData: new TextEncoder().encode(format) }, key, plaintext);
@@ -273,12 +280,23 @@ async function sealValue(value, passphrase, format) {
     ciphertext: base64FromBytes(new Uint8Array(ciphertext)) };
 }
 
+async function sealValue(value, passphrase, format) {
+  return sealWithMaterial(value, await importPassphrase(passphrase), format);
+}
+
 export async function sealCapsule(value, passphrase) {
   return sealValue(currentCapsule(value), passphrase, ENVELOPE_FORMAT);
 }
 
 export async function sealDraft(value, passphrase) {
   return sealValue(currentDraft(value), passphrase, DRAFT_ENVELOPE_FORMAT);
+}
+
+// The key stays nonextractable in this page session. Each recovery snapshot
+// derives a new AES key with a new salt and uses a fresh IV.
+export async function createDraftRecoverySealer(passphrase) {
+  const material = await importPassphrase(passphrase);
+  return value => sealWithMaterial(currentDraft(value), material, DRAFT_ENVELOPE_FORMAT);
 }
 
 async function openValue(input, passphrase, acceptedFormats, validate) {

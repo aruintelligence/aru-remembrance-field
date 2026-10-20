@@ -34,6 +34,7 @@ class Node {
 test("a sealed share contains only ciphertext and rejects changes before or after sealing", async () => {
   const nodes = new Map();
   globalThis.document = {
+    addEventListener() {},
     getElementById: id => {
       if (!nodes.has(id)) nodes.set(id, new Node());
       return nodes.get(id);

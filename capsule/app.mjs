@@ -1,7 +1,8 @@
 import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_AUDIO_BYTES,
   MAX_FILE_BYTES, MAX_MEMORIES, MAX_PHOTO_BYTES, audioFromBytes, openCapsule,
   openDraft, photoFromBytes, recallMemories, sealCapsule, sealDraft,
-  validateCapsule, validateDraft } from "./core.mjs?v=342747fb9592ae4cfe27a7dd7b3c59403c498618efc71af3835b54ee5afa62b0";
+  createDraftRecoverySealer,
+  validateCapsule, validateDraft } from "./core.mjs?v=d3b7918deb9e126592791d94ec9759cdcea504abbba5c4614dc8f73495aa82df";
 
 const $ = id => document.getElementById(id);
 let memories = [];
@@ -16,6 +17,16 @@ let recordingTimer = null;
 let recordingRequested = false;
 let captureAttempt = 0;
 const MAX_RECORDING_SECONDS = 30;
+const RECOVERY_DB = "aru-remembrance-capsule-recovery-v1";
+const RECOVERY_STORE = "encrypted-drafts";
+let recoverySealer = null;
+let recoveryOwner = null;
+let recoveryRevision = 0;
+let recoveryWritten = 0;
+let recoverySession = 0;
+let recoveryTimer = null;
+let recoveryRunning = null;
+let recoveryActionBusy = false;
 
 function status(target, message, error = false) {
   const node = $(target);
@@ -171,6 +182,7 @@ async function startRecording() {
         status("record-status", error.message, true);
       } finally {
         if (recorder === current) { recorder = null; recordingControls(); }
+        scheduleRecovery();
       }
     };
     current.start(1000);
@@ -187,6 +199,7 @@ async function startRecording() {
     recordingTimer = setInterval(tick, 500);
   } catch (error) {
     abortRecording();
+    scheduleRecovery();
     status("record-status", error.name === "NotAllowedError" ?
       "Microphone access was declined. You can choose a voice file instead." :
       "Could not start recording. Try again or choose a voice file.", true);
@@ -245,6 +258,7 @@ function renderMemoryList() {
       $("cancel-edit").hidden = false;
       renderMemoryList();
       $("memory-title").focus();
+      scheduleRecovery();
     });
     const remove = element("button", "button quiet small", "Remove");
     remove.type = "button";
@@ -255,6 +269,7 @@ function renderMemoryList() {
       clearMemoryForm();
       renderMemoryList();
       status("create-status", "Memory removed from this page session.");
+      scheduleRecovery();
     });
     actions.append(edit);
     if (memory.audio) {
@@ -270,6 +285,7 @@ function renderMemoryList() {
         invalidatePreparedGift();
         renderMemoryList();
         status("create-status", "Voice note removed from this page session. Save a new private draft or gift to keep the change.");
+        scheduleRecovery();
       });
       actions.append(removeVoice);
     }
@@ -309,7 +325,10 @@ async function saveMemory() {
     invalidatePreparedGift();
     clearMemoryForm();
     renderMemoryList();
-    status("create-status", "Memory saved in this page session. Download the capsule to keep it.");
+    status("create-status", recoverySealer ?
+      "Memory added. Encrypted recovery will save it shortly; download a private draft for a separate backup." :
+      "Memory saved in this page session. Download the capsule to keep it.");
+    scheduleRecovery();
   } catch (error) { status("create-status", error.message, true); }
   finally { button.disabled = memories.length >= MAX_MEMORIES && editingIndex === null; }
 }
@@ -392,21 +411,209 @@ function downloadJson(envelope, filename) {
 async function checkpoint() {
   if (recordingRequested || recorder) throw Error("Stop the voice recording before saving a private draft.");
   const selected = $("memory-photo").files[0];
+  let photo = pendingPhoto;
   if (selected) {
     if (selected.size > MAX_PHOTO_BYTES) throw Error("Choose a photo under 600 KB.");
-    pendingPhoto = photoFromBytes(await selected.arrayBuffer(), selected.type);
+    photo = photoFromBytes(await selected.arrayBuffer(), selected.type);
   }
   const selectedAudio = $("memory-audio").files[0];
+  let audio = pendingAudio;
   if (selectedAudio) {
     if (selectedAudio.size > MAX_AUDIO_BYTES) throw Error("Choose a voice recording under 1 MB.");
-    pendingAudio = audioFromBytes(await selectedAudio.arrayBuffer(),
+    audio = audioFromBytes(await selectedAudio.arrayBuffer(),
       selectedAudio.type, selectedAudio.name);
   }
-  return validateDraft({ format: DRAFT_FORMAT, saved_at: new Date().toISOString(),
+  if (selected !== $("memory-photo").files[0] ||
+      selectedAudio !== $("memory-audio").files[0]) {
+    throw Error("A selected file changed while saving. Try again.");
+  }
+  const result = validateDraft({ format: DRAFT_FORMAT, saved_at: new Date().toISOString(),
     recipient: $("recipient").value, from: $("from").value, letter: $("letter").value,
     memories, editing_index: editingIndex,
     pending: { title: $("memory-title").value, when: $("memory-when").value,
-      story: $("memory-story").value, photo: pendingPhoto, audio: pendingAudio } });
+      story: $("memory-story").value, photo, audio } });
+  pendingPhoto = photo;
+  pendingAudio = audio;
+  return result;
+}
+
+function recoveryTransaction(mode, action) {
+  if (!globalThis.indexedDB) return Promise.reject(Error("On-device recovery is unavailable in this browser."));
+  return new Promise((resolve, reject) => {
+    let opening;
+    try { opening = indexedDB.open(RECOVERY_DB, 1); }
+    catch (error) { reject(error); return; }
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      callback(value);
+    };
+    opening.onupgradeneeded = () => opening.result.createObjectStore(RECOVERY_STORE);
+    opening.onerror = () => finish(reject, opening.error || Error("Could not open recovery storage."));
+    opening.onblocked = () => finish(reject, Error("Close other capsule tabs and try again."));
+    opening.onsuccess = () => {
+      const db = opening.result;
+      if (settled) { db.close(); return; }
+      let transaction;
+      try { transaction = db.transaction(RECOVERY_STORE, mode); }
+      catch (error) { db.close(); finish(reject, error); return; }
+      let result;
+      let reason;
+      transaction.oncomplete = () => { db.close(); finish(resolve, result); };
+      transaction.onabort = () => {
+        db.close();
+        finish(reject, reason || transaction.error || Error("Recovery storage failed."));
+      };
+      try {
+        action(transaction.objectStore(RECOVERY_STORE), value => { result = value; }, error => {
+          reason = error;
+          transaction.abort();
+        });
+      } catch (error) { reason = error; transaction.abort(); }
+    };
+  });
+}
+
+function readRecovery() {
+  return recoveryTransaction("readonly", (store, set) => {
+    const request = store.get("current");
+    request.onsuccess = () => set(request.result ?? null);
+  });
+}
+
+function writeRecovery(envelope, owner, replace) {
+  return recoveryTransaction("readwrite", (store, _, abort) => {
+    const request = store.get("current");
+    request.onsuccess = () => {
+      if (!replace && request.result?.owner !== owner) {
+        abort(Error("Another capsule tab changed the recovery copy."));
+        return;
+      }
+      store.put({ owner, envelope }, "current");
+    };
+  });
+}
+
+function recoveryControls() {
+  $("enable-recovery").disabled = recoveryActionBusy || !!recoverySealer;
+  $("restore-recovery").disabled = recoveryActionBusy;
+  $("forget-recovery").disabled = recoveryActionBusy;
+}
+
+function pauseRecovery() {
+  const running = recoveryRunning;
+  recoverySession++;
+  recoverySealer = null;
+  recoveryOwner = null;
+  recoveryRevision = 0;
+  recoveryWritten = 0;
+  clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  recoveryControls();
+  return running;
+}
+
+function flushRecovery() {
+  if (!recoverySealer || recoveryRunning) return recoveryRunning;
+  const session = recoverySession;
+  let running;
+  running = (async () => {
+    while (recoverySealer && session === recoverySession && recoveryWritten < recoveryRevision) {
+      if (recordingRequested || recorder) {
+        status("recovery-status", "Recovery waits until the voice recording has stopped.");
+        return;
+      }
+      const revision = recoveryRevision;
+      const owner = recoveryOwner;
+      const sealer = recoverySealer;
+      status("recovery-status", "Encrypting changes for on-device recovery…");
+      let snapshot;
+      try { snapshot = await checkpoint(); }
+      catch (error) {
+        status("recovery-status", `${error.message} Fix this item to resume encrypted recovery. The previous copy is kept.`, true);
+        return;
+      }
+      if (session !== recoverySession || revision !== recoveryRevision) continue;
+      const envelope = await sealer(snapshot);
+      if (session !== recoverySession || revision !== recoveryRevision) continue;
+      await writeRecovery(envelope, owner, recoveryWritten === 0);
+      if (session !== recoverySession) return;
+      recoveryWritten = revision;
+      status("recovery-status", `Encrypted recovery saved on this device at ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
+    }
+  })().catch(error => {
+    if (session !== recoverySession) return;
+    pauseRecovery();
+    status("recovery-status", `${error.message} Recovery stopped. Save a private draft file and enable it again.`, true);
+  }).finally(() => { if (recoveryRunning === running) recoveryRunning = null; });
+  recoveryRunning = running;
+  return running;
+}
+
+function scheduleRecovery() {
+  if (!recoverySealer) return;
+  recoveryRevision++;
+  clearTimeout(recoveryTimer);
+  recoveryTimer = setTimeout(() => { recoveryTimer = null; flushRecovery(); }, 1200);
+}
+
+async function enableRecovery() {
+  if (recoveryActionBusy || recoverySealer) return;
+  recoveryActionBusy = true;
+  recoveryControls();
+  try {
+    const passphrase = $("recovery-passphrase").value;
+    if (passphrase !== $("recovery-confirm").value) throw Error("Recovery passphrases do not match.");
+    const sealer = await createDraftRecoverySealer(passphrase);
+    const existing = await readRecovery();
+    if (existing && !confirm("Replace the encrypted recovery copy already saved in this browser?")) {
+      status("recovery-status", "Existing recovery copy kept.");
+      return;
+    }
+    recoverySession++;
+    recoverySealer = sealer;
+    recoveryOwner = crypto.randomUUID();
+    recoveryRevision = 1;
+    recoveryWritten = 0;
+    $("recovery-passphrase").value = "";
+    $("recovery-confirm").value = "";
+    await flushRecovery();
+  } catch (error) { status("recovery-status", error.message, true); }
+  finally { recoveryActionBusy = false; recoveryControls(); }
+}
+
+async function restoreRecovery() {
+  if (recoveryActionBusy) return;
+  recoveryActionBusy = true;
+  recoveryControls();
+  try {
+    const stored = await readRecovery();
+    if (!stored) throw Error("No on-device recovery copy was found in this browser.");
+    const restored = await openDraft(stored.envelope, $("recovery-unlock").value);
+    if (hasUnsavedWork() && !confirm("Replace the unfinished work on this page with the on-device recovery copy?")) {
+      status("recovery-status", "Current work kept. Recovery copy was not loaded.");
+      return;
+    }
+    await pauseRecovery();
+    applyRestoredDraft(restored);
+    status("recovery-status", "Encrypted recovery restored. Automatic saving is paused; enable it again to save new changes.");
+    $("recipient").focus();
+  } catch (error) { status("recovery-status", error.message, true); }
+  finally { recoveryActionBusy = false; recoveryControls(); $("recovery-unlock").value = ""; }
+}
+
+async function forgetRecovery() {
+  if (recoveryActionBusy) return;
+  if (!confirm("Permanently remove the encrypted recovery copy from this browser? Keep a downloaded private draft first if you need one.")) return;
+  recoveryActionBusy = true;
+  recoveryControls();
+  try {
+    await pauseRecovery();
+    await recoveryTransaction("readwrite", store => { store.delete("current"); });
+    status("recovery-status", "On-device recovery copy removed. Your current page work is still here.");
+  } catch (error) { status("recovery-status", error.message, true); }
+  finally { recoveryActionBusy = false; recoveryControls(); }
 }
 
 async function saveCheckpoint() {
@@ -432,6 +639,33 @@ function hasUnsavedWork() {
       .some(id => $(id).value.trim());
 }
 
+function applyRestoredDraft(restored) {
+  invalidatePreparedGift();
+  abortRecording();
+  $("recipient").value = restored.recipient;
+  $("from").value = restored.from;
+  $("letter").value = restored.letter;
+  memories = restored.memories;
+  editingIndex = restored.editing_index;
+  pendingPhoto = restored.pending.photo;
+  pendingAudio = restored.pending.audio ?? null;
+  $("memory-title").value = restored.pending.title;
+  $("memory-when").value = restored.pending.when;
+  $("memory-story").value = restored.pending.story;
+  $("memory-photo").value = "";
+  $("memory-audio").value = "";
+  $("passphrase").value = "";
+  $("confirm-passphrase").value = "";
+  $("pending-photo-hint").textContent = pendingPhoto ?
+    "A photo from your saved draft is attached to the unfinished memory. Choose a new file to replace it." : "";
+  $("pending-audio-hint").textContent = pendingAudio ?
+    "A voice recording from your saved draft is attached. Play it back or choose a new recording to replace it." : "";
+  showAudioPreview(pendingAudio || (editingIndex === null ? null : memories[editingIndex].audio));
+  $("save-memory").textContent = editingIndex === null ? "Add memory" : "Save changes";
+  $("cancel-edit").hidden = editingIndex === null;
+  renderMemoryList();
+}
+
 async function resumeCheckpoint() {
   const button = $("resume-draft");
   button.disabled = true;
@@ -443,30 +677,8 @@ async function resumeCheckpoint() {
       status("draft-status", "Current work kept. The saved draft was not loaded.");
       return;
     }
-    invalidatePreparedGift();
-    abortRecording();
-    $("recipient").value = restored.recipient;
-    $("from").value = restored.from;
-    $("letter").value = restored.letter;
-    memories = restored.memories;
-    editingIndex = restored.editing_index;
-    pendingPhoto = restored.pending.photo;
-    pendingAudio = restored.pending.audio ?? null;
-    $("memory-title").value = restored.pending.title;
-    $("memory-when").value = restored.pending.when;
-    $("memory-story").value = restored.pending.story;
-    $("memory-photo").value = "";
-    $("memory-audio").value = "";
-    $("passphrase").value = "";
-    $("confirm-passphrase").value = "";
-    $("pending-photo-hint").textContent = pendingPhoto ?
-      "A photo from your saved draft is attached to the unfinished memory. Choose a new file to replace it." : "";
-    $("pending-audio-hint").textContent = pendingAudio ?
-      "A voice recording from your saved draft is attached. Play it back or choose a new recording to replace it." : "";
-    showAudioPreview(pendingAudio || (editingIndex === null ? null : memories[editingIndex].audio));
-    $("save-memory").textContent = editingIndex === null ? "Add memory" : "Save changes";
-    $("cancel-edit").hidden = editingIndex === null;
-    renderMemoryList();
+    applyRestoredDraft(restored);
+    scheduleRecovery();
     status("draft-status", "Private draft restored locally. Continue editing, then save a new draft or seal the finished gift.");
     $("recipient").focus();
   } catch (error) { status("draft-status", error.message, true); }
@@ -641,17 +853,49 @@ $("discard-recording").addEventListener("click", () => {
   showAudioPreview(editingIndex === null ? null : memories[editingIndex].audio);
   $("pending-audio-hint").textContent = "Recording discarded. The original voice note, if any, is still attached to this memory.";
   status("record-status", "Recording discarded from this page session.");
+  scheduleRecovery();
+});
+$("memory-photo").addEventListener("change", () => {
+  if (!$("memory-photo").files[0]) {
+    pendingPhoto = null;
+    $("pending-photo-hint").textContent = "Photo selection cleared.";
+  }
 });
 $("memory-audio").addEventListener("change", () => {
-  if (!$("memory-audio").files[0]) return;
+  if (!$("memory-audio").files[0]) {
+    pendingAudio = null;
+    showAudioPreview(editingIndex === null ? null : memories[editingIndex].audio);
+    $("pending-audio-hint").textContent = "Voice file selection cleared.";
+    return;
+  }
   pendingAudio = null;
   showAudioPreview(null);
   $("pending-audio-hint").textContent = "Selected file will replace the attached voice note when you add this memory or save a private draft.";
 });
-window.addEventListener("pagehide", abortRecording);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden" || !recoverySealer) return;
+  clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  flushRecovery();
+});
+window.addEventListener("pagehide", () => {
+  abortRecording();
+  if (!recoverySealer) return;
+  clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  const session = recoverySession;
+  return Promise.resolve(flushRecovery()).finally(() => {
+    if (session !== recoverySession) return;
+    pauseRecovery();
+    status("recovery-status", "Recovery paused after leaving this page. Enable it again to save further edits.");
+  });
+});
 $("save-draft").addEventListener("click", saveCheckpoint);
 $("resume-draft").addEventListener("click", resumeCheckpoint);
-$("cancel-edit").addEventListener("click", () => { clearMemoryForm(); renderMemoryList(); });
+$("enable-recovery").addEventListener("click", enableRecovery);
+$("restore-recovery").addEventListener("click", restoreRecovery);
+$("forget-recovery").addEventListener("click", forgetRecovery);
+$("cancel-edit").addEventListener("click", () => { clearMemoryForm(); renderMemoryList(); scheduleRecovery(); });
 $("preview").addEventListener("click", () => {
   try { const capsule = draft(); switchTab("open");
     showGift(capsule, "Preview only · Seal a file to keep or share this gift."); }
@@ -662,10 +906,10 @@ $("prepare-share").addEventListener("click", () => sealGift(false));
 $("share-file").addEventListener("click", sharePreparedGift);
 $("download-prepared").addEventListener("click", downloadPreparedGift);
 for (const id of ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story"]) {
-  $(id).addEventListener("input", invalidatePreparedGift);
+  $(id).addEventListener("input", () => { invalidatePreparedGift(); scheduleRecovery(); });
 }
 for (const id of ["memory-photo", "memory-audio"]) {
-  $(id).addEventListener("change", invalidatePreparedGift);
+  $(id).addEventListener("change", () => { invalidatePreparedGift(); scheduleRecovery(); });
 }
 $("open-capsule").addEventListener("click", openGift);
 $("edit-opened").addEventListener("click", () => {
@@ -683,6 +927,7 @@ $("edit-opened").addEventListener("click", () => {
   switchTab("create");
   status("create-status", "This is an editable copy in this page session. The opened file is unchanged; seal and download a new file to keep edits.");
   $("recipient").focus();
+  scheduleRecovery();
 });
 $("sample").addEventListener("click", showSample);
 $("save-offline-reader").addEventListener("click", saveOfflineReader);
