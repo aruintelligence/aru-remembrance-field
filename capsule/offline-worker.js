@@ -1,12 +1,13 @@
 // An opt-in offline copy of the reader code. Never cache user content or requests
-// outside this exact, versioned app shell.
-const CACHE_NAME = "aru-capsule-reader-38527dc6185a54e2c663fb8ca9ae8e735c5dcff3a4505bcf062968cc357b6799";
+// outside this exact, versioned app shell. Online navigations check for a fresh
+// release; the digest-verified copy is a fallback when the network is unavailable.
+const CACHE_NAME = "aru-capsule-reader-85fb322cd5aceb45a38eb469cde3f5c38382c94bd6802239aaa2f4f54bdb372c";
 const SHELL = [
   "./",
   "./app.mjs?v=1e64f5b8dc36ab7a47e4a54ee608b34eda8daf28c37b339982d30760dbaa9bf6",
   "./core.mjs?v=0d9f6b791080ef2272e80f318eaef7e8cb920552bf9a5cea60475e70477bae65"
 ];
-const DIGESTS = ["75c1f0c8e2a81daf658b924adadd0c57a755257b1c9c472efd62c59f0e9c8343", "1e64f5b8dc36ab7a47e4a54ee608b34eda8daf28c37b339982d30760dbaa9bf6", "0d9f6b791080ef2272e80f318eaef7e8cb920552bf9a5cea60475e70477bae65"];
+const DIGESTS = ["aa21d807da5fb5d5033b2892307dd9370d73504bf843213551534a53bb72f289", "1e64f5b8dc36ab7a47e4a54ee608b34eda8daf28c37b339982d30760dbaa9bf6", "0d9f6b791080ef2272e80f318eaef7e8cb920552bf9a5cea60475e70477bae65"];
 const PREFIX = "aru-capsule-reader-";
 const absolute = path => new URL(path, self.registration.scope).href;
 
@@ -55,7 +56,16 @@ self.addEventListener("fetch", event => {
     .some(path => url.href === absolute(path));
   if (!isReader && !isModule) return;
   event.respondWith((async () => {
-    const cached = await (await caches.open(CACHE_NAME)).match(isReader ? home : request);
+    if (isReader) {
+      let networkResponse;
+      try {
+        networkResponse = await fetch(request, { cache: "reload" });
+        if (networkResponse.ok) return networkResponse;
+      } catch { /* The verified reader can still open without a connection. */ }
+      const cached = await (await caches.open(CACHE_NAME)).match(home);
+      return cached || networkResponse || fetch(request);
+    }
+    const cached = await (await caches.open(CACHE_NAME)).match(request);
     return cached || fetch(request);
   })());
 });

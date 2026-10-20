@@ -18,10 +18,10 @@ const assets = new Map([
   [`${scope}core.mjs?v=${hash(core)}`, core]
 ]);
 
-function harness(changedAsset = null) {
+function harness(changedAsset = null, networkResult = null) {
   const handlers = new Map();
   const cacheStore = new Map();
-  const calls = { skipped: 0, claimed: 0, network: 0 };
+  const calls = { skipped: 0, claimed: 0, network: 0, networkRequests: [] };
   const caches = {
     async open(name) {
       if (!cacheStore.has(name)) cacheStore.set(name, new Map());
@@ -48,7 +48,12 @@ function harness(changedAsset = null) {
     addEventListener(name, fn) { handlers.set(name, fn); }
   };
   runInNewContext(worker, { self, caches, crypto: webcrypto, Request, URL, Uint8Array,
-    fetch: async () => { calls.network++; throw Error("Offline"); } });
+    fetch: async (request, options) => {
+      calls.network++;
+      calls.networkRequests.push({ url: request.url, cache: options?.cache });
+      if (networkResult) return networkResult(request);
+      throw Error("Offline");
+    } });
   const lifecycle = name => {
     let pending;
     handlers.get(name)({ waitUntil(promise) { pending = promise; } });
@@ -99,11 +104,38 @@ test("an installed reader serves its verified shell offline and ignores all othe
     const response = await environment.request(url, "cors", "script");
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), contents);
   }
-  assert.equal(environment.calls.network, 0);
+  assert.equal(environment.calls.network, 2);
+  assert.deepEqual(environment.calls.networkRequests, [
+    { url: scope, cache: "reload" },
+    { url: `${scope}index.html`, cache: "reload" }
+  ]);
   assert.equal(environment.request(`${scope}private-draft.json`, "navigate", "document"), undefined);
   assert.equal(environment.request(`${scope}app.mjs?v=wrong`, "cors", "script"), undefined);
   assert.equal(environment.request(`${scope}index.html?secret=anything`, "navigate", "document"), undefined);
   assert.equal(environment.request("https://example.test/other/", "navigate", "document"), undefined);
+});
+
+test("online navigations use the current page without replacing the verified offline snapshot", async () => {
+  const fresh = "<!doctype html><title>New release</title>";
+  const environment = harness(null, () => new Response(fresh));
+  await environment.lifecycle("install");
+  const page = await environment.request(scope, "navigate", "document");
+  assert.equal(await page.text(), fresh);
+  assert.deepEqual(environment.calls.networkRequests, [{ url: scope, cache: "reload" }]);
+  const snapshot = [...environment.cacheStore.values()][0].get(scope);
+  assert.equal(await snapshot.text(), html.toString());
+  const moduleUrl = [...assets.keys()][1];
+  const moduleResponse = await environment.request(moduleUrl, "cors", "script");
+  assert.deepEqual(Buffer.from(await moduleResponse.arrayBuffer()), app);
+  assert.equal(environment.calls.network, 1);
+});
+
+test("a failed online navigation falls back to the verified saved reader", async () => {
+  const environment = harness(null, () => new Response("Unavailable", { status: 503 }));
+  await environment.lifecycle("install");
+  const page = await environment.request(`${scope}index.html`, "navigate", "document");
+  assert.equal(await page.text(), html.toString());
+  assert.equal(environment.calls.network, 1);
 });
 
 test("a mismatched asset aborts install without replacing the previous offline reader", async () => {
