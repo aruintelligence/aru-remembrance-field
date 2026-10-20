@@ -151,6 +151,9 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
   assert.equal(el("opened-file-code-value").textContent, code);
   el("sample").click();
   assert.equal(el("opened-file-code").hidden, true, "sample cannot show a real file code");
+  el("memory-question").value = "What about the blue umbrella?";
+  el("ask").click();
+  assert.equal(el("answer").children[1].children[1].textContent, "Matched words: blue, umbrella");
 
   const secondRow = el("memory-list").children[1];
   secondRow.children[1].children[0].click(); // Move the garden before the umbrella.
