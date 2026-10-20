@@ -368,6 +368,25 @@ export function recallMemories(value, question) {
   return { kind: matches.length ? "matched" : "no_match", matches };
 }
 
+// Offer a few entry points into the actual written gift. Each suggestion is
+// checked against the same retrieval path the question box uses.
+export function suggestMemoryQuestions(value) {
+  const capsule = validateCapsule(value);
+  const count = capsule.memories.length;
+  const positions = [...new Set([0, Math.floor((count - 1) / 2), count - 1])];
+  return positions.flatMap(index => {
+    const memory = capsule.memories[index];
+    const candidates = [memory.title, ...terms(memory.story).slice(0, 12)];
+    for (const detail of candidates) {
+      const question = `What do you remember about ${detail}?`;
+      if (recallMemories(capsule, question).matches.some(match => match.id === memory.id)) {
+        return [{ id: memory.id, question }];
+      }
+    }
+    return [];
+  });
+}
+
 export const FICTIONAL_SAMPLE = Object.freeze({ format: CAPSULE_FORMAT,
   created_at: "2026-10-19T00:00:00.000Z", recipient: "Alex", from: "Taylor",
   letter: "For every ordinary day that became extraordinary because we were together. These are a few moments I never want us to lose.",
