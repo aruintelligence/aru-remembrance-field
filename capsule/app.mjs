@@ -859,6 +859,22 @@ function downloadPreparedGift() {
   status("create-status", "Prepared encrypted file downloaded. Give the passphrase separately.");
 }
 
+async function copyOpeningSteps() {
+  if (!preparedGiftIsCurrent()) return;
+  const reader = new URL("./", location.href).href;
+  const steps = `To open a Remembrance Capsule:\n` +
+    `1. Keep the encrypted .json file on your device.\n` +
+    `2. Open the capsule reader: ${reader}\n` +
+    `3. Choose “Open a gift,” select the file, and enter the passphrase I give you separately.\n\n` +
+    `Keep the file and passphrase private.`;
+  try {
+    await navigator.clipboard.writeText(steps);
+    status("create-status", "Opening steps copied. Send them with the encrypted file, then give the passphrase separately.");
+  } catch {
+    status("create-status", "Copying is unavailable here. Share the reader link and tell them to choose Open a gift, select the file, and enter the passphrase separately.", true);
+  }
+}
+
 async function openGift() {
   const button = $("open-capsule");
   button.disabled = true;
@@ -996,6 +1012,7 @@ $("download").addEventListener("click", () => sealGift(true));
 $("prepare-share").addEventListener("click", () => sealGift(false));
 $("share-file").addEventListener("click", sharePreparedGift);
 $("download-prepared").addEventListener("click", downloadPreparedGift);
+$("copy-opening-steps").addEventListener("click", copyOpeningSteps);
 for (const id of ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story"]) {
   $(id).addEventListener("input", () => { invalidatePreparedGift(); scheduleRecovery(); });
 }
