@@ -136,6 +136,15 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
   const opened = await openCapsule(contents, passphrase);
   assert.deepEqual(opened.memories, FICTIONAL_SAMPLE.memories);
   el("capsule-file").files = [file];
+  await el("capsule-file").dispatch("change");
+  assert.equal(el("selected-file-code").hidden, false);
+  assert.equal(el("selected-file-code-value").textContent, code);
+  assert.equal(el("open-passphrase").value, "", "file identity is available before the passphrase");
+  el("capsule-file").files = [new File([contents + " "], file.name, { type: "application/json" })];
+  await el("capsule-file").dispatch("change");
+  assert.notEqual(el("selected-file-code-value").textContent, code, "different file bytes get a different code");
+  el("capsule-file").files = [file];
+  await el("capsule-file").dispatch("change");
   el("open-passphrase").value = passphrase;
   await el("open-capsule").click();
   assert.equal(el("opened-file-code").hidden, false);
