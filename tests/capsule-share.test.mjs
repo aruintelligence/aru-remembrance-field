@@ -154,6 +154,11 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
   el("memory-question").value = "What about the blue umbrella?";
   el("ask").click();
   assert.equal(el("answer").children[1].children[1].textContent, "Matched words: blue, umbrella");
+  el("memory-question").value = "What ocean had the blue umbrella?";
+  el("ask").click();
+  assert.match(el("answer").children[0].textContent, /Only partial word matches/);
+  assert.equal(el("answer").children[1].children[2].textContent,
+    "Other question words not found here: ocean");
 
   const secondRow = el("memory-list").children[1];
   secondRow.children[1].children[0].click(); // Move the garden before the umbrella.

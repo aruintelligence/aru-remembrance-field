@@ -1,0 +1,48 @@
+{
+  "description": "Fictional, hand-labeled retrieval checks. Labels were written before running the scorer; they are not generated from its output.",
+  "capsule": {
+    "format": "aru-remembrance-capsule/3",
+    "created_at": "2026-10-19T00:00:00.000Z",
+    "recipient": "Avery",
+    "from": "Morgan",
+    "letter": "Four fictional moments for a reproducible reader check.",
+    "memories": [
+      { "id": "garden-gate", "title": "The garden", "when": "Spring", "story": "We rested outside beside the old gate. We carried a map and shared tea.", "photo": null, "audio": null },
+      { "id": "mint-window", "title": "The window", "when": "Early spring", "story": "We planted mint in a garden by the kitchen window. You named the clay pot Captain Mint.", "photo": null, "audio": null },
+      { "id": "blue-umbrella", "title": "The blue umbrella", "when": "Saturday", "story": "On a rainy Saturday we walked home under a blue umbrella and stopped for hot chocolate.", "photo": null, "audio": null },
+      { "id": "suitcase-note", "title": "The suitcase note", "when": "Summer", "story": "Before the long trip I tucked a brave note into your suitcase; you sent a sunset photo after arriving.", "photo": null, "audio": null }
+    ]
+  },
+  "cases": [
+    { "question": "mint garden", "kind": "matched", "top_id": "mint-window", "top_unmatched": [] },
+    { "question": "garden map", "kind": "matched", "top_id": "garden-gate", "top_unmatched": [] },
+    { "question": "mint window", "kind": "matched", "top_id": "mint-window", "top_unmatched": [] },
+    { "question": "clay pot", "kind": "matched", "top_id": "mint-window", "top_unmatched": [] },
+    { "question": "Captain Mint", "kind": "matched", "top_id": "mint-window", "top_unmatched": [] },
+    { "question": "blue umbrella", "kind": "matched", "top_id": "blue-umbrella", "top_unmatched": [] },
+    { "question": "rainy Saturday", "kind": "matched", "top_id": "blue-umbrella", "top_unmatched": [] },
+    { "question": "hot chocolate", "kind": "matched", "top_id": "blue-umbrella", "top_unmatched": [] },
+    { "question": "suitcase sunset", "kind": "matched", "top_id": "suitcase-note", "top_unmatched": [] },
+    { "question": "brave note", "kind": "matched", "top_id": "suitcase-note", "top_unmatched": [] },
+    { "question": "long trip", "kind": "matched", "top_id": "suitcase-note", "top_unmatched": [] },
+    { "question": "old gate", "kind": "matched", "top_id": "garden-gate", "top_unmatched": [] },
+    { "question": "shared tea", "kind": "matched", "top_id": "garden-gate", "top_unmatched": [] },
+    { "question": "kitchen window", "kind": "matched", "top_id": "mint-window", "top_unmatched": [] },
+    { "question": "mint birthday", "kind": "matched", "top_id": "mint-window", "top_unmatched": ["birthday"] },
+    { "question": "ocean umbrella", "kind": "matched", "top_id": "blue-umbrella", "top_unmatched": ["ocean"] },
+    { "question": "sunset mountain", "kind": "matched", "top_id": "suitcase-note", "top_unmatched": ["mountain"] },
+    { "question": "garden concert", "kind": "matched", "top_id": "garden-gate", "top_unmatched": ["concert"] },
+    { "question": "favorite ocean", "kind": "no_match" },
+    { "question": "purple bicycle", "kind": "no_match" },
+    { "question": "graduation ceremony", "kind": "no_match" },
+    { "question": "piano recital", "kind": "no_match" },
+    { "question": "What about it?", "kind": "insufficient_question" },
+    { "question": "Tell me", "kind": "insufficient_question" },
+    { "question": "how?", "kind": "insufficient_question" },
+    { "question": "Where is it", "kind": "insufficient_question" },
+    { "question": "map", "kind": "matched", "top_id": "garden-gate", "top_unmatched": [] },
+    { "question": "mint", "kind": "matched", "top_id": "mint-window", "top_unmatched": [] },
+    { "question": "Who wrote the suitcase note?", "kind": "matched", "top_id": "suitcase-note", "top_unmatched": ["wrote"] },
+    { "question": "What happened with blue umbrella?", "kind": "matched", "top_id": "blue-umbrella", "top_unmatched": [] }
+  ]
+}

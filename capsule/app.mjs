@@ -2,7 +2,7 @@ import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_AUDIO_BYTES,
   MAX_FILE_BYTES, MAX_MEMORIES, MAX_PHOTO_BYTES, audioFromBytes, openCapsule,
   openDraft, photoFromBytes, recallMemories, suggestMemoryQuestions, sealCapsule, sealDraft,
   createDraftRecoverySealer,
-  validateCapsule, validateDraft } from "./core.mjs?v=b553142ea50ac023405ff9391b58e275c80641438202256283e730c91b0dd0fc";
+  validateCapsule, validateDraft } from "./core.mjs?v=0d9f6b791080ef2272e80f318eaef7e8cb920552bf9a5cea60475e70477bae65";
 
 const $ = id => document.getElementById(id);
 let memories = [];
@@ -969,12 +969,16 @@ function ask() {
         "I could not find that in these written memories. I will not make up an answer."));
       return;
     }
-    answer.append(element("p", "", "Related memories from this capsule:"));
+    const completeWordMatch = result.matches.some(match => !match.unmatchedTerms.length);
+    answer.append(element("p", "", completeWordMatch ? "Related memories from this capsule:" :
+      "Only partial word matches found. These stories may not address every detail in your question:"));
     for (const match of result.matches) {
       const article = element("article");
       article.append(element("small", "", `Memory ${match.index} of ${openedCapsule.memories.length} · ${match.title}`),
-        element("small", "", `Matched words: ${match.matchedTerms.join(", ")}`),
-        element("p", "", match.story));
+        element("small", "", `Matched words: ${match.matchedTerms.join(", ")}`));
+      if (match.unmatchedTerms.length) article.append(element("small", "",
+        `Other question words not found here: ${match.unmatchedTerms.join(", ")}`));
+      article.append(element("p", "", match.story));
       const memory = openedCapsule.memories[match.index - 1];
       if (memory.audio) article.append(voicePlayer(memory));
       answer.append(article);

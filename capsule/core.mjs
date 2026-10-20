@@ -17,7 +17,7 @@ export const MAX_AUDIO_BYTES = 1_000_000;
 export const MAX_PLAINTEXT_BYTES = 20_000_000;
 export const MAX_FILE_BYTES = 27_000_000;
 const ITERATIONS = 310_000;
-const STOP = new Set("a an and are as at be by can did do does for from how i in is it me my of on or our she he the their them they this to was were what when where who why with you your tell show about remember memory memories".split(" "));
+const STOP = new Set("a an and are as at be by can did do does for from has have had how i in is it me my of on or our she he the their them they this to was were what when where who why with you your tell show about remember memory memories happen happened happening".split(" "));
 
 function assertText(value, label, maximum, required = true) {
   if (typeof value !== "string" || value.length > maximum ||
@@ -359,13 +359,14 @@ export function recallMemories(value, question) {
     const when = new Set(terms(memory.when));
     const story = new Set(terms(memory.story));
     const matchedTerms = wanted.filter(word => title.has(word) || when.has(word) || story.has(word));
+    const unmatchedTerms = wanted.filter(word => !matchedTerms.includes(word));
     // Prefer a memory covering more distinct details in the question, then
     // distinguish title/date mentions from story mentions. Never infer an answer.
     const score = matchedTerms.length * 4 + matchedTerms.reduce((sum, word) => sum +
       (title.has(word) ? 3 : 0) + (when.has(word) ? 1 : 0) +
       (story.has(word) ? 1 : 0), 0);
     return { index: index + 1, id: memory.id, title: memory.title,
-      story: memory.story, when: memory.when, score, matchedTerms };
+      story: memory.story, when: memory.when, score, matchedTerms, unmatchedTerms };
   }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, 3);
   return { kind: matches.length ? "matched" : "no_match", matches };
