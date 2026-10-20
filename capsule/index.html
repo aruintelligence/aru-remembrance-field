@@ -113,6 +113,11 @@
     .letter p { white-space:pre-wrap; font:1.2rem/1.7 Georgia,serif; color:#433344; }
     .letter .signature { text-align:right; color:#744962; }
     .cards { display:grid; grid-template-columns:repeat(2,1fr); gap:16px; margin-top:22px; }
+    .story-sequence { margin:15px 0 0; }
+    .story-controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:18px 0 15px; }
+    .story-controls .micro { flex:1; text-align:center; font-weight:700; }
+    .story-stage { max-width:680px; margin:18px auto 0; }
+    .cards[hidden],.story-stage[hidden],.story-controls[hidden] { display:none; }
     .card { overflow:hidden; padding:0 22px 22px; border:1px solid #e3d7d0; border-radius:17px; background:#fffdf9; }
     .card img { display:block; width:calc(100% + 44px); height:215px; margin:0 -22px 18px; object-fit:cover; background:#eee0d7; }
     .card .number { display:block; margin:20px 0 10px; color:#915b76; text-transform:uppercase; letter-spacing:.14em; font-size:.7rem; font-weight:800; }
@@ -158,6 +163,6 @@
     </section>
   </main>
   <footer><div class="wrap">ĀRU Intelligence · Remembrance Capsule is a local product prototype. Encryption protects the file with your passphrase; it does not prove who wrote a story or guarantee the facts are true. <a href="../">Explore the Remembrance Field research</a>.</div></footer>
-  <script type="module" src="./app.mjs?v=1f91f9964965dda936773b317371d63f67bc53bdd8d997ad515dc95f616d44ca"></script>
+  <script type="module" src="./app.mjs?v=0c4178a3570713e3ca596b0f43db3df3ee42a10004c1a009eb865c0877df82c5"></script>
 </body>
 </html>
