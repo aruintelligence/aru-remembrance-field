@@ -115,6 +115,10 @@ test("recall cites stored memories and refuses unmatched or vague questions", ()
   assert.deepEqual(matched.matches.map(item => item.id), ["sample-1"]);
   assert.equal(matched.matches[0].story, gift.memories[0].story);
   assert.deepEqual(matched.matches[0].matchedTerms, ["blue", "umbrella"]);
+  assert.deepEqual(matched.matches[0].unmatchedTerms, []);
+  const partial = recallMemories(gift, "What ocean had the blue umbrella?");
+  assert.equal(partial.matches[0].id, "sample-1");
+  assert.deepEqual(partial.matches[0].unmatchedTerms, ["ocean"]);
   assert.deepEqual(recallMemories(gift, "What is her favorite ocean?"),
     { kind: "no_match", matches: [] });
   assert.deepEqual(recallMemories(gift, "What about it?"),
