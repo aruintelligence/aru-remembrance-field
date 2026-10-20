@@ -1,8 +1,8 @@
 import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_AUDIO_BYTES,
   MAX_FILE_BYTES, MAX_MEMORIES, MAX_PHOTO_BYTES, audioFromBytes, openCapsule,
-  openDraft, photoFromBytes, recallMemories, sealCapsule, sealDraft,
+  openDraft, photoFromBytes, recallMemories, suggestMemoryQuestions, sealCapsule, sealDraft,
   createDraftRecoverySealer,
-  validateCapsule, validateDraft } from "./core.mjs?v=d3b7918deb9e126592791d94ec9759cdcea504abbba5c4614dc8f73495aa82df";
+  validateCapsule, validateDraft } from "./core.mjs?v=c4b5f7c607450d1ce71a7e55d1fc98d0756988fe58d124be3124b716187ca622";
 
 const $ = id => document.getElementById(id);
 let memories = [];
@@ -17,6 +17,15 @@ let recordingTimer = null;
 let recordingRequested = false;
 let captureAttempt = 0;
 const MAX_RECORDING_SECONDS = 30;
+const STORY_PROMPTS = [
+  "What tiny detail would only the two of you recognize?",
+  "What did they say that you still hear in their voice?",
+  "Where were you, and what could you see or hear?",
+  "What ordinary moment became special later?",
+  "What did they teach you without realizing it?",
+  "If a photo existed of this moment, what would be just outside its frame?"
+];
+let storyPromptIndex = 0;
 const RECOVERY_DB = "aru-remembrance-capsule-recovery-v1";
 const RECOVERY_STORE = "encrypted-drafts";
 let recoverySealer = null;
@@ -387,6 +396,17 @@ function showGift(capsule, label) {
   const cards = element("div", "cards");
   openedCapsule.memories.forEach((memory, index) => cards.append(giftCard(memory, index)));
   view.append(letter, heading, cards);
+  const starters = $("question-starters");
+  starters.replaceChildren();
+  for (const { question } of suggestMemoryQuestions(openedCapsule)) {
+    const button = element("button", "button quiet small", question);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      $("memory-question").value = question;
+      ask();
+    });
+    starters.append(button);
+  }
   status("open-status", label);
   $("opened").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ?
     "auto" : "smooth", block: "start" });
@@ -846,6 +866,11 @@ function ask() {
 $("create-tab").addEventListener("click", () => switchTab("create"));
 $("open-tab").addEventListener("click", () => switchTab("open"));
 $("save-memory").addEventListener("click", saveMemory);
+$("next-story-prompt").addEventListener("click", () => {
+  storyPromptIndex = (storyPromptIndex + 1) % STORY_PROMPTS.length;
+  $("story-prompt").textContent = STORY_PROMPTS[storyPromptIndex];
+  $("memory-story").focus();
+});
 $("record-voice").addEventListener("click", startRecording);
 $("stop-recording").addEventListener("click", stopRecording);
 $("discard-recording").addEventListener("click", () => {
