@@ -2,7 +2,7 @@ import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_AUDIO_BYTES,
   MAX_FILE_BYTES, MAX_MEMORIES, MAX_PHOTO_BYTES, audioFromBytes, openCapsule,
   openDraft, photoFromBytes, recallMemories, suggestMemoryQuestions, sealCapsule, sealDraft,
   createDraftRecoverySealer,
-  validateCapsule, validateDraft } from "./core.mjs?v=c4b5f7c607450d1ce71a7e55d1fc98d0756988fe58d124be3124b716187ca622";
+  validateCapsule, validateDraft } from "./core.mjs?v=b553142ea50ac023405ff9391b58e275c80641438202256283e730c91b0dd0fc";
 
 const $ = id => document.getElementById(id);
 let memories = [];
@@ -973,6 +973,7 @@ function ask() {
     for (const match of result.matches) {
       const article = element("article");
       article.append(element("small", "", `Memory ${match.index} of ${openedCapsule.memories.length} · ${match.title}`),
+        element("small", "", `Matched words: ${match.matchedTerms.join(", ")}`),
         element("p", "", match.story));
       const memory = openedCapsule.memories[match.index - 1];
       if (memory.audio) article.append(voicePlayer(memory));
