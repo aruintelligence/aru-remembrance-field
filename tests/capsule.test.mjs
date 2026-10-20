@@ -6,6 +6,7 @@ import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, LEGACY_CAPSULE_FORMAT,
   LEGACY_DRAFT_FORMAT, VOICE_CAPSULE_FORMAT, VOICE_DRAFT_FORMAT,
   MAX_AUDIO_BYTES, MAX_MEMORIES, audioFromBytes,
   openCapsule, openDraft, photoFromBytes, recallMemories, sealCapsule,
+  createDraftRecoverySealer,
   sealDraft, validateCapsule, validateDraft } from
   "../capsule/core.mjs";
 
@@ -206,6 +207,22 @@ test("an unfinished letter and unsaved memory survive an encrypted private check
   await assert.rejects(openCapsule(first, passphrase), /Unable to open/);
   const gift = await sealCapsule(sample(), passphrase);
   await assert.rejects(openDraft(gift, passphrase), /Unable to open/);
+});
+
+test("session recovery creates independently salted, compatible encrypted drafts", async () => {
+  const draft = unfinishedDraft();
+  const phrase = "private recovery phrase 2026";
+  const sealRecovery = await createDraftRecoverySealer(phrase);
+  const first = await sealRecovery(draft);
+  draft.pending.story = "The beach, and then the stars";
+  const second = await sealRecovery(draft);
+  assert.notEqual(first.salt, second.salt);
+  assert.notEqual(first.iv, second.iv);
+  assert.equal(JSON.stringify(second).includes(phrase), false);
+  assert.equal(JSON.stringify(second).includes("the stars"), false);
+  assert.equal((await openDraft(first, phrase)).pending.story, "We found");
+  assert.deepEqual(await openDraft(second, phrase), draft);
+  await assert.rejects(createDraftRecoverySealer("short"), /12–256/);
 });
 
 test("an in-progress edit and its selected photo survive a checkpoint", async () => {
