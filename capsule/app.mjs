@@ -930,6 +930,37 @@ function showSample() {
   showGift(FICTIONAL_SAMPLE, "Fictional written sample · Add your own voice note when creating a gift.");
 }
 
+function waitForActivation(worker) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { cleanup(); reject(Error("activation timeout")); }, 20_000);
+    function cleanup() { clearTimeout(timeout); worker.removeEventListener("statechange", check); }
+    function check() {
+      if (worker.state === "activated") { cleanup(); resolve(); }
+      if (worker.state === "redundant") { cleanup(); reject(Error("installation failed")); }
+    }
+    worker.addEventListener("statechange", check);
+    check();
+  });
+}
+
+function inspectSavedReader(worker) {
+  return new Promise((resolve, reject) => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => { cleanup(); reject(Error("verification timeout")); }, 6_000);
+    function cleanup() {
+      clearTimeout(timeout);
+      channel.port1.onmessage = null;
+      channel.port1.onmessageerror = null;
+      channel.port1.close();
+      channel.port2.close();
+    }
+    channel.port1.onmessage = event => { cleanup(); resolve(event.data); };
+    channel.port1.onmessageerror = () => { cleanup(); reject(Error("invalid verification reply")); };
+    try { worker.postMessage({ type: "aru-capsule-reader-verify" }, [channel.port2]); }
+    catch (error) { cleanup(); reject(error); }
+  });
+}
+
 async function saveOfflineReader() {
   const button = $("save-offline-reader");
   if (!navigator.serviceWorker) {
@@ -940,17 +971,34 @@ async function saveOfflineReader() {
   status("offline-status", "Saving the reader code on this device…");
   let timeout;
   try {
-    const registration = await navigator.serviceWorker.register("./offline-worker.js",
-      { scope: "./", updateViaCache: "none" });
-    // ready stays pending if installation fails, so bound the wait and report a failure.
-    const active = await Promise.race([
-      navigator.serviceWorker.ready.then(ready => ready.active),
-      new Promise((_, reject) => { timeout = setTimeout(() => reject(Error("timeout")), 20_000); })
-    ]);
-    if (!active) throw Error("no active worker");
-    status("offline-status", "Reader saved on this device. Bookmark this page and keep the sealed file and passphrase separately. Your browser may clear offline data.");
+    const verified = (async () => {
+      // This request is not a navigation, so the worker cannot substitute its
+      // older cached page. Compare the active offline copy with the live release.
+      const canonical = new URL("./", import.meta.url);
+      const page = await fetch(canonical, { cache: "reload" });
+      if (!page.ok || page.url !== canonical.href) throw Error("current page unavailable");
+      const bytes = await page.arrayBuffer();
+      const htmlDigest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+        .map(byte => byte.toString(16).padStart(2, "0")).join("");
+      const registration = await navigator.serviceWorker.register("./offline-worker.js",
+        { scope: "./", updateViaCache: "none" });
+      if (registration.active && !registration.installing && !registration.waiting) {
+        await registration.update();
+      }
+      const installing = registration.installing || registration.waiting;
+      if (installing) await waitForActivation(installing);
+      const active = installing || registration.active ||
+        (await navigator.serviceWorker.ready).active;
+      if (!active) throw Error("no active worker");
+      const report = await inspectSavedReader(active);
+      if (!report?.ok || report.htmlDigest !== htmlDigest ||
+          report.appUrl !== import.meta.url) throw Error("saved reader is not current");
+    })();
+    await Promise.race([verified,
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(Error("timeout")), 25_000); })]);
+    status("offline-status", "Verified reader saved on this device: this page and its code match the current release. Bookmark this page and keep the sealed file and passphrase separately. Your browser may clear offline data.");
   } catch {
-    status("offline-status", "Could not save the reader here. Check your connection and browser settings, then try again.", true);
+    status("offline-status", "Could not verify a current offline reader here. Check your connection and browser settings, reload this page, then try again.", true);
   } finally {
     clearTimeout(timeout);
     button.disabled = false;

@@ -1,13 +1,13 @@
 // An opt-in offline copy of the reader code. Never cache user content or requests
 // outside this exact, versioned app shell. Online navigations check for a fresh
 // release; the digest-verified copy is a fallback when the network is unavailable.
-const CACHE_NAME = "aru-capsule-reader-85fb322cd5aceb45a38eb469cde3f5c38382c94bd6802239aaa2f4f54bdb372c";
+const CACHE_NAME = "aru-capsule-reader-35d1e72ab9b424137925f9d9eb235e2e9ebbb40b6f84c577c94606ea5968c447";
 const SHELL = [
   "./",
-  "./app.mjs?v=1e64f5b8dc36ab7a47e4a54ee608b34eda8daf28c37b339982d30760dbaa9bf6",
+  "./app.mjs?v=1ddfdb3e0d636d5c1c365c96584c2ed755e51e43db6adad99bdd514f08b45b6e",
   "./core.mjs?v=0d9f6b791080ef2272e80f318eaef7e8cb920552bf9a5cea60475e70477bae65"
 ];
-const DIGESTS = ["aa21d807da5fb5d5033b2892307dd9370d73504bf843213551534a53bb72f289", "1e64f5b8dc36ab7a47e4a54ee608b34eda8daf28c37b339982d30760dbaa9bf6", "0d9f6b791080ef2272e80f318eaef7e8cb920552bf9a5cea60475e70477bae65"];
+const DIGESTS = ["9f1d2374f26ad3c17db32c5bbed6050bfd935285dc58aefae1232f4a50f07ebb", "1ddfdb3e0d636d5c1c365c96584c2ed755e51e43db6adad99bdd514f08b45b6e", "0d9f6b791080ef2272e80f318eaef7e8cb920552bf9a5cea60475e70477bae65"];
 const PREFIX = "aru-capsule-reader-";
 const absolute = path => new URL(path, self.registration.scope).href;
 
@@ -21,6 +21,19 @@ async function verify(cache) {
     if (hash !== DIGESTS[index]) throw Error("Offline reader assets did not match this release");
   }
 }
+
+self.addEventListener("message", event => {
+  if (event.data?.type !== "aru-capsule-reader-verify" || !event.ports?.[0]) return;
+  const reply = event.ports[0];
+  event.waitUntil((async () => {
+    try {
+      await verify(await caches.open(CACHE_NAME));
+      reply.postMessage({ ok: true, htmlDigest: DIGESTS[0], appUrl: absolute(SHELL[1]) });
+    } catch {
+      reply.postMessage({ ok: false });
+    }
+  })());
+});
 
 self.addEventListener("install", event => {
   event.waitUntil((async () => {
