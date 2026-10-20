@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, LEGACY_CAPSULE_FORMAT,
   LEGACY_DRAFT_FORMAT, VOICE_CAPSULE_FORMAT, VOICE_DRAFT_FORMAT,
   MAX_AUDIO_BYTES, MAX_MEMORIES, audioFromBytes,
-  openCapsule, openDraft, photoFromBytes, recallMemories, sealCapsule,
+  openCapsule, openDraft, photoFromBytes, recallMemories, suggestMemoryQuestions, sealCapsule,
   createDraftRecoverySealer,
   sealDraft, validateCapsule, validateDraft } from
   "../capsule/core.mjs";
@@ -119,6 +119,23 @@ test("recall cites stored memories and refuses unmatched or vague questions", ()
   assert.deepEqual(recallMemories(gift, "What about it?"),
     { kind: "insufficient_question", matches: [] });
   assert.equal(gift.format, CAPSULE_FORMAT);
+});
+
+test("suggested questions lead to authored source memories, including generic titles", () => {
+  const gift = sample();
+  const suggestions = suggestMemoryQuestions(gift);
+  assert.equal(suggestions.length, 3);
+  for (const { id, question } of suggestions) {
+    assert.ok(gift.memories.some(memory => memory.id === id));
+    assert.ok(recallMemories(gift, question).matches.some(memory => memory.id === id));
+  }
+  const generic = sample();
+  generic.memories[0].title = "Our memory";
+  const [first] = suggestMemoryQuestions(generic);
+  assert.equal(first.id, "sample-1");
+  assert.ok(first.question.includes("walked") || first.question.includes("home") ||
+    first.question.includes("under") || first.question.includes("blue"));
+  assert.throws(() => suggestMemoryQuestions({ ...generic, memories: [] }), /Invalid capsule/);
 });
 
 function unfinishedDraft() {
