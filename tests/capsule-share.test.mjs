@@ -119,6 +119,9 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
     assert.equal(copied[0].includes(privateText), false);
   }
   assert.match(copied[0], /passphrase I give you separately/);
+  const code = el("share-file-code").textContent;
+  assert.match(code, /^[A-F0-9]{16}$/);
+  assert.match(copied[0], new RegExp(code));
   await el("prepare-share").click();
   assert.equal(el("share-ready").hidden, false);
   el("share-file").click();
@@ -132,6 +135,13 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
   assert.equal(contents.includes("blue umbrella"), false);
   const opened = await openCapsule(contents, passphrase);
   assert.deepEqual(opened.memories, FICTIONAL_SAMPLE.memories);
+  el("capsule-file").files = [file];
+  el("open-passphrase").value = passphrase;
+  await el("open-capsule").click();
+  assert.equal(el("opened-file-code").hidden, false);
+  assert.equal(el("opened-file-code-value").textContent, code);
+  el("sample").click();
+  assert.equal(el("opened-file-code").hidden, true, "sample cannot show a real file code");
 
   const secondRow = el("memory-list").children[1];
   secondRow.children[1].children[0].click(); // Move the garden before the umbrella.

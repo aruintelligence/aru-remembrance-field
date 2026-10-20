@@ -405,6 +405,7 @@ function pauseAudioWithin(node) {
 function showGift(capsule, label) {
   openedCapsule = validateCapsule(capsule);
   $("opened").hidden = false;
+  $("opened-file-code").hidden = true;
   $("answer").replaceChildren();
   $("memory-question").value = "";
   const view = $("gift-view");
@@ -782,12 +783,19 @@ function preparedGiftIsCurrent() {
 function showPreparedGift() {
   $("share-ready").hidden = false;
   $("share-filename").textContent = preparedGift.filename;
+  $("share-file-code").textContent = preparedGift.code;
   let canShare = false;
   try { canShare = !!preparedGift.file && !!navigator.share &&
     !!navigator.canShare?.({ files: [preparedGift.file] }); }
   catch { /* The download option remains available. */ }
   $("share-file").hidden = !canShare;
   $("share-fallback").hidden = canShare;
+}
+
+async function fileMatchCode(contents) {
+  const bytes = new TextEncoder().encode(contents);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...digest.slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
 async function sealGift(download) {
@@ -807,16 +815,17 @@ async function sealGift(download) {
     preparedGift = null;
     $("share-ready").hidden = true;
     const envelope = await sealCapsule(capsule, passphrase);
+    const filename = `remembrance-capsule-${new Date().toISOString().slice(0, 10)}.json`;
+    const contents = JSON.stringify(envelope, null, 2) + "\n";
+    const code = await fileMatchCode(contents);
     if (snapshot !== giftSnapshot() || hasUnfinishedMemory() || recordingRequested || recorder) {
       throw Error("The gift changed while sealing. Seal it again to include the latest edits.");
     }
-    const filename = `remembrance-capsule-${new Date().toISOString().slice(0, 10)}.json`;
-    const contents = JSON.stringify(envelope, null, 2) + "\n";
     const file = typeof File === "function" ?
       new File([contents], filename, { type: "application/json" }) : null;
     const blob = file || new Blob([contents], { type: "application/json" });
     if (blob.size > MAX_FILE_BYTES) throw Error("This gift exceeds the 27 MB file limit.");
-    preparedGift = { file, blob, filename, snapshot };
+    preparedGift = { file, blob, filename, snapshot, code };
     $("passphrase").value = "";
     $("confirm-passphrase").value = "";
     showPreparedGift();
@@ -865,7 +874,8 @@ async function copyOpeningSteps() {
   const steps = `To open a Remembrance Capsule:\n` +
     `1. Keep the encrypted .json file on your device.\n` +
     `2. Open the capsule reader: ${reader}\n` +
-    `3. Choose “Open a gift,” select the file, and enter the passphrase I give you separately.\n\n` +
+    `3. Choose “Open a gift,” select the file, and enter the passphrase I give you separately.\n` +
+    `4. Check that the file match code shown after opening is ${preparedGift.code}.\n\n` +
     `Keep the file and passphrase private.`;
   try {
     await navigator.clipboard.writeText(steps);
@@ -883,8 +893,12 @@ async function openGift() {
   try {
     const file = $("capsule-file").files[0];
     if (!file || file.size > MAX_FILE_BYTES) throw Error("Choose a sealed capsule JSON file under 27 MB.");
-    const capsule = await openCapsule(await file.text(), $("open-passphrase").value);
+    const contents = await file.text();
+    const capsule = await openCapsule(contents, $("open-passphrase").value);
+    const code = await fileMatchCode(contents);
     showGift(capsule, "Capsule opened locally. The file was not uploaded.");
+    $("opened-file-code-value").textContent = code;
+    $("opened-file-code").hidden = false;
   } catch (error) { status("open-status", error.message, true); }
   finally { button.disabled = false; $("open-passphrase").value = ""; }
 }
