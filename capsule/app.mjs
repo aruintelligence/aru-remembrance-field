@@ -1003,6 +1003,19 @@ for (const id of ["memory-photo", "memory-audio"]) {
   $(id).addEventListener("change", () => { invalidatePreparedGift(); scheduleRecovery(); });
 }
 $("open-capsule").addEventListener("click", openGift);
+window.addEventListener("afterprint", () => document.body.classList.remove("capsule-print"));
+$("print-keepsake").addEventListener("click", () => {
+  if (!openedCapsule) return;
+  pauseAudioWithin($("gift-view"));
+  document.body.classList.add("capsule-print");
+  try {
+    window.print();
+    status("open-status", "Choose a printer or save as PDF. A PDF copy is unencrypted; keep it private.");
+  } catch {
+    document.body.classList.remove("capsule-print");
+    status("open-status", "Printing is unavailable in this browser. The digital gift is still open here.", true);
+  }
+});
 $("edit-opened").addEventListener("click", () => {
   if (!openedCapsule) return;
   if (hasUnsavedWork() && !confirm("Replace the unfinished work currently on this page with an editable copy of this gift?")) return;

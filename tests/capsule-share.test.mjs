@@ -12,7 +12,10 @@ class Node {
     this.disabled = false;
     this.style = {};
     this.listeners = new Map();
-    this.classList = { toggle() {} };
+    const classes = new Set();
+    this.classList = { toggle(name) { classes.has(name) ? classes.delete(name) : classes.add(name); },
+      add: name => classes.add(name), remove: name => classes.delete(name),
+      contains: name => classes.has(name) };
   }
   addEventListener(event, callback) { this.listeners.set(event, callback); }
   click() {
@@ -42,7 +45,13 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
     createElement: () => new Node(),
     body: new Node()
   };
-  globalThis.window = { addEventListener() {} };
+  const windowListeners = new Map();
+  let printCount = 0;
+  globalThis.window = { addEventListener: (type, callback) => windowListeners.set(type, callback),
+    print: () => {
+      assert.equal(document.body.classList.contains("capsule-print"), true);
+      printCount++;
+    } };
   globalThis.matchMedia = () => ({ matches: true });
   const shares = [];
   let supported = true;
@@ -55,7 +64,13 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
       } } });
   await import("../capsule/app.mjs");
   const el = id => document.getElementById(id);
+  el("print-keepsake").click();
+  assert.equal(printCount, 0, "there is no printable gift before opening");
   el("hero-sample").click();
+  el("print-keepsake").click();
+  assert.equal(printCount, 1);
+  windowListeners.get("afterprint")();
+  assert.equal(document.body.classList.contains("capsule-print"), false);
   const [,, sequence, cards] = el("gift-view").children;
   const [toggle, controls, stage] = sequence.children;
   const [previous, progress, next] = controls.children;
