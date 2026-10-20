@@ -246,6 +246,25 @@ function renderMemoryList() {
       element("span", "", [memory.when, memory.photo ? "Photo included" : "",
         memory.audio ? "Voice included" : ""].filter(Boolean).join(" · ") || "Story included"));
     const actions = element("div", "actions");
+    for (const [direction, label] of [[-1, "Move up"], [1, "Move down"]]) {
+      const move = element("button", "button quiet small", label);
+      move.type = "button";
+      move.disabled = index + direction < 0 || index + direction >= memories.length;
+      move.setAttribute("aria-label", `${label}: ${memory.title}`);
+      move.addEventListener("click", () => {
+        if (editingIndex !== null || recordingRequested || recorder) {
+          status("create-status", "Save or cancel the current edit and stop recording before moving a memory.", true);
+          return;
+        }
+        [memories[index], memories[index + direction]] =
+          [memories[index + direction], memories[index]];
+        invalidatePreparedGift();
+        renderMemoryList();
+        status("create-status", `Moved “${memory.title}” to position ${index + direction + 1}. Save a new gift to keep this order.`);
+        scheduleRecovery();
+      });
+      actions.append(move);
+    }
     const edit = element("button", "button quiet small", "Edit");
     edit.type = "button";
     edit.setAttribute("aria-label", `Edit ${memory.title}`);
@@ -379,12 +398,17 @@ function voicePlayer(memory) {
   return player;
 }
 
+function pauseAudioWithin(node) {
+  for (const audio of node.querySelectorAll?.("audio") ?? []) audio.pause();
+}
+
 function showGift(capsule, label) {
   openedCapsule = validateCapsule(capsule);
   $("opened").hidden = false;
   $("answer").replaceChildren();
   $("memory-question").value = "";
   const view = $("gift-view");
+  pauseAudioWithin(view);
   view.replaceChildren();
   const letter = element("div", "letter");
   letter.append(element("span", "overline", "A letter, kept for you"),
@@ -395,7 +419,49 @@ function showGift(capsule, label) {
   heading.style.marginTop = "32px";
   const cards = element("div", "cards");
   openedCapsule.memories.forEach((memory, index) => cards.append(giftCard(memory, index)));
-  view.append(letter, heading, cards);
+  const sequence = element("div", "story-sequence");
+  const toggle = element("button", "button secondary small", "Read one at a time");
+  toggle.type = "button";
+  toggle.setAttribute("aria-pressed", "false");
+  const controls = element("div", "story-controls");
+  controls.hidden = true;
+  const previous = element("button", "button quiet small", "Previous memory");
+  const next = element("button", "button quiet small", "Next memory");
+  previous.type = next.type = "button";
+  const progress = element("span", "micro");
+  progress.setAttribute("role", "status");
+  progress.setAttribute("aria-live", "polite");
+  controls.append(previous, progress, next);
+  const stage = element("div", "story-stage");
+  stage.hidden = true;
+  let storyIndex = 0;
+  const displayStory = () => {
+    pauseAudioWithin(stage);
+    const memory = openedCapsule.memories[storyIndex];
+    stage.replaceChildren(giftCard(memory, storyIndex));
+    progress.textContent = `${storyIndex + 1} of ${openedCapsule.memories.length} · ${memory.title}`;
+    previous.disabled = storyIndex === 0;
+    next.disabled = storyIndex === openedCapsule.memories.length - 1;
+  };
+  toggle.addEventListener("click", () => {
+    const reading = cards.hidden === false;
+    if (reading) pauseAudioWithin(cards);
+    cards.hidden = reading;
+    stage.hidden = controls.hidden = !reading;
+    toggle.textContent = reading ? "Show all memories" : "Read one at a time";
+    toggle.setAttribute("aria-pressed", String(reading));
+    if (reading) { storyIndex = 0; displayStory(); }
+    else {
+      pauseAudioWithin(stage);
+      stage.replaceChildren();
+    }
+  });
+  previous.addEventListener("click", () => { if (storyIndex > 0) { storyIndex--; displayStory(); } });
+  next.addEventListener("click", () => {
+    if (storyIndex < openedCapsule.memories.length - 1) { storyIndex++; displayStory(); }
+  });
+  sequence.append(toggle, controls, stage);
+  view.append(letter, heading, sequence, cards);
   const starters = $("question-starters");
   starters.replaceChildren();
   for (const { question } of suggestMemoryQuestions(openedCapsule)) {
