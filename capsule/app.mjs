@@ -11,6 +11,7 @@ let openedCapsule = null;
 let pendingPhoto = null;
 let pendingAudio = null;
 let preparedGift = null;
+let fileSelectionVersion = 0;
 let recorder = null;
 let recordingStream = null;
 let recordingTimer = null;
@@ -798,6 +799,26 @@ async function fileMatchCode(contents) {
   return [...digest.slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
+async function inspectSelectedFile() {
+  const version = ++fileSelectionVersion;
+  const selected = $("selected-file-code");
+  selected.hidden = true;
+  const file = $("capsule-file").files[0];
+  if (!file) return;
+  if (file.size > MAX_FILE_BYTES) {
+    status("open-status", "Choose a sealed capsule JSON file under 27 MB.", true);
+    return;
+  }
+  try {
+    const code = await fileMatchCode(await file.text());
+    if (version !== fileSelectionVersion || $("capsule-file").files[0] !== file) return;
+    $("selected-file-code-value").textContent = code;
+    selected.hidden = false;
+  } catch {
+    if (version === fileSelectionVersion) status("open-status", "Could not read this file. Choose it again.", true);
+  }
+}
+
 async function sealGift(download) {
   $("download").disabled = true;
   $("prepare-share").disabled = true;
@@ -875,7 +896,7 @@ async function copyOpeningSteps() {
     `1. Keep the encrypted .json file on your device.\n` +
     `2. Open the capsule reader: ${reader}\n` +
     `3. Choose “Open a gift,” select the file, and enter the passphrase I give you separately.\n` +
-    `4. Check that the file match code shown after opening is ${preparedGift.code}.\n\n` +
+    `4. Before entering the passphrase, check that the selected file match code is ${preparedGift.code}.\n\n` +
     `Keep the file and passphrase private.`;
   try {
     await navigator.clipboard.writeText(steps);
@@ -896,6 +917,7 @@ async function openGift() {
     const contents = await file.text();
     const capsule = await openCapsule(contents, $("open-passphrase").value);
     const code = await fileMatchCode(contents);
+    if ($("capsule-file").files[0] !== file) throw Error("Selected file changed while opening. Open the new file instead.");
     showGift(capsule, "Capsule opened locally. The file was not uploaded.");
     $("opened-file-code-value").textContent = code;
     $("opened-file-code").hidden = false;
@@ -1034,6 +1056,7 @@ for (const id of ["memory-photo", "memory-audio"]) {
   $(id).addEventListener("change", () => { invalidatePreparedGift(); scheduleRecovery(); });
 }
 $("open-capsule").addEventListener("click", openGift);
+$("capsule-file").addEventListener("change", inspectSelectedFile);
 window.addEventListener("afterprint", () => document.body.classList.remove("capsule-print"));
 $("print-keepsake").addEventListener("click", () => {
   if (!openedCapsule) return;
