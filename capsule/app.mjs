@@ -2,7 +2,7 @@ import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, MAX_AUDIO_BYTES,
   MAX_FILE_BYTES, MAX_MEMORIES, MAX_PHOTO_BYTES, audioFromBytes, openCapsule,
   openDraft, photoFromBytes, recallMemories, suggestMemoryQuestions, sealCapsule, sealDraft,
   createDraftRecoverySealer,
-  validateCapsule, validateDraft } from "./core.mjs?v=0d9f6b791080ef2272e80f318eaef7e8cb920552bf9a5cea60475e70477bae65";
+  validateCapsule, validateDraft } from "./core.mjs?v=3a2739f8b636f7d9f812eeaf3ce39ea86a11886f80a3430c789f2f43be1d05bb";
 
 const $ = id => document.getElementById(id);
 let memories = [];
@@ -62,7 +62,8 @@ function element(tag, className, content) {
 function hasUnfinishedMemory() {
   return editingIndex !== null || pendingPhoto || pendingAudio ||
     $("memory-photo").files[0] || $("memory-audio").files[0] ||
-    ["memory-title", "memory-when", "memory-story"].some(id => $(id).value.trim());
+    ["memory-title", "memory-when", "memory-story", "memory-voice-words"]
+      .some(id => $(id).value.trim());
 }
 
 function giftSnapshot() {
@@ -218,7 +219,8 @@ async function startRecording() {
 
 function clearMemoryForm() {
   abortRecording();
-  for (const id of ["memory-title", "memory-when", "memory-story", "memory-photo", "memory-audio"]) {
+  for (const id of ["memory-title", "memory-when", "memory-story", "memory-voice-words",
+    "memory-photo", "memory-audio"]) {
     $(id).value = "";
   }
   editingIndex = null;
@@ -245,7 +247,8 @@ function renderMemoryList() {
     const info = element("div");
     info.append(element("strong", "", `${index + 1}. ${memory.title}`),
       element("span", "", [memory.when, memory.photo ? "Photo included" : "",
-        memory.audio ? "Voice included" : ""].filter(Boolean).join(" · ") || "Story included"));
+        memory.audio ? "Voice included" : "",
+        memory.voiceWords ? "Written voice words included" : ""].filter(Boolean).join(" · ") || "Story included"));
     const actions = element("div", "actions");
     for (const [direction, label] of [[-1, "Move up"], [1, "Move down"]]) {
       const move = element("button", "button quiet small", label);
@@ -280,6 +283,7 @@ function renderMemoryList() {
       $("memory-title").value = memory.title;
       $("memory-when").value = memory.when;
       $("memory-story").value = memory.story;
+      $("memory-voice-words").value = memory.voiceWords ?? "";
       $("memory-photo").value = "";
       $("memory-audio").value = "";
       showAudioPreview(memory.audio);
@@ -343,7 +347,8 @@ async function saveMemory() {
     }
     const candidate = { id: editingIndex === null ? crypto.randomUUID() : memories[editingIndex].id,
       title: $("memory-title").value, when: $("memory-when").value,
-      story: $("memory-story").value, photo, audio };
+      story: $("memory-story").value, voiceWords: $("memory-voice-words").value,
+      photo, audio };
     const check = validateCapsule({ format: CAPSULE_FORMAT,
       created_at: new Date().toISOString(), recipient: "Recipient", from: "Sender",
       letter: "A letter", memories: [candidate] });
@@ -375,11 +380,17 @@ function giftCard(memory, index) {
   if (memory.when) card.append(element("span", "when", memory.when));
   card.append(element("p", "", memory.story));
   if (memory.audio) card.append(voicePlayer(memory));
+  if (memory.voiceWords) {
+    const written = element("div", "voice-words");
+    written.append(element("strong", "", "Written words accompanying this memory"),
+      element("p", "", memory.voiceWords));
+    card.append(written);
+  }
   const copy = element("button", "button quiet small", "Copy this story");
   copy.type = "button";
   copy.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(`${memory.title}\n${memory.when ? `${memory.when}\n` : ""}${memory.story}`);
+      await navigator.clipboard.writeText(`${memory.title}\n${memory.when ? `${memory.when}\n` : ""}${memory.story}${memory.voiceWords ? `\nWritten words:\n${memory.voiceWords}` : ""}`);
       status("open-status", `Copied “${memory.title}”.`);
     } catch { status("open-status", "Copy is unavailable in this browser.", true); }
   });
@@ -519,7 +530,8 @@ async function checkpoint() {
     recipient: $("recipient").value, from: $("from").value, letter: $("letter").value,
     memories, editing_index: editingIndex,
     pending: { title: $("memory-title").value, when: $("memory-when").value,
-      story: $("memory-story").value, photo, audio } });
+      story: $("memory-story").value, voiceWords: $("memory-voice-words").value,
+      photo, audio } });
   pendingPhoto = photo;
   pendingAudio = audio;
   return result;
@@ -723,7 +735,8 @@ function hasUnsavedWork() {
   return recordingRequested || !!recorder || memories.length > 0 ||
     pendingPhoto !== null || pendingAudio !== null ||
     $("memory-photo").files.length > 0 || $("memory-audio").files.length > 0 ||
-    ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story"]
+    ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story",
+      "memory-voice-words"]
       .some(id => $(id).value.trim());
 }
 
@@ -740,6 +753,7 @@ function applyRestoredDraft(restored) {
   $("memory-title").value = restored.pending.title;
   $("memory-when").value = restored.pending.when;
   $("memory-story").value = restored.pending.story;
+  $("memory-voice-words").value = restored.pending.voiceWords ?? "";
   $("memory-photo").value = "";
   $("memory-audio").value = "";
   $("passphrase").value = "";
@@ -1027,6 +1041,8 @@ function ask() {
       if (match.unmatchedTerms.length) article.append(element("small", "",
         `Other question words not found here: ${match.unmatchedTerms.join(", ")}`));
       article.append(element("p", "", match.story));
+      if (match.voiceWords) article.append(element("p", "voice-words-evidence",
+        `Written words: ${match.voiceWords}`));
       const memory = openedCapsule.memories[match.index - 1];
       if (memory.audio) article.append(voicePlayer(memory));
       answer.append(article);
@@ -1102,7 +1118,8 @@ $("prepare-share").addEventListener("click", () => sealGift(false));
 $("share-file").addEventListener("click", sharePreparedGift);
 $("download-prepared").addEventListener("click", downloadPreparedGift);
 $("copy-opening-steps").addEventListener("click", copyOpeningSteps);
-for (const id of ["recipient", "from", "letter", "memory-title", "memory-when", "memory-story"]) {
+for (const id of ["recipient", "from", "letter", "memory-title", "memory-when",
+  "memory-story", "memory-voice-words"]) {
   $(id).addEventListener("input", () => { invalidatePreparedGift(); scheduleRecovery(); });
 }
 for (const id of ["memory-photo", "memory-audio"]) {
