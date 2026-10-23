@@ -7,10 +7,14 @@ export const VOICE_CAPSULE_FORMAT = "aru-remembrance-capsule/2";
 export const VOICE_ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/2";
 export const VOICE_DRAFT_FORMAT = "aru-remembrance-capsule-draft/2";
 export const VOICE_DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/2";
-export const CAPSULE_FORMAT = "aru-remembrance-capsule/3";
-export const ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/3";
-export const DRAFT_FORMAT = "aru-remembrance-capsule-draft/3";
-export const DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/3";
+export const WEBM_CAPSULE_FORMAT = "aru-remembrance-capsule/3";
+export const WEBM_ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/3";
+export const WEBM_DRAFT_FORMAT = "aru-remembrance-capsule-draft/3";
+export const WEBM_DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/3";
+export const CAPSULE_FORMAT = "aru-remembrance-capsule/4";
+export const ENVELOPE_FORMAT = "aru-remembrance-capsule-sealed/4";
+export const DRAFT_FORMAT = "aru-remembrance-capsule-draft/4";
+export const DRAFT_ENVELOPE_FORMAT = "aru-remembrance-capsule-draft-sealed/4";
 export const MAX_MEMORIES = 8;
 export const MAX_PHOTO_BYTES = 600_000;
 export const MAX_AUDIO_BYTES = 1_000_000;
@@ -146,7 +150,8 @@ function validateAudio(value, allowWebm) {
 
 export function validateCapsule(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-      ![CAPSULE_FORMAT, VOICE_CAPSULE_FORMAT, LEGACY_CAPSULE_FORMAT].includes(value.format) ||
+      ![CAPSULE_FORMAT, WEBM_CAPSULE_FORMAT, VOICE_CAPSULE_FORMAT,
+        LEGACY_CAPSULE_FORMAT].includes(value.format) ||
       !Array.isArray(value.memories) ||
       value.memories.length < 1 || value.memories.length > MAX_MEMORIES) {
     throw new Error("Invalid capsule");
@@ -158,6 +163,7 @@ export function validateCapsule(value) {
   const ids = new Set();
   const memories = value.memories.map((item, index) =>
     validateMemory(item, index, ids, value.format !== LEGACY_CAPSULE_FORMAT,
+      [CAPSULE_FORMAT, WEBM_CAPSULE_FORMAT].includes(value.format),
       value.format === CAPSULE_FORMAT));
   const capsule = { format: value.format, created_at: value.created_at,
     recipient, from, letter, memories };
@@ -173,7 +179,7 @@ function assertTimestamp(value, label) {
       Number.isNaN(Date.parse(value))) throw new Error(`Invalid ${label}`);
 }
 
-function validateMemory(item, index, ids, withAudio, allowWebm) {
+function validateMemory(item, index, ids, withAudio, allowWebm, withVoiceWords) {
   if (!item || typeof item !== "object" || Array.isArray(item) ||
       typeof item.id !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(item.id) ||
       ids.has(item.id)) throw new Error(`Invalid memory ${index + 1}`);
@@ -187,6 +193,8 @@ function validateMemory(item, index, ids, withAudio, allowWebm) {
     photo: validatePhoto(item.photo ?? null)
   };
   if (withAudio) memory.audio = validateAudio(item.audio ?? null, allowWebm);
+  if (withVoiceWords) memory.voiceWords = assertText(item.voiceWords ?? "",
+    "written voice words", 1200, false);
   return memory;
 }
 
@@ -194,14 +202,16 @@ function currentCapsule(value) {
   const validated = validateCapsule(value);
   if (validated.format === CAPSULE_FORMAT) return validated;
   return validateCapsule({ ...validated, format: CAPSULE_FORMAT,
-    memories: validated.memories.map(memory => ({ ...memory, audio: memory.audio ?? null })) });
+    memories: validated.memories.map(memory => ({ ...memory, audio: memory.audio ?? null,
+      voiceWords: "" })) });
 }
 
 // A checkpoint accepts unfinished writing, including a memory currently being edited.
 // It is a separate encrypted format and cannot be mistaken for a finished gift.
 export function validateDraft(value) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-      ![DRAFT_FORMAT, VOICE_DRAFT_FORMAT, LEGACY_DRAFT_FORMAT].includes(value.format) ||
+      ![DRAFT_FORMAT, WEBM_DRAFT_FORMAT, VOICE_DRAFT_FORMAT,
+        LEGACY_DRAFT_FORMAT].includes(value.format) ||
       !Array.isArray(value.memories) ||
       value.memories.length > MAX_MEMORIES || !value.pending ||
       typeof value.pending !== "object" || Array.isArray(value.pending)) {
@@ -211,7 +221,9 @@ export function validateDraft(value) {
   const ids = new Set();
   const withAudio = value.format !== LEGACY_DRAFT_FORMAT;
   const memories = value.memories.map((item, index) =>
-    validateMemory(item, index, ids, withAudio, value.format === DRAFT_FORMAT));
+    validateMemory(item, index, ids, withAudio,
+      [DRAFT_FORMAT, WEBM_DRAFT_FORMAT].includes(value.format),
+      value.format === DRAFT_FORMAT));
   if (!withAudio && value.pending.audio != null) throw new Error("Invalid pending audio");
   const editingIndex = value.editing_index;
   if (editingIndex !== null && (!Number.isInteger(editingIndex) ||
@@ -230,7 +242,9 @@ export function validateDraft(value) {
     }
   };
   if (withAudio) draft.pending.audio = validateAudio(value.pending.audio ?? null,
-    value.format === DRAFT_FORMAT);
+    [DRAFT_FORMAT, WEBM_DRAFT_FORMAT].includes(value.format));
+  if (value.format === DRAFT_FORMAT) draft.pending.voiceWords =
+    draftText(value.pending.voiceWords ?? "", "pending written voice words", 1200);
   if (new TextEncoder().encode(JSON.stringify(draft)).length > MAX_PLAINTEXT_BYTES) {
     throw new Error("Draft exceeds size limit");
   }
@@ -241,8 +255,10 @@ function currentDraft(value) {
   const validated = validateDraft(value);
   if (validated.format === DRAFT_FORMAT) return validated;
   return validateDraft({ ...validated, format: DRAFT_FORMAT,
-    memories: validated.memories.map(memory => ({ ...memory, audio: memory.audio ?? null })),
-    pending: { ...validated.pending, audio: validated.pending.audio ?? null } });
+    memories: validated.memories.map(memory => ({ ...memory, audio: memory.audio ?? null,
+      voiceWords: "" })),
+    pending: { ...validated.pending, audio: validated.pending.audio ?? null,
+      voiceWords: "" } });
 }
 
 function passphraseIsValid(passphrase) {
@@ -332,6 +348,7 @@ export async function openCapsule(input, passphrase) {
   return openValue(input, passphrase, {
     [LEGACY_ENVELOPE_FORMAT]: LEGACY_CAPSULE_FORMAT,
     [VOICE_ENVELOPE_FORMAT]: VOICE_CAPSULE_FORMAT,
+    [WEBM_ENVELOPE_FORMAT]: WEBM_CAPSULE_FORMAT,
     [ENVELOPE_FORMAT]: CAPSULE_FORMAT
   }, validateCapsule);
 }
@@ -340,6 +357,7 @@ export async function openDraft(input, passphrase) {
   return openValue(input, passphrase, {
     [LEGACY_DRAFT_ENVELOPE_FORMAT]: LEGACY_DRAFT_FORMAT,
     [VOICE_DRAFT_ENVELOPE_FORMAT]: VOICE_DRAFT_FORMAT,
+    [WEBM_DRAFT_ENVELOPE_FORMAT]: WEBM_DRAFT_FORMAT,
     [DRAFT_ENVELOPE_FORMAT]: DRAFT_FORMAT
   }, validateDraft);
 }
@@ -358,15 +376,18 @@ export function recallMemories(value, question) {
     const title = new Set(terms(memory.title));
     const when = new Set(terms(memory.when));
     const story = new Set(terms(memory.story));
-    const matchedTerms = wanted.filter(word => title.has(word) || when.has(word) || story.has(word));
+    const voiceWords = new Set(terms(memory.voiceWords ?? ""));
+    const matchedTerms = wanted.filter(word => title.has(word) || when.has(word) ||
+      story.has(word) || voiceWords.has(word));
     const unmatchedTerms = wanted.filter(word => !matchedTerms.includes(word));
     // Prefer a memory covering more distinct details in the question, then
     // distinguish title/date mentions from story mentions. Never infer an answer.
     const score = matchedTerms.length * 4 + matchedTerms.reduce((sum, word) => sum +
       (title.has(word) ? 3 : 0) + (when.has(word) ? 1 : 0) +
-      (story.has(word) ? 1 : 0), 0);
+      (story.has(word) ? 1 : 0) + (voiceWords.has(word) ? 1 : 0), 0);
     return { index: index + 1, id: memory.id, title: memory.title,
-      story: memory.story, when: memory.when, score, matchedTerms, unmatchedTerms };
+      story: memory.story, when: memory.when, voiceWords: memory.voiceWords ?? "",
+      score, matchedTerms, unmatchedTerms };
   }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, 3);
   return { kind: matches.length ? "matched" : "no_match", matches };
@@ -380,7 +401,8 @@ export function suggestMemoryQuestions(value) {
   const positions = [...new Set([0, Math.floor((count - 1) / 2), count - 1])];
   return positions.flatMap(index => {
     const memory = capsule.memories[index];
-    const candidates = [memory.title, ...terms(memory.story).slice(0, 12)];
+    const candidates = [memory.title, ...terms(memory.story).slice(0, 12),
+      ...terms(memory.voiceWords ?? "").slice(0, 12)];
     for (const detail of candidates) {
       const question = `What do you remember about ${detail}?`;
       if (recallMemories(capsule, question).matches.some(match => match.id === memory.id)) {
@@ -396,10 +418,10 @@ export const FICTIONAL_SAMPLE = Object.freeze({ format: CAPSULE_FORMAT,
   letter: "For every ordinary day that became extraordinary because we were together. These are a few moments I never want us to lose.",
   memories: [
     { id: "sample-1", title: "The blue umbrella", when: "One rainy Saturday",
-      story: "We walked home under a blue umbrella that was too small for both of us. You laughed when the rain won anyway, and we stopped for hot chocolate.", photo: null, audio: null },
+      story: "We walked home under a blue umbrella that was too small for both of us. You laughed when the rain won anyway, and we stopped for hot chocolate.", photo: null, audio: null, voiceWords: "" },
     { id: "sample-2", title: "Our first garden", when: "Early spring",
-      story: "We planted mint in a little clay pot by the kitchen window. You insisted it needed a name, so we called it Captain Mint.", photo: null, audio: null },
+      story: "We planted mint in a little clay pot by the kitchen window. You insisted it needed a name, so we called it Captain Mint.", photo: null, audio: null, voiceWords: "" },
     { id: "sample-3", title: "A note in the suitcase", when: "Before the long trip",
-      story: "I tucked a note into your suitcase that said you were brave. You found it after arriving and sent me a picture of the sunset.", photo: null, audio: null }
+      story: "I tucked a note into your suitcase that said you were brave. You found it after arriving and sent me a picture of the sunset.", photo: null, audio: null, voiceWords: "" }
   ]
 });
