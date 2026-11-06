@@ -185,4 +185,22 @@ test("a sealed share contains only ciphertext and rejects changes before or afte
   assert.equal(el("share-file").hidden, true);
   assert.equal(el("share-fallback").hidden, false);
   assert.equal(el("download-prepared").hidden, false);
+
+  const firstRow = el("memory-list").children[0];
+  firstRow.children[1].children[2].click(); // Edit the first memory.
+  el("memory-voice-words").value = "The lighthouse was our secret signal.";
+  el("memory-voice-words").dispatch("input");
+  await el("save-memory").click();
+  assert.equal(el("memory-voice-words").value, "");
+  await el("preview").click();
+  const previewCards = el("gift-view").children[3];
+  const written = previewCards.children[0].children.find(node => node.className === "voice-words");
+  assert.equal(written.children[1].textContent, "The lighthouse was our secret signal.");
+  await previewCards.children[0].children.at(-1).click();
+  assert.match(copied.at(-1), /Written words:\nThe lighthouse was our secret signal/);
+  el("memory-question").value = "What was the lighthouse signal?";
+  el("ask").click();
+  const evidence = el("answer").children.find(node => node.className === "voice-words-evidence" ||
+    node.children?.some(child => child.className === "voice-words-evidence"));
+  assert.ok(evidence, "the written words appear in the search source card");
 });

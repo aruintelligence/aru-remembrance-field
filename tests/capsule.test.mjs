@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { CAPSULE_FORMAT, DRAFT_FORMAT, FICTIONAL_SAMPLE, LEGACY_CAPSULE_FORMAT,
   LEGACY_DRAFT_FORMAT, VOICE_CAPSULE_FORMAT, VOICE_DRAFT_FORMAT,
+  WEBM_CAPSULE_FORMAT, WEBM_DRAFT_FORMAT,
+  WEBM_ENVELOPE_FORMAT, WEBM_DRAFT_ENVELOPE_FORMAT,
   MAX_AUDIO_BYTES, MAX_MEMORIES, audioFromBytes,
   openCapsule, openDraft, photoFromBytes, recallMemories, suggestMemoryQuestions, sealCapsule,
   createDraftRecoverySealer,
@@ -23,9 +25,25 @@ test("the public page and app use content-based URLs for their current modules",
 const legacySample = () => {
   const gift = sample();
   gift.format = LEGACY_CAPSULE_FORMAT;
-  gift.memories.forEach(memory => { delete memory.audio; });
+  gift.memories.forEach(memory => { delete memory.audio; delete memory.voiceWords; });
   return gift;
 };
+
+async function sealPreviousFormat(value, passphrase, format) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase),
+    "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({ name: "PBKDF2", salt,
+    iterations: 310_000, hash: "SHA-256" }, material,
+  { name: "AES-GCM", length: 256 }, false, ["encrypt"]);
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv,
+    additionalData: new TextEncoder().encode(format) }, key,
+  new TextEncoder().encode(JSON.stringify(value)));
+  const b64 = value => Buffer.from(value).toString("base64");
+  return { format, kdf: "PBKDF2-SHA256", iterations: 310_000,
+    cipher: "AES-256-GCM", salt: b64(salt), iv: b64(iv), ciphertext: b64(ciphertext) };
+}
 
 test("a sealed gift opens with its passphrase and never exposes plaintext in its file", async () => {
   const capsule = sample();
@@ -56,6 +74,7 @@ test("a version 2 voice gift and private draft remain readable and upgrade witho
     "updated voice gift phrase 2026");
   assert.equal(newGift.format, CAPSULE_FORMAT);
   assert.equal(newGift.memories[0].audio, oldGift.memories[0].audio);
+  assert.equal(newGift.memories[0].voiceWords, "");
 
   const oldDraftFile = readFileSync(new URL("./fixtures/capsule-draft-v2-sealed.json", import.meta.url), "utf8");
   const oldDraft = await openDraft(oldDraftFile, "previous voice draft phrase 2026");
@@ -64,6 +83,36 @@ test("a version 2 voice gift and private draft remain readable and upgrade witho
     "updated voice draft phrase 2026");
   assert.equal(newDraft.format, DRAFT_FORMAT);
   assert.equal(newDraft.pending.audio, oldDraft.pending.audio);
+  assert.equal(newDraft.pending.voiceWords, "");
+});
+
+test("version 3 sealed gifts and drafts open and upgrade to the written voice format", async () => {
+  const phrase = "previous WebM gift phrase 2026";
+  const gift = sample();
+  gift.format = WEBM_CAPSULE_FORMAT;
+  gift.memories.forEach(memory => { delete memory.voiceWords; });
+  gift.memories[0].audio = audioFromBytes(
+    readFileSync(new URL("./fixtures/voice-sample.webm", import.meta.url)),
+    "audio/webm", "voice-sample.webm");
+  const oldGift = await openCapsule(await sealPreviousFormat(gift, phrase,
+    WEBM_ENVELOPE_FORMAT), phrase);
+  assert.deepEqual(oldGift, gift);
+  const upgraded = await openCapsule(await sealCapsule(oldGift, phrase), phrase);
+  assert.equal(upgraded.format, CAPSULE_FORMAT);
+  assert.equal(upgraded.memories[0].audio, gift.memories[0].audio);
+  assert.equal(upgraded.memories[0].voiceWords, "");
+
+  const draft = unfinishedDraft();
+  draft.format = WEBM_DRAFT_FORMAT;
+  delete draft.pending.voiceWords;
+  draft.pending.audio = gift.memories[0].audio;
+  const oldDraft = await openDraft(await sealPreviousFormat(draft, phrase,
+    WEBM_DRAFT_ENVELOPE_FORMAT), phrase);
+  assert.deepEqual(oldDraft, draft);
+  const upgradedDraft = await openDraft(await sealDraft(oldDraft, phrase), phrase);
+  assert.equal(upgradedDraft.format, DRAFT_FORMAT);
+  assert.equal(upgradedDraft.pending.audio, draft.pending.audio);
+  assert.equal(upgradedDraft.pending.voiceWords, "");
 });
 
 test("wrong passphrase, changed ciphertext, unsupported parameters, and plaintext fail", async () => {
@@ -86,6 +135,9 @@ test("the capsule format bounds content, IDs, count, and image type", () => {
   const oversized = sample();
   oversized.memories[0].story = "x".repeat(2401);
   assert.throws(() => validateCapsule(oversized), /Invalid memory story/);
+  const tooManyWords = sample();
+  tooManyWords.memories[0].voiceWords = "x".repeat(1201);
+  assert.throws(() => validateCapsule(tooManyWords), /Invalid written voice words/);
   const crowded = sample();
   crowded.memories = Array.from({ length: MAX_MEMORIES + 1 }, (_, index) =>
     ({ id: `m${index}`, title: "Title", when: "", story: "Story", photo: null }));
@@ -141,6 +193,31 @@ test("recall prioritizes more distinct details and exposes only authored word ma
   assert.equal(result.matches.every(match => gift.memories.some(memory => memory.id === match.id)), true);
 });
 
+test("authored voice words stay encrypted, searchable, and separate from audio", async () => {
+  const gift = sample();
+  const audio = audioFromBytes(readFileSync(new URL("./fixtures/voice-sample.mp3", import.meta.url)),
+    "audio/mpeg", "voice-sample.mp3");
+  gift.memories[0].audio = audio;
+  gift.memories[0].voiceWords = "The lighthouse made us laugh in the rain.";
+  const phrase = "written words with private audio 2026";
+  const sealed = await sealCapsule(gift, phrase);
+  assert.equal(JSON.stringify(sealed).includes("lighthouse"), false);
+  const opened = await openCapsule(sealed, phrase);
+  assert.deepEqual(opened, gift);
+  const matches = recallMemories(opened, "What happened at the lighthouse?");
+  assert.equal(matches.matches[0].id, "sample-1");
+  assert.deepEqual(matches.matches[0].matchedTerms, ["lighthouse"]);
+  assert.equal(matches.matches[0].voiceWords, gift.memories[0].voiceWords);
+  assert.deepEqual(recallMemories(sample(), "What happened at the lighthouse?"),
+    { kind: "no_match", matches: [] });
+
+  const draft = unfinishedDraft();
+  draft.pending.audio = audio;
+  draft.pending.voiceWords = "An unfinished voice excerpt";
+  const restored = await openDraft(await sealDraft(draft, phrase), phrase);
+  assert.deepEqual(restored, draft);
+});
+
 test("suggested questions lead to authored source memories, including generic titles", () => {
   const gift = sample();
   const suggestions = suggestMemoryQuestions(gift);
@@ -163,7 +240,7 @@ function unfinishedDraft() {
     recipient: "Alex", from: "", letter: "I was thinking about the time",
     memories: [], editing_index: null,
     pending: { title: "On the beach", when: "", story: "We found",
-      photo: null, audio: null } };
+      photo: null, audio: null, voiceWords: "" } };
 }
 
 test("a private draft from the previous release opens and upgrades on the next save", async () => {
@@ -176,6 +253,7 @@ test("a private draft from the previous release opens and upgrades on the next s
   const restored = await openDraft(newFile, "a new draft passphrase 2026");
   assert.equal(restored.format, DRAFT_FORMAT);
   assert.equal(restored.pending.audio, null);
+  assert.equal(restored.pending.voiceWords, "");
   assert.equal(restored.pending.story, "Still writing");
 });
 
